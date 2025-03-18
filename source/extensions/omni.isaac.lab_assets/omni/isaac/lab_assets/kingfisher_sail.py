@@ -16,7 +16,7 @@ from omni.isaac.lab.assets import ArticulationCfg
 # Configuration
 ##/home/isaac_user/asv-saw
 
-KINGFISHER_CFG = ArticulationCfg(
+KINGFISHER_SAIL_CFG = ArticulationCfg(
     prim_path="{ENV_REGEX_NS}/Robot",
     spawn=sim_utils.UsdFileCfg(
         usd_path=f"/home/isaac_user/asv-sawasp-fousseyni/Usd/kingfisher.usd",

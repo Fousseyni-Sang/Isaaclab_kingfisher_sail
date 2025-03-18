@@ -25,7 +25,7 @@ from omni.isaac.lab.utils.math import subtract_frame_transforms
 ##
 # Pre-defined configs
 ##
-from omni.isaac.lab_assets import KINGFISHER_CFG  # isort: skip
+from omni.isaac.lab_assets import KINGFISHER_SAIL_CFG  # isort: skip
 from omni.isaac.lab.markers import CUBOID_MARKER_CFG  # isort: skip
 
 
@@ -87,7 +87,7 @@ class KingfisherSailEnvCfg(DirectRLEnvCfg):
     scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=4096, env_spacing=10.0, replicate_physics=True)
 
     # robot
-    robot: ArticulationCfg = KINGFISHER_CFG.replace(prim_path="/World/envs/env_.*/Robot")
+    robot: ArticulationCfg = KINGFISHER_SAIL_CFG.replace(prim_path="/World/envs/env_.*/Robot")
 
     # Hydrostatics
     hydrostatics_cfg: HydrostaticsCfg = HydrostaticsCfg()
@@ -166,7 +166,7 @@ class KingfisherSailEnvCfg(DirectRLEnvCfg):
 class KingfisherSailEnv(DirectRLEnv):
     cfg: KingfisherSailEnvCfg
 
-    def __init__(self, cSailfg: KingfisherSailEnvCfg, render_mode: str | None = None, **kwargs):
+    def __init__(self, cfg: KingfisherSailEnvCfg, render_mode: str | None = None, **kwargs):
         super().__init__(cfg, render_mode, **kwargs)
 
         # Actions
