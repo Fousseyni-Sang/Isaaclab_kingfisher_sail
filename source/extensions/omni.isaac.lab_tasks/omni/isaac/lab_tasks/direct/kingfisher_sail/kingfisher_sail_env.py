@@ -16,11 +16,13 @@ from omni.isaac.lab.envs.ui import BaseEnvWindow
 from omni.isaac.lab.markers import VisualizationMarkers
 from omni.isaac.lab.physics.hydrodynamics import Hydrodynamics, HydrodynamicsCfg
 from omni.isaac.lab.physics.hydrostatics import Hydrostatics, HydrostaticsCfg
+from omni.isaac.lab.physics.aerodynamics import Aerodynamics, AerodynamicsCfg
 from omni.isaac.lab.scene import InteractiveSceneCfg
 from omni.isaac.lab.sim import SimulationCfg
 from omni.isaac.lab.terrains import TerrainImporterCfg
 from omni.isaac.lab.utils import configclass
 from omni.isaac.lab.utils.math import subtract_frame_transforms
+
 
 ##
 # Pre-defined configs
@@ -57,7 +59,7 @@ class KingfisherSailEnvCfg(DirectRLEnvCfg):
     decimation = 3
     step_dt = physics_dt * decimation  # 20 Hz
     action_space = 2
-    observation_space = 8
+    observation_space = 11
     state_space = 0
     debug_vis = True
 
@@ -88,6 +90,16 @@ class KingfisherSailEnvCfg(DirectRLEnvCfg):
 
     # robot
     robot: ArticulationCfg = KINGFISHER_SAIL_CFG.replace(prim_path="/World/envs/env_.*/Robot")
+
+    # Aerodynamics
+    aerodynamics_cfg: AerodynamicsCfg = AerodynamicsCfg()
+    aerodynamics_cfg.air_density = 1.225
+    aerodynamics_cfg.wing_span = 0.88
+    aerodynamics_cfg.wing_chord = 0.15
+    aerodynamics_cfg.wind_direction = 90*torch.pi/180
+    aerodynamics_cfg.wind_speed = 6
+    aerodynamics_cfg.angle_of_attack = 20*torch.pi/180
+    
 
     # Hydrostatics
     hydrostatics_cfg: HydrostaticsCfg = HydrostaticsCfg()
@@ -191,6 +203,8 @@ class KingfisherSailEnv(DirectRLEnv):
         self._base_link = self._robot.find_bodies("base_link")[0]
         self._left_thruster_id = self._robot.find_bodies("thruster_left")[0]
         self._right_thruster_id = self._robot.find_bodies("thruster_right")[0]
+        self._sail_wing_id = self._robot.find_bodies("sailwing")[0]
+        self._wing_joint_dof_id = self._robot.find_joints("wing_joint")[0]
 
         self._robot_mass = self._robot.root_physx_view.get_masses()[0].sum()
         self._gravity_magnitude = torch.tensor(self.sim.cfg.gravity, device=self.device).norm()
@@ -199,12 +213,16 @@ class KingfisherSailEnv(DirectRLEnv):
         # Forces
         self._hydrodynamic_force = torch.zeros(self.num_envs, 1, 6, device=self.device)
         self._hydrostatic_force = torch.zeros(self.num_envs, 1, 6, device=self.device)
+        self._aerodynamic_force = torch.zeros(self.num_envs, 1, 3, device=self.device)
         self._thruster_forces = torch.zeros(self.num_envs, 1, 6, device=self.device)
+        
         self._no_torque = torch.zeros(self.num_envs, 1, 3, device=self.device)
 
         self._hydrostatics = Hydrostatics(num_envs=self.num_envs, device=self.device, cfg=self.cfg.hydrostatics_cfg)
 
         self._hydrodynamics = Hydrodynamics(num_envs=self.num_envs, device=self.device, cfg=self.cfg.hydrodynamics_cfg)
+
+        self._aerodynamics = Aerodynamics(num_envs=self.num_envs, device=self.device, cfg=self.cfg.aerodynamics_cfg)
 
         self._thruster_dynamics = PropellerActuator(
             num_envs=self.num_envs, device=self.device, dt=cfg.step_dt, cfg=self.cfg.propeller_cfg
@@ -223,6 +241,9 @@ class KingfisherSailEnv(DirectRLEnv):
 
         self.energy = torch.zeros(self.num_envs, device=self.device)
         self.desired_pos_b = torch.zeros(self.num_envs, 2, device=self.device)
+
+        self.joint_pos_target = torch.zeros(self.num_envs, device=self.device)
+        self.sail_angle = torch.zeros(self.num_envs, device=self.device)
 
         # add handle for debug visualization (this is set to a valid handle inside set_debug_vis)
         self.set_debug_vis(self.cfg.debug_vis)
@@ -261,13 +282,33 @@ class KingfisherSailEnv(DirectRLEnv):
         )
         self._hydrodynamic_force[:, 0, :] = self._hydrodynamics.ComputeHydrodynamicsEffects(robot_quat, robot_vel)
 
+        # Compute the aerodynamic (wind) effect on the sail wing
+        robot_vel_b = self._robot.data.root_lin_vel_b.clone().detach()
+        self._aerodynamic_force[:, 0, :] = self._aerodynamics.compute_wind_effect(
+            self._aerodynamics.Uw, self._aerodynamics.Beta_w, self._robot.data.heading_w,
+            robot_vel_b[:, :2], 
+        )
+
+        # Compute the sail angle given the angle of attack (fixed to 20 degree for now)
+
+        current_joint_pos = self._robot.data.joint_pos[:, self._wing_joint_dof_id].clone()
+        self.sail_angle = self._aerodynamics.get_sail_angle(self._aerodynamics.apparent_wind_angle, 
+                        self._aerodynamics.angle_of_attack).reshape(current_joint_pos.shape)
+        
+        joint_error = (self.sail_angle - current_joint_pos + torch.pi) %(2*torch.pi) - torch.pi
+        self.joint_pos_target = current_joint_pos + joint_error
+
+
     def _apply_action(self):
+        
         combined = self._hydrostatic_force + self._hydrodynamic_force
         self._robot.set_external_force_and_torque(combined[..., :3], combined[..., 3:], body_ids=self._base_link)
 
         # only apply thruster forces if they are not zero, otherwise it disables external previous forces.
         lft_thruster_force = self._thruster_forces[..., :3]
         rgt_thruster_force = self._thruster_forces[..., 3:]
+        sail_wing_force = self._aerodynamic_force.clone()
+
         if lft_thruster_force.any():
             self._robot.set_external_force_and_torque(
                 lft_thruster_force, self._no_torque, body_ids=self._left_thruster_id
@@ -275,6 +316,16 @@ class KingfisherSailEnv(DirectRLEnv):
         if rgt_thruster_force.any():
             self._robot.set_external_force_and_torque(
                 rgt_thruster_force, self._no_torque, body_ids=self._right_thruster_id
+            )
+
+        if sail_wing_force.any():
+            self._robot.set_external_force_and_torque(
+                sail_wing_force, self._no_torque, body_ids=self._sail_wing_id
+            )
+
+        # Set psoition of the sail joint
+        self._robot.set_joint_position_target(target=self.joint_pos_target, 
+             joint_ids=self._wing_joint_dof_id
             )
 
     def _get_observations(self) -> dict:
@@ -297,9 +348,13 @@ class KingfisherSailEnv(DirectRLEnv):
                 torch.cos(self.bearing).unsqueeze(1),  # 1
                 torch.sin(self.bearing).unsqueeze(1),  # 1
                 self.distance.unsqueeze(1),  # 1
+                self.sail_angle.reshape(self.num_envs, -1), # 1
+                self._aerodynamics.apparent_wind_angle.reshape(self.num_envs, -1), # 1
+                torch.norm(self._aerodynamics.apparent_wind_speed, dim=-1).reshape(self.num_envs, -1), # 1
             ],
             dim=1,
         )
+
         observations = {"policy": obs}
         return observations
 

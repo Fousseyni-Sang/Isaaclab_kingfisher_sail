@@ -77,6 +77,7 @@ class RlAgentPublisher(Node):
         super().__init__("rl_agent_publisher")
         self.obs_publisher = self.create_publisher(Float32MultiArray, "rl_observations", 10)
         self.act_publisher = self.create_publisher(Float32MultiArray, "rl_actions", 10)
+        self.rew_publisher = self.create_publisher(Float32MultiArray, "rl_rewards", 10)
 
     def publish_obs(self, obs):
         
@@ -88,6 +89,11 @@ class RlAgentPublisher(Node):
         msg = Float32MultiArray()
         msg.data = act.cpu().numpy().flatten().tolist()
         self.act_publisher.publish(msg)
+
+    def publish_rew(self, rew):
+        msg = Float32MultiArray()
+        msg.data = rew.cpu().numpy().flatten().tolist()
+        self.rew_publisher.publish(msg)
 
 
 def main():
@@ -194,11 +200,12 @@ def main():
             # agent stepping
             actions = agent.get_action(obs, is_deterministic=agent.is_deterministic)
             # env stepping
-            obs, _, dones, _ = env.step(actions)
+            obs, rew, dones, _ = env.step(actions)
 
             # ---- Publish observations and actions to ROS2 ----
             ros_node.publish_obs(obs)
             ros_node.publish_act(actions)
+            ros_node.publish_rew(rew)
 
             # perform operations for terminated episodes
             if len(dones) > 0:
