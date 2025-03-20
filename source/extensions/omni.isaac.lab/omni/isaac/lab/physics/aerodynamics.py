@@ -185,6 +185,12 @@ class Aerodynamics:
         - sail angle as a tensor of shape (num_envs,).
         """
         return apparent_wind_angle - angle_of_attack + torch.pi
+    
+    def reset_wind_condition(self, randomize=False):
+        """ randomize wind direction between 0 and 2*pi if params randomize=True """
+        if randomize:
+            self.Beta_w = torch.zeros_like(self.Beta_w).uniform_(0, 2*torch.pi)
+        return
 
     def reset_coefficients(self, env_ids: torch.Tensor | None = None) -> None:
         """
@@ -194,6 +200,7 @@ class Aerodynamics:
         """
         
         return
+    
 
     def ComputeDampingMatrix(self, vel):
         """

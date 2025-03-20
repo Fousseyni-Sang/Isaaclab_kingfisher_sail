@@ -22,12 +22,14 @@ from omni.isaac.lab.sim import SimulationCfg
 from omni.isaac.lab.terrains import TerrainImporterCfg
 from omni.isaac.lab.utils import configclass
 from omni.isaac.lab.utils.math import subtract_frame_transforms
+import numpy as np
 
 
 ##
 # Pre-defined configs
 ##
-from omni.isaac.lab_assets import KINGFISHER_SAIL_CFG  # isort: skip
+from omni.isaac.lab_assets import (KINGFISHER_SAIL_CFG, RED_ARROW_X_MARKER_CFG, 
+ BLUE_ARROW_X_MARKER_CFG, CUBOID_MARKER_CFG, GREEN_ARROW_X_MARKER_CFG)  # isort: skip
 from omni.isaac.lab.markers import CUBOID_MARKER_CFG  # isort: skip
 
 
@@ -152,6 +154,20 @@ class KingfisherSailEnvCfg(DirectRLEnvCfg):
         19.5,  # 1.0
     ]
     propeller_cfg.forces_right = propeller_cfg.forces_left
+
+    # markers configurations
+    # Blue markers used to visualize apparent wind
+    blue_marker_cfg = BLUE_ARROW_X_MARKER_CFG.copy()
+    blue_marker_cfg.prim_path = "/Visuals/Command/appWind"
+
+    # red markers used to visualize true wind
+    red_marker_cfg = RED_ARROW_X_MARKER_CFG.copy()
+    red_marker_cfg.prim_path = "/Visuals/Command/trueWind"
+
+    # Green markers used to visualize thruster forces
+    green_marker_cfg = GREEN_ARROW_X_MARKER_CFG.copy()
+    green_marker_cfg.prim_path = "/Visuals/Command/force"
+
     max_energy = 2.0  # Max of 1.0 per thruster
 
     # reward scales
@@ -248,6 +264,27 @@ class KingfisherSailEnv(DirectRLEnv):
         # add handle for debug visualization (this is set to a valid handle inside set_debug_vis)
         self.set_debug_vis(self.cfg.debug_vis)
 
+
+
+        # ============================================================================================#
+        # ======================== Markers for the wind visualization ================================#
+        # ============================================================================================#
+        n_markers = 500
+        self.max_width = 5
+        d = 5
+        self.env_pos = self._terrain.env_origins[0, :2].cpu().numpy()
+
+        # Generate random translations for markers within a specified range in the world frame
+        self.marker_translations = np.random.uniform([-self.env_pos[0]-d, -self.env_pos[1]-d, 0], 
+                        [self.env_pos[0]+d, self.env_pos[1]+d, 2], (n_markers, 3))  # Adjust bounds as needed
+        
+        self.red_marker_translations = np.random.uniform([-self.env_pos[0]-d, -self.env_pos[1]-d, 0], 
+                        [self.env_pos[0]+d, self.env_pos[1]+d, 2], (n_markers//10, 3))
+        
+        self.green_marker_translations = np.zeros((3, 3)) # 3 arrows for 3 bodies, both hulls and sail
+        # ============================================================================================#
+        # ============================================================================================#
+
     def _setup_scene(self):
         self._robot = Articulation(self.cfg.robot)
         self.scene.articulations["robot"] = self._robot
@@ -261,6 +298,11 @@ class KingfisherSailEnv(DirectRLEnv):
         # add lights
         light_cfg = sim_utils.DomeLightCfg(intensity=2000.0, color=(0.75, 0.75, 0.75))
         light_cfg.func("/World/Light", light_cfg)
+
+        self.blue_marker = VisualizationMarkers(self.cfg.blue_marker_cfg)
+        self.green_marker = VisualizationMarkers(self.cfg.green_marker_cfg)
+        self.red_marker = VisualizationMarkers(self.cfg.red_marker_cfg)
+        self.visualize = False
 
     def _pre_physics_step(self, actions: torch.Tensor):
         self._actions = actions.clone().clamp(-1.0, 1.0)
@@ -327,6 +369,7 @@ class KingfisherSailEnv(DirectRLEnv):
         self._robot.set_joint_position_target(target=self.joint_pos_target, 
              joint_ids=self._wing_joint_dof_id
             )
+        
 
     def _get_observations(self) -> dict:
 
@@ -469,6 +512,17 @@ class KingfisherSailEnv(DirectRLEnv):
         self._desired_pos_w[env_ids, 1] = torch.sin(self.initial_bearing[env_ids]) * self.initial_distance[env_ids]
         self._desired_pos_w[env_ids, 2] = 0.0  # only in 2D
         self._desired_pos_w[env_ids, :2] += self._terrain.env_origins[env_ids, :2]
+
+        # Initialize markers pos
+        d = 5
+        n_markers = 500
+        self.marker_translations = np.random.uniform([-self.env_pos[0]-d, -self.env_pos[1]-d, 1], 
+                    [self.env_pos[0]+d, self.env_pos[1]+d, 1.6], (n_markers, 3))  # Adjust bounds as needed
+        self.red_marker_translations = np.random.uniform([-self.env_pos[0]-d/3, -self.env_pos[1]-d/3, 1], 
+                    [self.env_pos[0]+d/2, self.env_pos[1]+d/2, 1.5], (n_markers//5, 3))
+
+        self._aerodynamics.reset_wind_condition(True)
+        
         # Reset robot state
         joint_pos = self._robot.data.default_joint_pos[env_ids]
         joint_vel = self._robot.data.default_joint_vel[env_ids]
@@ -489,6 +543,7 @@ class KingfisherSailEnv(DirectRLEnv):
                 self.goal_pos_visualizer = VisualizationMarkers(marker_cfg)
             # set their visibility to true
             self.goal_pos_visualizer.set_visibility(True)
+
         else:
             if hasattr(self, "goal_pos_visualizer"):
                 self.goal_pos_visualizer.set_visibility(False)
@@ -496,3 +551,101 @@ class KingfisherSailEnv(DirectRLEnv):
     def _debug_vis_callback(self, event):
         # update the markers
         self.goal_pos_visualizer.visualize(self._desired_pos_w)
+        
+        # apparent wind visualization
+        self.vector_field_visualization(
+                            vis_enabled=True,
+                            directions=self._aerodynamics.apparent_wind_angle,
+                            magnitudes=self._aerodynamics.apparent_wind_speed,
+                            marker_obj=self.blue_marker,
+                            marker_translations=self.marker_translations,
+                            wrap_distance=4.0,
+                            update_scale=0.1,
+                        )
+        
+        # true wind visualization
+        self.vector_field_visualization(
+                            vis_enabled=True,
+                            directions=self._aerodynamics.Beta_w,
+                            magnitudes=self._aerodynamics.true_wind_speed2D,
+                            marker_obj=self.red_marker,
+                            marker_translations=self.red_marker_translations,
+                            wrap_distance=3.0,
+                            update_scale=0.05,
+                        )
+
+
+
+    def vector_field_visualization(
+        self,
+        vis_enabled: bool,
+        directions: torch.Tensor,
+        magnitudes: torch.Tensor | None,
+        marker_obj,
+        marker_translations: np.ndarray,
+        wrap_distance: float=4.,
+        update_scale: float=0.1,
+        z_clip: tuple[float, float] = (0.0, 4.0),
+        body_ids: list[int] | None = None,
+    ):
+        """
+        Generic function for visualizing vector fields (wind, forces, etc.)
+
+        Args:
+            vis_enabled: Whether to enable the visualization.
+            directions: A (N,) tensor of angles (radians) or 2D force vectors (N x 2).
+            magnitudes: Optional (N,) tensor of speeds or force magnitudes.
+            marker_obj: The marker object (e.g., self.blue_marker).
+            marker_translations: N x 3 numpy array of marker positions (updated in-place).
+            wrap_distance: Distance threshold to wrap markers around.
+            update_scale: How much to move markers per timestep.
+            z_clip: Min and max bounds for Z values.
+            body_ids: Optional list of body IDs (used for static markers like forces).
+        """
+        if not vis_enabled or self.num_envs != 1:
+            return
+        
+        # Determine orientation angles (alpha)
+        if directions.ndim == 2:  # it's a 2D vector like (Fx, Fy)
+            alpha = torch.atan2(directions[:, 1], directions[:, 0]).cpu().numpy()
+            speeds = torch.linalg.norm(directions, dim=-1).cpu().numpy()
+        else:  # it's an angle
+            alpha = directions.cpu().numpy()
+            speeds = magnitudes.cpu().numpy() if magnitudes is not None else np.ones_like(alpha)
+
+        # Compute quaternions for Z-axis (yaw) rotation
+        rotation = np.stack([
+            np.cos(alpha / 2),
+            np.zeros_like(alpha),
+            np.zeros_like(alpha),
+            np.sin(alpha / 2)
+        ], axis=-1)
+
+        # Apply the same rotation to all markers
+        marker_orientations = np.tile(rotation, (marker_translations.shape[0]//5, 1))
+        
+        # Update marker positions (only for dynamic fields like wind)
+        if body_ids is None:
+            marker_translations[:, :2] += (speeds * self.step_dt * update_scale)
+
+            current_pos = self._robot.data.root_pos_w[:, :2].clone().cpu().numpy()
+            dist = np.abs(marker_translations[:, :2] - current_pos)
+
+            for i in range(2):  # x and y
+                marker_translations[:, i] = np.where(
+                    dist[:, i] > wrap_distance,
+                    current_pos[:, i] - wrap_distance / 2,
+                    marker_translations[:, i]
+                )
+
+            marker_translations[:, 2] = np.clip(marker_translations[:, 2], *z_clip)
+        else:
+            body_pos = self._robot.data.body_pos_w[:, body_ids, :].squeeze(0)
+            marker_translations[:] = body_pos.cpu().numpy()
+
+        # Visualize
+        marker_obj.visualize(translations=marker_translations, orientations=marker_orientations)
+
+
+
+
