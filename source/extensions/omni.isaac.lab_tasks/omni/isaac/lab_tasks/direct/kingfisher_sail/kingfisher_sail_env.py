@@ -60,8 +60,8 @@ class KingfisherSailEnvCfg(DirectRLEnvCfg):
     physics_dt = 1 / 60.0  # 60 Hz
     decimation = 3
     step_dt = physics_dt * decimation  # 20 Hz
-    action_space = 2
-    observation_space = 11
+    action_space = 3
+    observation_space = 12
     state_space = 0
     debug_vis = True
 
@@ -305,6 +305,7 @@ class KingfisherSailEnv(DirectRLEnv):
         self.visualize = False
 
     def _pre_physics_step(self, actions: torch.Tensor):
+        
         self._actions = actions.clone().clamp(-1.0, 1.0)
         # Override the actions for debugging
         # self._actions[:,0] = 0.6
@@ -312,7 +313,7 @@ class KingfisherSailEnv(DirectRLEnv):
 
         # Compute the thruster forces based on the actions.
         # thrust_cmds = torch.tensor([0.0, 1.0], dtype=torch.float32, device=self.device)
-        self._thruster_dynamics.set_target_cmd(self._actions)
+        self._thruster_dynamics.set_target_cmd(self._actions[:, :2])
         self._thruster_forces[:, 0, :] = self._thruster_dynamics.update_forces()
 
         # Compute the hydrostatic and hydrodynamic forces
@@ -331,14 +332,28 @@ class KingfisherSailEnv(DirectRLEnv):
             robot_vel_b[:, :2], 
         )
 
+        #=====================================================================================================#
+        #=========================Sail angle control by the agent or the joytick==============================#
+        #=====================================================================================================#
         # Compute the sail angle given the angle of attack (fixed to 20 degree for now)
-
         current_joint_pos = self._robot.data.joint_pos[:, self._wing_joint_dof_id].clone()
-        self.sail_angle = self._aerodynamics.get_sail_angle(self._aerodynamics.apparent_wind_angle, 
+
+        # Check if teleoperation or if joint action is controled by the robot
+        if actions.shape[1] ==3:
+
+            sail_wing_action_scale = 0.01*torch.pi # rate of change of the angle of the sail, needs an actuator model
+            self.sail_angle = sail_wing_action_scale*actions[:, -1:]
+            self.joint_pos_target  = current_joint_pos + self.sail_angle # Here we just incremente by the sailangle
+            
+        else:
+            self.sail_angle = self._aerodynamics.get_sail_angle(self._aerodynamics.apparent_wind_angle, 
                         self._aerodynamics.angle_of_attack).reshape(current_joint_pos.shape)
         
-        joint_error = (self.sail_angle - current_joint_pos + torch.pi) %(2*torch.pi) - torch.pi
-        self.joint_pos_target = current_joint_pos + joint_error
+            joint_error = (self.sail_angle - current_joint_pos + torch.pi) %(2*torch.pi) - torch.pi
+            self.joint_pos_target = current_joint_pos + joint_error
+
+        #=====================================================================================================#
+        
 
 
     def _apply_action(self):
@@ -522,7 +537,7 @@ class KingfisherSailEnv(DirectRLEnv):
                     [self.env_pos[0]+d/2, self.env_pos[1]+d/2, 1.5], (n_markers//5, 3))
 
         self._aerodynamics.reset_wind_condition(True)
-        
+
         # Reset robot state
         joint_pos = self._robot.data.default_joint_pos[env_ids]
         joint_vel = self._robot.data.default_joint_vel[env_ids]

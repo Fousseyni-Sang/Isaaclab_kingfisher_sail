@@ -7,3 +7,4 @@
 
 from .se2_gamepad import Se2Gamepad
 from .se3_gamepad import Se3Gamepad
+from .se3_gamepad_kingfisher import Se3GamepadKingfisher

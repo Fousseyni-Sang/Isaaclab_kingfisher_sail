@@ -37,7 +37,7 @@ import torch
 
 import omni.log
 
-from omni.isaac.lab.devices import Se3Gamepad, Se3Keyboard, Se3SpaceMouse
+from omni.isaac.lab.devices import Se3GamepadKingfisher, Se3Keyboard, Se3SpaceMouse
 from omni.isaac.lab.managers import TerminationTermCfg as DoneTerm
 
 import omni.isaac.lab_tasks  # noqa: F401
@@ -45,17 +45,54 @@ from omni.isaac.lab_tasks.manager_based.manipulation.lift import mdp
 from omni.isaac.lab_tasks.utils import parse_env_cfg
 
 
+# Create Publisher Node
+import rclpy
+from rclpy.node import Node
+from std_msgs.msg import Float32MultiArray
+
+
+class RlAgentPublisher(Node):
+    def __init__(self):
+        super().__init__("rl_agent_publisher")
+        self.obs_publisher = self.create_publisher(Float32MultiArray, "rl_observations", 10)
+        self.act_publisher = self.create_publisher(Float32MultiArray, "rl_actions", 10)
+        self.rew_publisher = self.create_publisher(Float32MultiArray, "rl_rewards", 10)
+
+    def publish_obs(self, obs):
+        
+        msg = Float32MultiArray()
+        msg.data = obs.cpu().numpy().flatten().tolist()
+        self.obs_publisher.publish(msg)
+
+    def publish_act(self, act):
+        msg = Float32MultiArray()
+        msg.data = act.cpu().numpy().flatten().tolist()
+        self.act_publisher.publish(msg)
+
+    def publish_rew(self, rew):
+        msg = Float32MultiArray()
+        msg.data = rew.cpu().numpy().flatten().tolist()
+        self.rew_publisher.publish(msg)
+
 def pre_process_actions(delta_pose: torch.Tensor) -> torch.Tensor:
     """Pre-process actions for the environment."""
     thrust_right = delta_pose[:, 0:1]
 
     thrust_left = delta_pose[:, 2:3]
 
-    actions = torch.cat((thrust_right, thrust_left), dim=1)
+    sail_angle = delta_pose[:, 6:]
+
+    actions = torch.cat((thrust_right, thrust_left, sail_angle), dim=1)
+    print(delta_pose)
     return actions
 
 
 def main():
+
+     # ---- Initialize ROS2 ----
+    rclpy.init()
+    ros_node = RlAgentPublisher()
+
     """Running keyboard teleoperation with Isaac Lab manipulation environment."""
     # parse configuration
     env_cfg = parse_env_cfg(
@@ -88,14 +125,14 @@ def main():
             pos_sensitivity=0.05 * args_cli.sensitivity, rot_sensitivity=0.005 * args_cli.sensitivity
         )
     elif args_cli.teleop_device.lower() == "gamepad":
-        teleop_interface = Se3Gamepad(
+        teleop_interface = Se3GamepadKingfisher(
             pos_sensitivity=args_cli.sensitivity, rot_sensitivity= args_cli.sensitivity
         )
         
     else:
         raise ValueError(f"Invalid device interface '{args_cli.teleop_device}'. Supported: 'keyboard', 'spacemouse'.")
     # add teleoperation key for env reset
-    teleop_interface.add_callback("L", env.reset) # It was previously "L" instead of B
+    #teleop_interface.add_callback("L", env.reset) # It was previously "L" instead of B
     #teleop_interface.add_callback()
     # print helper for keyboard
     #print(teleop_interface)
@@ -118,8 +155,17 @@ def main():
             #print(actions)
             # apply actions
 
-            env.step(actions)
+            # env stepping
+            obs, rew, dones, _, _ = env.step(actions)
+
+            # ---- Publish observations and actions to ROS2 ----
+            ros_node.publish_obs(obs["policy"])
+            ros_node.publish_act(actions)
+            ros_node.publish_rew(rew)
             
+    # Cleanup
+    ros_node.destroy_node()
+    rclpy.shutdown()
 
     # close the simulator
     env.close()
