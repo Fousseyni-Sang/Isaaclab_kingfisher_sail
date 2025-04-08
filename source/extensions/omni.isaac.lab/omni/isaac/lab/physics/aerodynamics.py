@@ -9,6 +9,7 @@ import math
 
 from omni.isaac.lab.utils import configclass
 from omni.isaac.lab.utils.math import quat_rotate_inverse
+import matplotlib.pyplot as plt
 
 
 
@@ -43,6 +44,9 @@ class Aerodynamics:
         self.Beta_w = self.cfg.wind_direction*torch.ones(self.num_envs, device=self.device) # wind angle of 80 degrees = 80*pi/180 radian
         self.wind_force = torch.zeros((self.num_envs, 3), device=self.device)
 
+        self.wind_lift = torch.zeros((self.num_envs, 3), device=self.device)
+        self.wind_drag = torch.zeros((self.num_envs, 3), device=self.device)
+
 
         return
     
@@ -72,18 +76,33 @@ class Aerodynamics:
         self.apparent_wind_angle = self.get_apparent_wind_angle(apparent_wind2D)
         AspectR = self.cfg.wing_span/self.cfg.wing_chord # Aspect ratio of the rigid wing
 
-        coeff_L, coeff_D = self.generate_coeffs(self.angle_of_attack, AspectR)
+        Re = self.compute_Reynold(Uw, self.cfg.wing_chord)
+        t = 0.18*self.cfg.wing_chord # thickness, naca0018 so 18% of the chord
+
+        #self.generate_coeffs(self.angle_of_attack, AspectR)
+        coeff_L, coeff_D, CN_alpha, CT_alpha, CD_90 = self.generate_coeff_from_article(
+                        Re, self.angle_of_attack,t, self.cfg.wing_chord
+                ) 
         
         lift_L, drag_D = self.generate_force(apparent_wind2D, sail_wing_aire, coeff_L, coeff_D, density_p)
         
         force = torch.zeros((self.num_envs, 3), device=self.device)
         
-        force[:, 0] = lift_L*torch.cos(self.apparent_wind_angle) - drag_D*torch.sin(self.apparent_wind_angle)
-        force[:, 1] = lift_L*torch.sin(self.apparent_wind_angle) + drag_D*torch.cos(self.apparent_wind_angle)
+        self.wind_lift[:, 0] = lift_L*torch.sin(self.apparent_wind_angle)
+        self.wind_lift[:, 1] = lift_L*torch.cos(self.apparent_wind_angle)
+
+        self.wind_drag[:, 0] = -drag_D*torch.cos(self.apparent_wind_angle)
+        self.wind_drag[:, 1] = drag_D*torch.sin(self.apparent_wind_angle)
+
+        #lift_L*torch.sin(self.apparent_wind_angle) - drag_D*torch.cos(self.apparent_wind_angle)
+        force[:, 0] = self.wind_lift[:, 0] + self.wind_drag[:, 0] 
+        #lift_L*torch.cos(self.apparent_wind_angle) + drag_D*torch.sin(self.apparent_wind_angle)
+        force[:, 1] = self.wind_lift[:, 1] + self.wind_drag[:, 1]  
 
         return force.clone()
 
-    def generate_true_wind_components(self, Uw: torch.Tensor, beta_w: torch.Tensor, ship_heading_w:torch.Tensor) -> torch.Tensor:
+    def generate_true_wind_components(self, Uw: torch.Tensor, beta_w: torch.Tensor, 
+                    ship_heading_w:torch.Tensor) -> torch.Tensor:
         """
         This another article implementation
 
@@ -133,10 +152,11 @@ class Aerodynamics:
         Returns:
         - Angles of attack as a tensor of shape (num_envs,).
         """
-        return (apparent_wind_angle - sail_angle + torch.pi)%(2*torch.pi) - torch.pi
 
-    def generate_force(self, wind_Vapp: torch.Tensor, aire_A: float,coeff_L: torch.Tensor, coeff_D: torch.Tensor, density_p: float = 1.225,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+        return (apparent_wind_angle.reshape(-1,) - sail_angle.reshape(-1,) + torch.pi)%(2*torch.pi) - torch.pi
+
+    def generate_force(self, wind_Vapp: torch.Tensor, aire_A: float,coeff_L: torch.Tensor, coeff_D: torch.Tensor, 
+                       density_p: float = 1.225) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Generate lift and drag forces for each environment.
 
@@ -156,6 +176,86 @@ class Aerodynamics:
         drag_D = 0.5 * density_p * aire_A * coeff_D * torch.square(wind_Vapp_ampl) #(wind_Vapp[:, 1]**2)
 
         return lift_L, drag_D 
+
+    def compute_Reynold(self, speed:torch.Tensor, c:float, density_p:float = 1.225, kv:float=1.42072e-5, 
+                        dv:float=1.778e-5):
+        """
+            Given aerodynamic characteristique, compute the dimensionless number
+            Reynolds:
+            src http://airfoiltools.com/calculator/reynoldsnumber?MReNumForm%5Bvel%5D=5&MReNumForm%5Bchord%5D=
+            0.2&MReNumForm%5Bkvisc%5D=1.4207E-5&yt0=Calculate
+
+            https://www.engineersedge.com/physics/viscosity_of_air_dynamic_and_kinematic_14483.htm
+
+            Params:
+            - speed (m/s): speed of low, air in this case
+            - c (m): characteristic of the foil, wing chord in this case
+            - kv (m/s^2): kinematic viscosity of the flow, air in this case
+            - dv (kg.m/s) : dynamic viscosity of the flow, air in this case
+            - density_p: density of the flow, air in this case
+            Note: constante kv and mu are taken at a temperature of 10 degree
+
+            Return:
+            - dimensionless Reynold number
+        """
+
+        Re = (speed*c)/kv #(density_p*speed*c)/dv
+        return Re
+
+    def generate_coeff_from_article(self, Re:torch.Tensor, alpha:torch.Tensor, t:float, c:float, h = 0):
+        """
+        Generalized method for computing angle of attack over the full range
+        https://www.sciencedirect.com/science/article/pii/S0960148120304833
+
+        - alpha: angle of attack
+        - t: thickness: 18% of c for naca0018 -> t=0.036 m for c=0.2m
+        - c: chord length
+        - h: the distance between the mean camber and the chord line
+        - h=0 in our case, since naca0018 has no camber (0 for 1st digit)
+        - Re: reynold number
+        Note: This method is valid for symmetric airfoil only, check article for asymetric
+        """
+        # h is the distance between
+        CD_90 = 1.98 - 0.64* (0.5*(t/c)**2) - 0.44*t/c - 1.39*h/c
+        CN_alpha = CD_90*(torch.sin(alpha) + 0.0023*torch.sin(2*alpha))/    \
+        (0.38 + 0.62*torch.abs(torch.sin(alpha)) + 3.7*(t/c)*(torch.cos(alpha)**8))
+
+        CD_f = 0.455/(torch.log10(Re)**2.58)-1700/Re
+        CT_alpha = CD_90*0.3*(t/c)*torch.abs(torch.sin(alpha) + 0.1*torch.sin(2*alpha))*    \
+        (1-torch.cos(2*alpha)) - CD_f*torch.cos(alpha)
+
+        CL = CN_alpha*torch.cos(alpha) + CT_alpha*torch.sin(alpha)
+        CD = CN_alpha*torch.sin(alpha) - CT_alpha*torch.cos(alpha)
+
+        return CL, CD, CN_alpha, CT_alpha, CD_90
+
+    def generate_viterna_coeff(self, alpha:torch.Tensor, AspectR:float, C_stall:float, 
+                        CD_stall:float, alpha_stall:float):
+
+        """ This implementation is the Viterna, one of the most popular used for 
+            post-stall lift and drag coefficient estimation
+
+            Params: 
+            - alpha: angle of attack (90 degree > alpha > alpha_stall and alpha<alpha_min)
+            - aspectR: aspect ratio of the airfoil, span/chord
+            - 
+            Return:
+            - CL: lift coefficient
+            - CD: drag coefficient 
+        """
+
+        CD_max = 1.11 + 0.018*AspectR
+        A1 = CD_max/2
+        B1 = CD_max
+        A2 = (C_stall - CD_max*math.sin(alpha_stall)*math.cos(alpha_stall))*    \
+        math.sin(alpha_stall)/(math.cos(alpha_stall)**2)
+
+        B2 = (CD_stall - CD_max*(math.sin(alpha_stall)**2))/math.cos(alpha_stall)
+        
+        CL = A1*torch.sin(2*alpha) + A2*(torch.cos(alpha)**2)/torch.sin(alpha)
+        CD = B1*(torch.sin(alpha)**2) + B2*torch.cos(alpha)
+
+        return CL, CD
     
     def generate_coeffs(self, angle_attack_alpha: torch.Tensor, asp_ratio: float) -> tuple[torch.Tensor, torch.Tensor]:
         """
@@ -184,7 +284,7 @@ class Aerodynamics:
         Returns:
         - sail angle as a tensor of shape (num_envs,).
         """
-        return apparent_wind_angle - angle_of_attack + torch.pi
+        return apparent_wind_angle - angle_of_attack 
     
     def reset_wind_condition(self, randomize=False):
         """ randomize wind direction between 0 and 2*pi if params randomize=True """

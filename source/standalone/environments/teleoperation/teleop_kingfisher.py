@@ -57,6 +57,7 @@ class RlAgentPublisher(Node):
         self.obs_publisher = self.create_publisher(Float32MultiArray, "rl_observations", 10)
         self.act_publisher = self.create_publisher(Float32MultiArray, "rl_actions", 10)
         self.rew_publisher = self.create_publisher(Float32MultiArray, "rl_rewards", 10)
+        self.aero_force_publisher = self.create_publisher(Float32MultiArray, "aero_force", 10)
 
     def publish_obs(self, obs):
         
@@ -73,6 +74,10 @@ class RlAgentPublisher(Node):
         msg = Float32MultiArray()
         msg.data = rew.cpu().numpy().flatten().tolist()
         self.rew_publisher.publish(msg)
+    def publish_aero_force(self, aero_force):
+        msg = Float32MultiArray()
+        msg.data = aero_force.cpu().numpy().flatten().tolist()
+        self.aero_force_publisher.publish(msg)
 
 def pre_process_actions(delta_pose: torch.Tensor) -> torch.Tensor:
     """Pre-process actions for the environment."""
@@ -80,10 +85,12 @@ def pre_process_actions(delta_pose: torch.Tensor) -> torch.Tensor:
 
     thrust_left = delta_pose[:, 2:3]
 
-    sail_angle = delta_pose[:, 6:]
-
+    if delta_pose[:, 5:6]>=0.01:
+        sail_angle = delta_pose[:, 5:6] 
+    else: 
+        sail_angle = delta_pose[:, 1:2]
     actions = torch.cat((thrust_right, thrust_left, sail_angle), dim=1)
-    print(delta_pose)
+    #print(delta_pose)
     return actions
 
 
@@ -162,6 +169,7 @@ def main():
             ros_node.publish_obs(obs["policy"])
             ros_node.publish_act(actions)
             ros_node.publish_rew(rew)
+            ros_node.publish_aero_force(env.unwrapped._aerodynamic_force.squeeze(0))
             
     # Cleanup
     ros_node.destroy_node()

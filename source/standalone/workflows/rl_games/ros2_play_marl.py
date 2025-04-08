@@ -21,6 +21,9 @@ parser.add_argument(
 parser.add_argument("--num_envs", type=int, default=None, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
 parser.add_argument("--checkpoint", type=str, default=None, help="Path to model checkpoint.")
+
+parser.add_argument("--checkpoints", nargs='+', type=str, required=True, help="List of checkpoint paths.")
+
 parser.add_argument(
     "--use_last_checkpoint",
     action="store_true",
@@ -72,40 +75,22 @@ from rclpy.node import Node
 from std_msgs.msg import Float32MultiArray
 
 
-class RlAgentPublisher(Node):
-    def __init__(self):
+class RlAgentPublisher(rclpy.node.Node):
+    def __init__(self, num_agents):
         super().__init__("rl_agent_publisher")
-        self.obs_publisher = self.create_publisher(Float32MultiArray, "rl_observations", 10)
-        self.act_publisher = self.create_publisher(Float32MultiArray, "rl_actions", 10)
-        self.rew_publisher = self.create_publisher(Float32MultiArray, "rl_rewards", 10)
-        self.aero_force_publisher = self.create_publisher(Float32MultiArray, "aero_force", 10)
-        self.thruster_force_publisher = self.create_publisher(Float32MultiArray, "thruster_force", 10)
+        self.num_agents = num_agents
+        self.obs_publishers = [self.create_publisher(Float32MultiArray, f"rl_observations_{i}", 10) for i in range(num_agents)]
+        self.act_publishers = [self.create_publisher(Float32MultiArray, f"rl_actions_{i}", 10) for i in range(num_agents)]
+        self.rew_publishers = [self.create_publisher(Float32MultiArray, f"rl_rewards_{i}", 10) for i in range(num_agents)]
 
-    def publish_obs(self, obs):
-        
-        msg = Float32MultiArray()
-        msg.data = obs.cpu().numpy().flatten().tolist()
-        self.obs_publisher.publish(msg)
-
-    def publish_act(self, act):
-        msg = Float32MultiArray()
-        msg.data = act.cpu().numpy().flatten().tolist()
-        self.act_publisher.publish(msg)
-
-    def publish_rew(self, rew):
-        msg = Float32MultiArray()
-        msg.data = rew.cpu().numpy().flatten().tolist()
-        self.rew_publisher.publish(msg)
-
-    def publish_aero_force(self, aero_force):
-        msg = Float32MultiArray()
-        msg.data = aero_force.cpu().numpy().flatten().tolist()
-        self.aero_force_publisher.publish(msg)
-
-    def publish_thruster_force(self, thruster_force):
-        msg = Float32MultiArray()
-        msg.data = thruster_force.cpu().numpy().flatten().tolist()
-        self.thruster_force_publisher.publish(msg)
+    def publish(self, obs, act, rew):
+        for i in range(self.num_agents):
+            msg_obs = Float32MultiArray(data=obs[i].cpu().numpy().flatten().tolist())
+            msg_act = Float32MultiArray(data=act[i].cpu().numpy().flatten().tolist())
+            msg_rew = Float32MultiArray(data=rew[i].cpu().numpy().flatten().tolist())
+            self.obs_publishers[i].publish(msg_obs)
+            self.act_publishers[i].publish(msg_act)
+            self.rew_publishers[i].publish(msg_rew)
 
 
 def main():
@@ -113,11 +98,12 @@ def main():
 
     # ---- Initialize ROS2 ----
     rclpy.init()
-    ros_node = RlAgentPublisher()
+    num_agents = len(args_cli.checkpoints)
+    ros_node = RlAgentPublisher(num_agents)
 
     # parse env configuration
     env_cfg = parse_env_cfg(
-        args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs, use_fabric=not args_cli.disable_fabric
+        args_cli.task, device=args_cli.device, num_envs=num_agents, use_fabric=not args_cli.disable_fabric
     )
     agent_cfg = load_cfg_from_registry(args_cli.task, "rl_games_cfg_entry_point")
 
@@ -175,7 +161,20 @@ def main():
     )
     env_configurations.register("rlgpu", {"vecenv_type": "IsaacRlgWrapper", "env_creator": lambda **kwargs: env})
 
-    # load previously trained model
+
+    agents = []
+    for checkpoint in args_cli.checkpoints:
+        agent_cfg = load_cfg_from_registry(args_cli.task, "rl_games_cfg_entry_point")
+        agent_cfg["params"]["load_checkpoint"] = True
+        agent_cfg["params"]["load_path"] = retrieve_file_path(checkpoint)
+        runner = Runner()
+        runner.load(agent_cfg)
+        agent = runner.create_player()
+        agent.restore(agent_cfg["params"]["load_path"])
+        agent.reset()
+        agents.append(agent)
+
+    """# load previously trained model
     agent_cfg["params"]["load_checkpoint"] = True
     agent_cfg["params"]["load_path"] = resume_path
     print(f"[INFO]: Loading model checkpoint from: {agent_cfg['params']['load_path']}")
@@ -189,7 +188,7 @@ def main():
     agent: BasePlayer = runner.create_player()
     agent.restore(resume_path)
     agent.reset()
-
+    """
     # reset environment
     obs = env.reset()
     if isinstance(obs, dict):
@@ -208,18 +207,15 @@ def main():
         # run everything in inference mode
         with torch.inference_mode():
             # convert obs to agent format
-            obs = agent.obs_to_torch(obs)
+            #obs = agent.obs_to_torch(obs)
             # agent stepping
-            actions = agent.get_action(obs, is_deterministic=agent.is_deterministic)
+            #  
+            #actions = agent.get_action(obs, is_deterministic=agent.is_deterministic)
+            actions = torch.stack([agent.get_action(agent.obs_to_torch(obs[i].unsqueeze(0)), is_deterministic=True).squeeze(0) for i, agent in enumerate(agents)])
             # env stepping
             obs, rew, dones, _ = env.step(actions)
-
             # ---- Publish observations and actions to ROS2 ----
-            ros_node.publish_obs(obs)
-            ros_node.publish_act(actions)
-            ros_node.publish_rew(rew)
-            ros_node.publish_aero_force(env.unwrapped._aerodynamic_force.squeeze(0))
-            ros_node.publish_thruster_force(env.unwrapped._thruster_forces.squeeze(0))
+            ros_node.publish(obs, actions, rew)
 
             # perform operations for terminated episodes
             if len(dones) > 0:

@@ -99,7 +99,7 @@ BLUE_ARROW_X_MARKER_CFG = VisualizationMarkersCfg(
     markers={
         "arrow": sim_utils.UsdFileCfg(
             usd_path=f"/home/isaac_user/asv-sawasp-fousseyni/Usd/arrow.usd",
-            scale=(0.1, 0.3, 0.1),
+            scale=(0.5, 0.5, 0.5),
             visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 0.0, 1.0)),
         )
     }
@@ -109,7 +109,7 @@ GREEN_ARROW_X_MARKER_CFG = VisualizationMarkersCfg(
     markers={
         "arrow": sim_utils.UsdFileCfg(
             usd_path=f"/home/isaac_user/asv-sawasp-fousseyni/Usd/arrow.usd",
-            scale=(0.2, 0.4, 0.2),
+            scale=(0.5, 0.4, 0.2),
             visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 1.0, 0.0)),
         )
     }
@@ -119,7 +119,7 @@ YELLOW_ARROW_X_MARKER_CFG = VisualizationMarkersCfg(
     markers={
         "arrow": sim_utils.UsdFileCfg(
             usd_path=f"/home/isaac_user/asv-sawasp-fousseyni/Usd/arrow.usd",
-            scale=(0.1, 0.3, 0.1),
+            scale=(0.5, 0.4, 0.2),
             visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.8, 0.0)),
         )
     }

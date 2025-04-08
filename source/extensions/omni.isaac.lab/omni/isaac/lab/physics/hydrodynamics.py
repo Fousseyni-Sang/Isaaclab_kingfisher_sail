@@ -97,6 +97,7 @@ class Hydrodynamics:
         # print("quad_damp: ", quad_damp)
         # scaling and adding both matrices
         damping_matrix = (lin_damp + quad_damp) * self.cfg.scaling_damping
+        
         # print("damping_matrix: ", damping_matrix)
         return damping_matrix
 
