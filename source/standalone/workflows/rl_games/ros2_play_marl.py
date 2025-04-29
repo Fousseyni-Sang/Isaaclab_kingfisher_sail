@@ -73,9 +73,9 @@ from omni.isaac.lab_tasks.utils.wrappers.rl_games import RlGamesGpuEnv, RlGamesV
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Float32MultiArray
+from ros2_Node import RlAgentPublisher
 
-
-class RlAgentPublisher(rclpy.node.Node):
+"""class RlAgentPublisher(rclpy.node.Node):
     def __init__(self, num_agents):
         super().__init__("rl_agent_publisher")
         self.num_agents = num_agents
@@ -90,7 +90,7 @@ class RlAgentPublisher(rclpy.node.Node):
             msg_rew = Float32MultiArray(data=rew[i].cpu().numpy().flatten().tolist())
             self.obs_publishers[i].publish(msg_obs)
             self.act_publishers[i].publish(msg_act)
-            self.rew_publishers[i].publish(msg_rew)
+            self.rew_publishers[i].publish(msg_rew)"""
 
 
 def main():
@@ -211,11 +211,35 @@ def main():
             # agent stepping
             #  
             #actions = agent.get_action(obs, is_deterministic=agent.is_deterministic)
-            actions = torch.stack([agent.get_action(agent.obs_to_torch(obs[i].unsqueeze(0)), is_deterministic=True).squeeze(0) for i, agent in enumerate(agents)])
+            actions = torch.stack([agent.get_action(agent.obs_to_torch(obs[i].unsqueeze(0)), 
+                            is_deterministic=True).squeeze(0) for i, agent in enumerate(agents)])
             # env stepping
             obs, rew, dones, _ = env.step(actions)
+            aero_force = env.unwrapped._aerodynamic_force.squeeze(0)
+            thruster_force = env.unwrapped._thruster_forces.squeeze(0)
+            lin_speed = env.unwrapped._robot.data.root_lin_vel_b
+            aoa = (180/torch.pi)*env.unwrapped._aerodynamics.angle_of_attack
+            app_angle = (180/torch.pi)*env.unwrapped._aerodynamics.apparent_wind_angle # in degree
+            sail = (180/torch.pi)*env.unwrapped.sail_angle
+            head_w = (180/torch.pi)*env.unwrapped._robot.data.heading_w
+            head_wrt_wind = torch.abs(head_w - (180/torch.pi)*env.unwrapped._aerodynamics.Beta_w)
+            lift = env.unwrapped._aerodynamics.wind_lift_b
+            drag = env.unwrapped._aerodynamics.wind_drag_b
+            ld_ratio = torch.norm(lift, dim=-1)/torch.norm(drag, dim=-1)
+            #ld_ratio = torch.abs(aero_force[:, :, 0]/(aero_force[:, :, 1]+1e-6))
+            robot_pos = env.unwrapped._robot.data.root_link_pos_w[:, :2]
+            goal_pos =  env.unwrapped._desired_pos_w[:, :2]
+            energy = env.unwrapped.energy
+            episode_energy = env.unwrapped.episode_energy
             # ---- Publish observations and actions to ROS2 ----
-            ros_node.publish(obs, actions, rew)
+            lift_coeff = env.unwrapped._aerodynamics.lift_coeff
+            drag_coeff = env.unwrapped._aerodynamics.drag_coeff
+            sum_angle = sail + app_angle + aoa
+
+            
+            ros_node.publish(obs, actions, rew, aero_force, thruster_force, lin_speed, aoa, app_angle, sail, 
+                             head_w, head_wrt_wind, ld_ratio, robot_pos, goal_pos, energy, episode_energy, lift, drag, 
+                             lift_coeff, drag_coeff, sum_angle)
 
             # perform operations for terminated episodes
             if len(dones) > 0:

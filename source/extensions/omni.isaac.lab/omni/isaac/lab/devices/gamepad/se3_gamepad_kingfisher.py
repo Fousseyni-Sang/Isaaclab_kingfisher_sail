@@ -76,7 +76,7 @@ class Se3GamepadKingfisher(DeviceBase):
         # bindings for gamepad to command
         self._create_key_bindings()
         # command buffers
-        self._close_gripper = False
+        self._close_gripper = [False, False]
         # When using the gamepad, two values are provided for each axis.
         # For example: when the left stick is moved down, there are two evens: `left_stick_down = 0.8`
         #   and `left_stick_up = 0.0`. If only the value of left_stick_up is used, the value will be 0.0,
@@ -112,7 +112,7 @@ class Se3GamepadKingfisher(DeviceBase):
 
     def reset(self):
         # default flags
-        self._close_gripper = False
+        self._close_gripper = [False, False]
         self._delta_pose_raw.fill(0.0)
 
     def add_callback(self, key: carb.input.GamepadInput, func: Callable):
@@ -128,7 +128,7 @@ class Se3GamepadKingfisher(DeviceBase):
         """
         self._additional_callbacks[key] = func
 
-    def advance(self) -> tuple[np.ndarray, bool]:
+    def advance(self) -> tuple[np.ndarray, list[bool]]:
         """Provides the result from gamepad event state.
 
         Returns:
@@ -162,7 +162,13 @@ class Se3GamepadKingfisher(DeviceBase):
         if event.input == carb.input.GamepadInput.X:
             # toggle gripper based on the button pressed
             if cur_val > 0.5:
-                self._close_gripper = not self._close_gripper
+                self._close_gripper[0] = not self._close_gripper[0]
+
+        if event.input == carb.input.GamepadInput.A:
+            # Wind speed or direction activator
+            if cur_val > 0.5:
+                self._close_gripper[1] = not self._close_gripper[1]
+
         # -- left and right stick
         if event.input in self._INPUT_STICK_VALUE_MAPPING:
             direction, axis, value = self._INPUT_STICK_VALUE_MAPPING[event.input]

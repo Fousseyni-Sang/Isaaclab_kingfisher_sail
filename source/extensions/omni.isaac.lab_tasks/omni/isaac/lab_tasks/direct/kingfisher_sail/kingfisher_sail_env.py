@@ -21,18 +21,30 @@ from omni.isaac.lab.scene import InteractiveSceneCfg
 from omni.isaac.lab.sim import SimulationCfg
 from omni.isaac.lab.terrains import TerrainImporterCfg
 from omni.isaac.lab.utils import configclass
-from omni.isaac.lab.utils.math import subtract_frame_transforms, transform_points
+from omni.isaac.lab.utils.math import subtract_frame_transforms, transform_points, quat_from_euler_xyz
 import numpy as np
-from math import log
 
+import torch.nn.functional as F
+import torch.nn as nn
+import torch.optim as optim
+from torch.distributions.normal import Normal
+import os
 
 ##
 # Pre-defined configs
 ##
-from omni.isaac.lab_assets import (KINGFISHER_SAIL_CFG, RED_ARROW_X_MARKER_CFG, 
- BLUE_ARROW_X_MARKER_CFG, CUBOID_MARKER_CFG, GREEN_ARROW_X_MARKER_CFG, YELLOW_ARROW_X_MARKER_CFG)  # isort: skip
+from omni.isaac.lab_assets import (KINGFISHER_SAIL_CFG, RED_ARROW_X_MARKER_CFG, MAROON_ARROW_X_MARKER_CFG,
+ BLUE_ARROW_X_MARKER_CFG, CUBOID_MARKER_CFG, GREEN_ARROW_X_MARKER_CFG, YELLOW_ARROW_X_MARKER_CFG, MIMOSA_ARROW_X_MARKER_CFG,
+  RED_BIG_ARROW_X_MARKER_CFG, BEIGE_ARROW_X_MARKER_CFG, ORANGE_ARROW_X_MARKER_CFG, MAGENTA_ARROW_X_MARKER_CFG)  # isort: skip
 from omni.isaac.lab.markers import CUBOID_MARKER_CFG  # isort: skip
 
+
+"""# File path to the Naca profile downloaded from xfoil
+filepath = "/home/isaac_user/asv-sawasp-fousseyni/Usd/naca0018.csv"
+df = pd.read_csv(filepath, skiprows=8, nrows=201)
+
+x_coords_naca = 1e-2*df[["X(mm)"]].values
+y_coords_naca = 1e-2*df[["Y(mm)"]].values"""
 
 class KingfisherSailEnvWindow(BaseEnvWindow):
     """Window manager for the Kingfisher environment."""
@@ -54,6 +66,74 @@ class KingfisherSailEnvWindow(BaseEnvWindow):
                     self._create_debug_vis_ui_element("targets", self.env)
 
 
+class DiscriminatorNetwork(nn.Module):
+    def __init__(self, lr, input_dims, fc1_dims=256,
+            fc2_dims=256, prediction_dims=1, name='discriminator', chkpt_dir='/tmp/sac'):
+        super(DiscriminatorNetwork, self).__init__()
+        self.input_dims = input_dims
+        self.fc1_dims = fc1_dims
+        self.fc2_dims = fc2_dims
+        self.lr = lr
+        self.prediction_dims = prediction_dims
+        self.name = name
+        self.checkpoint_dir = chkpt_dir
+        self.checkpoint_file = os.path.join(self.checkpoint_dir, name+'_sac')
+        self.reparam_noise = 1e-6
+
+        self.fc1 = nn.Linear(*self.input_dims, self.fc1_dims)
+        self.fc2 = nn.Linear(self.fc1_dims, self.fc2_dims)
+        self.mu = nn.Linear(self.fc2_dims, self.prediction_dims)
+        self.sigma = nn.Linear(self.fc2_dims, self.prediction_dims)
+
+        self.optimizer = optim.Adam(self.parameters(), lr=self.lr)
+        self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+        self.to(self.device)
+
+    def forward(self, state):
+        prob = F.relu(self.fc1(state))
+        prob = F.tanh(self.fc2(prob))*5
+
+        mu = torch.sigmoid(self.mu(prob))
+        sigma = torch.sigmoid(self.sigma(prob))
+
+        sigma = torch.clamp(sigma, min=.1, max=1)
+
+        return mu, sigma
+
+    def predict(self, state, reparameterize=True, requires_grad=True):
+        if requires_grad:
+            mu, sigma = self.forward(state)
+            probabilities = Normal(mu, sigma)
+            if reparameterize:
+                predictions = probabilities.rsample()
+            else:
+                predictions = probabilities.sample()
+
+            prediction = predictions.to(self.device)
+            prediction = torch.clamp(prediction, .0001, .9999)
+            log_probs = probabilities.log_prob(predictions)
+            log_probs -= torch.log(1-prediction.pow(2)+self.reparam_noise)
+
+            return prediction, log_probs, probabilities
+        else:
+            with torch.no_grad():
+                mu, sigma = self.forward(state)
+                probabilities = Normal(mu, sigma)
+
+                if reparameterize:
+                    predictions = probabilities.rsample()
+                else:
+                    predictions = probabilities.sample()
+
+                prediction = predictions.to(self.device)
+                prediction = torch.clamp(prediction, .0001, .9999)
+                log_probs = probabilities.log_prob(predictions)
+                log_probs -= torch.log(1-prediction.pow(2)+self.reparam_noise)
+                #log_probs = log_probs.sum(0, keepdim=True)
+
+                return prediction, log_probs, probabilities
+
+
 @configclass
 class KingfisherSailEnvCfg(DirectRLEnvCfg):
     # env
@@ -62,7 +142,7 @@ class KingfisherSailEnvCfg(DirectRLEnvCfg):
     decimation = 3
     step_dt = physics_dt * decimation  # 20 Hz
     action_space = 3
-    observation_space = 12
+    observation_space = 15
     state_space = 0
     debug_vis = True
 
@@ -114,8 +194,8 @@ class KingfisherSailEnvCfg(DirectRLEnvCfg):
     aerodynamics_cfg.air_density = 1.225
     aerodynamics_cfg.wing_span = 1
     aerodynamics_cfg.wing_chord = 0.2
-    aerodynamics_cfg.wind_direction = 10*torch.pi/180
-    aerodynamics_cfg.wind_speed = 4
+    aerodynamics_cfg.wind_direction = -90*torch.pi/180
+    aerodynamics_cfg.wind_speed = 5
     aerodynamics_cfg.angle_of_attack = 20*torch.pi/180
     
 
@@ -133,7 +213,7 @@ class KingfisherSailEnvCfg(DirectRLEnvCfg):
     hydrodynamics_cfg: HydrodynamicsCfg = HydrodynamicsCfg()
     # linear Nominal [16.44998712, 15.79776044, 100, 13, 13, 6]
     # linear SID [0.0, 99.99, 99.99, 13.0, 13.0, 0.82985084]
-    hydrodynamics_cfg.linear_damping = [0.0, 99.99, 99.99, 13.0, 13.0, 5.83]
+    hydrodynamics_cfg.linear_damping = [0.0, 99.99, 99.99, 13.0, 13.0, 5.83] # not 5
     # quadratic Nominal [2.942, 2.7617212, 10, 5, 5, 5]
     # quadratic SID [17.257603, 99.99, 10.0, 5.0, 5.0, 17.33600724]
     hydrodynamics_cfg.quadratic_damping = [17.257603, 99.99, 10.0, 5.0, 5.0, 17.33600724]
@@ -176,39 +256,66 @@ class KingfisherSailEnvCfg(DirectRLEnvCfg):
     blue_marker_cfg = BLUE_ARROW_X_MARKER_CFG.copy()
     blue_marker_cfg.prim_path = "/Visuals/Command/appWind"
 
+    maroon_marker_cfg = MAROON_ARROW_X_MARKER_CFG.copy()
+    maroon_marker_cfg.prim_path = "/Visuals/Command/inducedWind"
+
     # red markers used to visualize true wind
     red_marker_cfg = RED_ARROW_X_MARKER_CFG.copy()
     red_marker_cfg.prim_path = "/Visuals/Command/trueWind"
+
+    # red markers used to visualize true wind
+    red_big_marker_cfg = RED_BIG_ARROW_X_MARKER_CFG.copy()
+    red_big_marker_cfg.prim_path = "/Visuals/Command/truebigWind"
 
     # Green markers used to visualize thruster forces
     green_marker_cfg = GREEN_ARROW_X_MARKER_CFG.copy()
     green_marker_cfg.prim_path = "/Visuals/Command/force"
 
-    # Green markers used to visualize thruster forces
+    # Yellow markers used to visualize thruster forces
     yellow_marker_cfg = YELLOW_ARROW_X_MARKER_CFG.copy()
     yellow_marker_cfg.prim_path = "/Visuals/Command/force_yellow"
 
+    # Green markers used to visualize thruster forces
+    beige_marker_cfg = BEIGE_ARROW_X_MARKER_CFG.copy()
+    beige_marker_cfg.prim_path = "/Visuals/Command/netforce_beige"
+
+    # Magenta markers used to visualize thruster forces
+    magenta_marker_cfg = MAGENTA_ARROW_X_MARKER_CFG.copy()
+    magenta_marker_cfg.prim_path = "/Visuals/Command/sail_unit_magenta"
+
+    # Mimosa markers used to visualize thruster forces
+    mimosa_marker_cfg = MIMOSA_ARROW_X_MARKER_CFG.copy()
+    mimosa_marker_cfg.prim_path = "/Visuals/Command/sail_unit_ortho_magenta"
+
+    # Orange markers used to visualize thruster forces
+    orange_marker_cfg = ORANGE_ARROW_X_MARKER_CFG.copy()
+    orange_marker_cfg.prim_path = "/Visuals/Command/hydro_force_orange"
+
     max_energy = 2.0  # Max of 1.0 per thruster
+    max_available_energy = episode_length_s*max_energy
+    max_robot_speed = 0.7 # Max speed for energy optimization
 
     # reward scales
     distance_reward_scale = 0.0
-    distance_progress_reward_scale = 15.0
+    distance_progress_reward_scale = 1 #5 # 6 too much
     bearing_progress_reward_scale = 0.0
 
     goal_reached_threshold = 0.1
-    goal_reached_scale = 50.0
+    goal_reached_scale = 50.0 # 150
 
-    energy_penalty_scale = -0.1  #-0.001
+    energy_penalty_scale = -0.09  #-0.001
     backwards_penalty_scale = -0.005
-    time_penalty_scale = -0.01
+    time_penalty_scale = -0.075 #-1
     bearing_penalty_scale = 0.01 #1.0
     beargin_penalty_coef = -0.5 #-4
+    lift_drag_ratio_scale = 0.5
 
     # Environment
     min_target_distance = 25.0 
     max_target_distance = 30.0
     min_target_bearing = 0 #-torch.pi / 2
-    max_target_bearing = torch.pi/6 #torch.pi / 2
+    max_target_bearing = 5*torch.pi/180 #torch.pi / 2
+
 
 
 class KingfisherSailEnv(DirectRLEnv):
@@ -250,7 +357,8 @@ class KingfisherSailEnv(DirectRLEnv):
         # Forces
         self._hydrodynamic_force = torch.zeros(self.num_envs, 1, 6, device=self.device)
         self._hydrostatic_force = torch.zeros(self.num_envs, 1, 6, device=self.device)
-        self._aerodynamic_force = torch.zeros(self.num_envs, 1, 3, device=self.device)
+        self._aerodynamic_force_b = torch.zeros(self.num_envs, 1, 3, device=self.device)
+        self._aerodynamic_force_wing = torch.zeros(self.num_envs, 1, 3, device=self.device)
         self._thruster_forces = torch.zeros(self.num_envs, 1, 6, device=self.device)
         
         self._no_torque = torch.zeros(self.num_envs, 1, 3, device=self.device)
@@ -271,17 +379,23 @@ class KingfisherSailEnv(DirectRLEnv):
         self.distance_progress = torch.zeros(self.num_envs, device=self.device)
         self.initial_distance = torch.zeros(self.num_envs, device=self.device)
         
-
         self.bearing = torch.zeros(self.num_envs, device=self.device)
         self.previous_bearing = torch.zeros(self.num_envs, device=self.device)
         self.bearing_progress = torch.zeros(self.num_envs, device=self.device)
         self.initial_bearing = torch.zeros(self.num_envs, device=self.device)
 
         self.energy = torch.zeros(self.num_envs, device=self.device)
+        self.episode_energy = torch.zeros_like(self.energy)
+        self.max_available_episode_energy = 0.6*self.max_episode_length*torch.ones_like(self.energy)
+        self.episode_avg_speed = torch.zeros_like(self.energy)
+        self.episode_avg_lift_drag_ratio = torch.zeros_like(self.energy)
         self.desired_pos_b = torch.zeros(self.num_envs, 2, device=self.device)
 
         self.joint_pos_target = torch.zeros(self.num_envs, device=self.device)
         self.sail_angle = torch.zeros(self.num_envs, device=self.device)
+        self.joint_angle_mapped_pi = torch.zeros(self.num_envs, device=self.device)
+
+        self.previous_robot_pos = torch.zeros((self.num_envs, 3), device=self.device)
 
         # add handle for debug visualization (this is set to a valid handle inside set_debug_vis)
         self.set_debug_vis(self.cfg.debug_vis)
@@ -306,8 +420,26 @@ class KingfisherSailEnv(DirectRLEnv):
                         [self.env_pos[0]+d, self.env_pos[1]+d, 2], (n_markers//10, 3))
         
         self.green_marker_translations = np.zeros((3, 3)) # 3 arrows for 3 bodies, both hulls and sail
+
+        self.energy_context = torch.ones_like(self.episode_number)
+        self.time_context = torch.ones_like(self.episode_number)
+        self.progress_context = torch.ones_like(self.episode_number)
+        self.is_Training = True
+
+
+        """self.xfoil = XFoil()
+        self.xfoil.print = False
+        self.airfoil_set = False
+        self.xfoil.airfoil = Airfoil(x_coords_naca, y_coords_naca)  # set later
+        
+        self.xfoil.n_crit = 9
+        self._aerodynamics.xfoil = self.xfoil"""
+        
         # ============================================================================================#
         # ============================================================================================#
+
+
+        
 
     def _setup_scene(self):
         self._robot = Articulation(self.cfg.robot)
@@ -327,13 +459,26 @@ class KingfisherSailEnv(DirectRLEnv):
         light_cfg.func("/World/Light", light_cfg)
 
         self.blue_marker = VisualizationMarkers(self.cfg.blue_marker_cfg)
+        self.maroon_marker = VisualizationMarkers(self.cfg.maroon_marker_cfg)
         self.green_marker = VisualizationMarkers(self.cfg.green_marker_cfg)
         self.red_marker = VisualizationMarkers(self.cfg.red_marker_cfg)
+        self.red_big_marker = VisualizationMarkers(self.cfg.red_big_marker_cfg)
         self.yellow_marker = VisualizationMarkers(self.cfg.yellow_marker_cfg)
+        self.beige_marker = VisualizationMarkers(self.cfg.beige_marker_cfg)
+        self.orange_marker = VisualizationMarkers(self.cfg.orange_marker_cfg)
+        self.magenta_marker = VisualizationMarkers(self.cfg.magenta_marker_cfg)
+        self.mimosa_marker = VisualizationMarkers(self.cfg.mimosa_marker_cfg)
         self.visualize = False
+        
 
     def _pre_physics_step(self, actions: torch.Tensor):
+        """if not self.airfoil_set:
+            self.xfoil.airfoil = Airfoil(self._aerodynamics.cfg.x_coords_naca, self._aerodynamics.cfg.y_coords_naca)  # set later
         
+            self.xfoil.n_crit = 9
+            self._aerodynamics.xfoil = self.xfoil
+            self.airfoil_set=True"""
+
         self._actions = actions.clone().clamp(-1.0, 1.0)
         # Override the actions for debugging
         # self._actions[:,0] = 0.6
@@ -362,7 +507,7 @@ class KingfisherSailEnv(DirectRLEnv):
         # Check if teleoperation or if joint action is controled by the robot
         teleop = False
 
-        if actions.shape[1] == 3:
+        """if actions.shape[1] == 3:
             sail_wing_action_scale = 0.01*torch.pi # rate of change of the angle of the sail, needs an actuator model
             self.sail_angle = sail_wing_action_scale*actions[:, 2:3]
 
@@ -382,31 +527,81 @@ class KingfisherSailEnv(DirectRLEnv):
                         self._aerodynamics.angle_of_attack).reshape(current_joint_pos.shape)
         
             joint_error = (self.sail_angle - current_joint_pos + torch.pi) %(2*torch.pi) - torch.pi
-            self.joint_pos_target = (current_joint_pos + joint_error + 2*torch.pi) % (4*torch.pi) - 2*torch.pi
+            self.joint_pos_target = (current_joint_pos + joint_error + 2*torch.pi) % (4*torch.pi) - 2*torch.pi"""
+        
+        if actions.shape[1] == 3:
+            # Agent directly controls the AoA (interpreted as a relative sail change)
+            sail_wing_action_scale = 0.01 * torch.pi  # Small increment per timestep
+            self.sail_angle = sail_wing_action_scale * actions[:, 2:3]  # Shape: (num_envs, 1)
+
+            # Compute the new joint target: current + increment, wrapped to [-2π, 2π]
+            self.joint_pos_target = (current_joint_pos + self.sail_angle + 2 * torch.pi) % (4 * torch.pi) - 2 * torch.pi
+
+            # For AoA calculation, map the joint to [-π, π]
+            joint_pos_mapped_pi = (self.joint_pos_target + torch.pi) % (2 * torch.pi) - torch.pi
+            self.joint_angle_mapped_pi = joint_pos_mapped_pi.clone()
+            # Compute AoA between wind direction and current sail orientation
+            self._aerodynamics.angle_of_attack = self._aerodynamics.get_angle_of_attack(
+                self._aerodynamics.apparent_wind_angle, joint_pos_mapped_pi)
+            
+            self._aerodynamics.sail_angle = joint_pos_mapped_pi.clone()
+
+        else:
+            # Autopilot mode: sail angle is computed from desired AoA and apparent wind
+            self.sail_angle = self._aerodynamics.get_sail_angle(
+                self._aerodynamics.apparent_wind_angle,
+                self._aerodynamics.angle_of_attack
+            ).reshape(current_joint_pos.shape)
+
+            self._aerodynamics.sail_angle = self.sail_angle.clone()
+
+            # Compute joint error (sail_angle - current), wrapped to [-π, π]
+            joint_error = (self.sail_angle - current_joint_pos + torch.pi) % (2 * torch.pi) - torch.pi
+
+            # Compute new joint target (still wrapped to [-2π, 2π] for safety)
+            self.joint_pos_target = (current_joint_pos + joint_error + 2 * torch.pi) % (4 * torch.pi) - 2 * torch.pi
 
 
-        # Compute the aerodynamic (wind) effect on the sail wing
+
+        # Compute the aerodynamic (wind) effect on the sail wing in the boat frame
         robot_vel_b = self._robot.data.root_lin_vel_b.clone().detach()
         #print(f"\njoin-pos: {self.joint_pos_target} \nact: {actions[:, -1]} \ntot_act: {actions}\n")
-        self._aerodynamic_force[:, 0, :] = self._aerodynamics.compute_wind_effect(
+        self._aerodynamic_force_b[:, 0, :] = self._aerodynamics.compute_wind_effect(
             self._aerodynamics.Uw, self._aerodynamics.Beta_w, self._robot.data.heading_w,
-            robot_vel_b[:, :2], 
+            robot_vel_b[:, :2]
         )
-        #print(f"{self._aerodynamic_force}")
+        yaw_angle = current_joint_pos.clone().detach().reshape(self.num_envs)
+        wing_quat = quat_from_euler_xyz(torch.zeros_like(yaw_angle), torch.zeros_like(yaw_angle), yaw_angle)
+        #print(f"wing_quat: {wing_quat.shape} \taero_force: {self._aerodynamic_force_b.reshape(self.num_envs, -1).shape}")
+        aero_force_wing = transform_points(self._aerodynamic_force_b, quat=wing_quat, pos=None)
+        #print(aero_force_wing.shape)
+        self._aerodynamics.wind_lift_wing = transform_points(self._aerodynamics.wind_lift_b.reshape(self.num_envs, -1), quat=wing_quat, pos=None)
+        self._aerodynamics.wind_drag_wing = transform_points(self._aerodynamics.wind_drag_b.reshape(self.num_envs, -1), quat=wing_quat, pos=None)
+        #print(self._aerodynamic_force_b.shape, aero_force_wing.shape)
+        self._aerodynamic_force_wing = aero_force_wing.reshape_as(self._aerodynamic_force_b)
+        #print(self._aerodynamic_force_b[:, 0, :].shape)
+        
+        #print(f"{self._aerodynamics.Uw}: {self._aerodynamics.Beta_w}")
 
         #=====================================================================================================#
         
 
 
     def _apply_action(self):
-        
+        sail_wing_force_b = self._aerodynamic_force_b.clone()
+        sail_wing_force_wing = self._aerodynamic_force_wing.clone()
+
         combined = self._hydrostatic_force + self._hydrodynamic_force
+        combined[:, 0, :3] = combined[:, 0, :3] + sail_wing_force_b[:, 0, :]
         self._robot.set_external_force_and_torque(combined[..., :3], combined[..., 3:], body_ids=self._base_link)
 
         # only apply thruster forces if they are not zero, otherwise it disables external previous forces.
         lft_thruster_force = self._thruster_forces[..., :3]
         rgt_thruster_force = self._thruster_forces[..., 3:] #-self._thruster_forces[..., :3] #
-        sail_wing_force = self._aerodynamic_force.clone()
+        
+
+        apply_mask = self.episode_energy <= self.max_available_episode_energy
+        env_ids = torch.nonzero(apply_mask, as_tuple=False).squeeze(-1)
 
         if lft_thruster_force.any():
             self._robot.set_external_force_and_torque(
@@ -417,25 +612,27 @@ class KingfisherSailEnv(DirectRLEnv):
                 rgt_thruster_force, self._no_torque, body_ids=self._right_thruster_id
             )
     
-
-        if sail_wing_force.any():
+        """
+        if sail_wing_force_wing.any():
             
             torque = torch.zeros_like(self._no_torque)
             cog = self._robot.data.root_link_pos_w.clone().detach() # center of mass
             sail_pos = self._robot.data.body_link_pos_w[:, self._sail_wing_id, :]
             lever_arm = -(sail_pos.view(-1, 3) - cog)
         
-            torque = torch.cross(lever_arm.view(-1, 3), sail_wing_force.view(-1, 3), dim=-1).reshape_as(sail_wing_force)
+            torque = torch.cross(lever_arm.view(-1, 3), sail_wing_force_wing.view(-1, 3), dim=-1).reshape_as(sail_wing_force_b)
 
             self._robot.set_external_force_and_torque(
-                sail_wing_force, self._no_torque, body_ids=self._sail_wing_id
-            )
+                sail_wing_force_wing, self._no_torque, body_ids=self._sail_wing_id
+            )"""
+            #print(sail_wing_force)
+            
 
         
         # Set psoition of the sail joint
         self._robot.set_joint_position_target(target=self.joint_pos_target.reshape(self.num_envs,-1), 
              joint_ids=self._wing_joint_dof_id
-            ) 
+            )
 
         
     def _get_observations(self) -> dict:
@@ -449,7 +646,9 @@ class KingfisherSailEnv(DirectRLEnv):
         self.desired_pos_b[:, :2] = self.desired_pos_b_3d[:, :2]
         self.distance = torch.linalg.norm(self.desired_pos_b, dim=1)
         self.bearing = torch.atan2(self.desired_pos_b[:, 1], self.desired_pos_b[:, 0])
-
+        
+        #print((self.episode_energy/((self.episode_length_buf+1)*self.cfg.max_energy)).reshape(self.num_envs, -1))
+        
         obs = torch.cat(
             [
                 self._actions,  # 2
@@ -457,10 +656,13 @@ class KingfisherSailEnv(DirectRLEnv):
                 self._robot.data.root_ang_vel_b[:, 2].unsqueeze(1),  # 1
                 torch.cos(self.bearing).unsqueeze(1),  # 1
                 torch.sin(self.bearing).unsqueeze(1),  # 1
-                self.distance.unsqueeze(1),  # 1
+                (self.distance/self.initial_distance).unsqueeze(1),  # 1
                 self.joint_pos_target.reshape(self.num_envs, -1), # 1
                 self._aerodynamics.apparent_wind_angle.reshape(self.num_envs, -1), # 1
-                torch.norm(self._aerodynamics.apparent_wind_speed, dim=-1).reshape(self.num_envs, -1), # 1
+                torch.norm(self._aerodynamics.apparent_wind_speed_b, dim=-1).reshape(self.num_envs, -1), # 1
+                (self.episode_energy/((self.episode_length_buf+1)*self.cfg.max_energy)).reshape(self.num_envs, -1), # 1
+                self.time_context.reshape(self.num_envs, -1), # 1
+                self.energy_context.reshape(self.num_envs, -1), # 1
             ],
             dim=1,
         )
@@ -469,46 +671,77 @@ class KingfisherSailEnv(DirectRLEnv):
         return observations
 
     def _get_rewards(self) -> torch.Tensor:
-
+        
+        current_robot_pos = self._robot.data.root_link_pos_w.clone()
+        grad_direction = self._desired_pos_w - self.previous_robot_pos
         # Distance progress
-        self.distance_progress = self.previous_distance - self.distance
+        self.distance_progress = torch.sum((current_robot_pos - self.previous_robot_pos)*(grad_direction), dim=-1)/torch.norm(grad_direction, dim=-1)
+        #self.previous_distance - self.distance
+        #torch.sum((current_robot_pos - self.previous_robot_pos)*(grad_direction), dim=-1)/torch.norm(grad_direction, dim=-1) #
         distance_progress_norm = self.distance_progress / torch.abs(self.initial_distance)
-        distance_progress_reward = distance_progress_norm * self.cfg.distance_progress_reward_scale
+        #print(f"new: {self.distance_progress} old: {distance_progress_norm}")
+        distance_progress_reward =  distance_progress_norm * self.cfg.distance_progress_reward_scale
+        # 0.005*(1 - 2.5*torch.tanh(distance_progress_norm))
+        print(f"episod: {distance_progress_reward}: {torch.sum((current_robot_pos - self.previous_robot_pos)*(grad_direction), dim=-1)}")
+        # self.cfg.distance_progress_reward_scale*self.distance_progress #
         self.previous_distance = self.distance.clone()
-
+        self.previous_robot_pos = current_robot_pos.clone()
         # Energy
         self.energy = torch.sum(torch.square(self._actions[:, :2]), dim=1)
+        self.episode_energy += self.energy
         #-torch.sum(torch.square(self._actions[:, -1:]), dim=1)
+        
 
         # Reached goal
         goal_reward = torch.zeros(self.num_envs, device=self.device)
         goal_reward[self.distance < self.cfg.goal_reached_threshold] = self.cfg.goal_reached_scale
 
-        # Reduce energy consumption
-        energy_norm = self.energy * self.step_dt / self.cfg.max_energy
-        
-        energy_reward = torch.log(self.episode_number)*self.cfg.energy_penalty_scale * energy_norm
 
         # Penalize going backwards
         backwards_penalty = torch.zeros(self.num_envs, device=self.device)
         root_lin_vel_b_x = self._robot.data.root_lin_vel_b[:, 0]
         backwards_penalty[root_lin_vel_b_x < 0.0] = self.cfg.backwards_penalty_scale
+        self.episode_avg_speed += torch.norm(self._robot.data.root_lin_vel_b, dim=-1)
+        #print(f"lin: {root_lin_vel_b_x}")
+
+        # Reduce energy consumption
+        # check max speed
+        
+        energy_norm = self.energy * self.step_dt / self.cfg.max_energy
+        #energy_reward = torch.zeros_like(energy_norm)
+        energy_reward = self.cfg.energy_penalty_scale * self.energy_context *energy_norm
+        mask = root_lin_vel_b_x > self.cfg.max_robot_speed
+        #energy_reward[mask] = 100*self.cfg.energy_penalty_scale * energy_norm[mask] #+ torch.abs(root_lin_vel_b_x-self.cfg.max_robot_speed)[mask])
 
         # Penalize bearing errors
-        bearing_penalty = torch.exp(self.cfg.beargin_penalty_coef * torch.abs(self.bearing)) - 1
-        bearing_penalty = 0*self.cfg.bearing_penalty_scale * bearing_penalty
+        bearing_penalty = torch.zeros_like(self.bearing) #torch.exp(self.cfg.beargin_penalty_coef * torch.abs(self.bearing)) - 1
+        head_wrt_wind = torch.abs(self._robot.data.heading_w-self._aerodynamics.Beta_w) # heading angle wrt to the wind
+        min_heading_wrt_wind =  torch.pi/6
+        max_heading_wrt_goal = torch.pi/4
+        mask = [(head_wrt_wind < min_heading_wrt_wind) & (torch.abs(self.bearing)>max_heading_wrt_goal)] # penalise close angle to wind
+        bearing_penalty[mask] = -self.cfg.bearing_penalty_scale
         #bearing_penalty = - 0.05*self.distance / torch.abs(self.initial_distance) #0*self.cfg.bearing_penalty_scale * bearing_penalty
+
+        lift_drag_ratio = torch.max(torch.zeros_like(self._aerodynamics.lift_coeff), self._aerodynamics.lift_coeff/self._aerodynamics.drag_coeff)
+        ratio_reward = self.cfg.lift_drag_ratio_scale*self.step_dt*lift_drag_ratio/self._aerodynamics.max_cl_cd_ratio
+        #self.episode_avg_lift_drag_ratio += 
+        #print(f"max_ratio: {self._aerodynamics.max_cl_cd_ratio}")
+        #print(f"lift: {self._aerodynamics.lift_coeff} \tdrag: {self._aerodynamics.drag_coeff} \tratio: {ratio_reward}")
+        
         # Don't penalize if too close to the goal as the bearing becomes unstable
         # bearing_penalty[self.distance < 0.2] = 0.0
         # Time
-        time_reward = torch.ones(self.num_envs, device=self.device) * self.cfg.time_penalty_scale * self.step_dt
+        time_reward = self.cfg.time_penalty_scale * self.step_dt * self.time_context * torch.ones(self.num_envs, device=self.device) 
+        #(self.distance_progress/torch.norm(root_lin_vel_b_x, dim=-1)) * self.cfg.time_penalty_scale * self.step_dt * self.time_context
         # 
+        #print(f"distance_progress: {distance_progress_reward} \ttime: {time_reward} \tenergy: {energy_reward}")
+        #print(f"penal: {bearing_penalty} : {torch.abs(self._robot.data.heading_w-self._aerodynamics.Beta_w)}")
         #(f"prog: {distance_progress_reward} \tdist: {bearing_penalty}")
         rewards = {
             "1_distance_progress": distance_progress_reward,
             "2_goal_reached": goal_reward,
             "3_energy": energy_reward,
-            "5_bearing_penalty": bearing_penalty,
+            "5_bearing_penalty": ratio_reward,
             "6_time": time_reward,
             "4_backwards": backwards_penalty,
         }
@@ -544,7 +777,8 @@ class KingfisherSailEnv(DirectRLEnv):
         # Logging
         final_distance_to_goal = self.distance[env_ids].mean()
         final_bearing_to_goal = self.bearing[env_ids].mean()
-        final_energy = self.energy[env_ids].mean()
+        final_energy =  self.energy[env_ids].mean()
+        consumed_energy = (self.episode_energy[env_ids]/(self.episode_length_buf[env_ids])).mean() # /self.max_available_episode_energy[env_ids]
         extras = dict()
         for key in self._episode_sums.keys():
             episodic_sum_avg = torch.mean(self._episode_sums[key][env_ids])
@@ -560,8 +794,17 @@ class KingfisherSailEnv(DirectRLEnv):
         extras["Metrics/final_distance_to_goal"] = final_distance_to_goal.item()
         extras["Metrics/final_bearing_to_goal"] = final_bearing_to_goal.item()
         extras["Metrics/final_energy"] = final_energy.item()
+        extras["Metrics/consumed_energy"] = consumed_energy.item()
+        extras["Metrics/average_speed"] = (self.episode_avg_speed[env_ids]/(self.episode_length_buf[env_ids])).mean().item()
         self.extras["log"].update(extras)
 
+        extras = dict()
+        extras["Contexts/time_weight_sampled"] = self.time_context[env_ids].mean().item()
+        extras["Contexts/energy_weight_sampled"] = self.energy_context[env_ids].mean().item()
+        extras["Contexts/progress_weight_sampled"] = self.progress_context[env_ids].mean().item()
+        self.extras["log"].update(extras)
+
+        
         self._robot.reset(env_ids)
         super()._reset_idx(env_ids)
         if self.num_envs > 1 and len(env_ids) == self.num_envs:
@@ -594,8 +837,16 @@ class KingfisherSailEnv(DirectRLEnv):
         self.red_marker_translations = np.random.uniform([-self.env_pos[0]-d/3, -self.env_pos[1]-d/3, 1], 
                     [self.env_pos[0]+d/2, self.env_pos[1]+d/2, 1.5], (n_markers//5, 3))
 
-        self._aerodynamics.reset_wind_condition(False)
+        if self.is_Training:
+            self.energy_context[env_ids] = torch.zeros_like(self.time_context[env_ids]).uniform_(0, 1)
+            self.time_context[env_ids] = torch.zeros_like(self.time_context[env_ids]).uniform_(0, 1)
+            self.progress_context[env_ids] = torch.abs(torch.normal(mean=torch.ones_like(self.progress_context[env_ids]), 
+                            std=0.5*torch.ones_like(self.progress_context[env_ids])))
+
+        self._aerodynamics.reset_wind_condition(env_ids=env_ids, randomize=True)
         self.episode_number[env_ids]  = self.episode_number[env_ids] + 1 
+        self.episode_energy[env_ids] = 0
+        self.episode_avg_speed[env_ids] = 0
         # Reset robot state
         joint_pos = self._robot.data.default_joint_pos[env_ids]
         joint_vel = self._robot.data.default_joint_vel[env_ids]
@@ -604,6 +855,8 @@ class KingfisherSailEnv(DirectRLEnv):
         self._robot.write_root_link_pose_to_sim(default_root_state[:, :7], env_ids)
         self._robot.write_root_link_velocity_to_sim(default_root_state[:, 7:], env_ids)
         self._robot.write_joint_state_to_sim(joint_pos, joint_vel, None, env_ids)
+
+        self.previous_robot_pos[env_ids] = self._robot.data.root_link_pos_w[env_ids]
 
     def _set_debug_vis_impl(self, debug_vis: bool):
         # create markers if necessary for the_robot_mass first tome
@@ -627,60 +880,177 @@ class KingfisherSailEnv(DirectRLEnv):
         
         if self.num_envs==1:
             # apparent wind visualization
-            app_wind_world = transform_points(torch.cat((self._aerodynamics.apparent_wind_speed, 
-            torch.zeros((self.num_envs, 1), device=self.device)), dim=-1), quat=self._robot.data.root_link_state_w[:, 3:7], 
+            app_wind_world = transform_points(torch.cat((self._aerodynamics.apparent_wind_speed_b, 
+            torch.zeros((self.num_envs, 1), device=self.device)), dim=-1), 
+            quat=self._robot.data.body_state_w[:, self._base_link, 3:7].reshape(self.num_envs, -1), 
             pos=None)[:, :2]
-
+            #print(f"app: {self._aerodynamics.apparent_wind_speed_b}")
             app_wind_speed_world = torch.norm(app_wind_world, dim=-1) # magnitude of app_wind
             app_wind_angle_world = torch.atan2(app_wind_world[:, 1], app_wind_world[:, 0])
 
 
-            true_wind_world = transform_points(torch.cat((self._aerodynamics.true_wind_speed2D, 
-            torch.zeros((self.num_envs, 1), device=self.device)), dim=-1), quat=self._robot.data.root_link_state_w[:, 3:7], 
+            true_wind_world = transform_points(torch.cat((self._aerodynamics.true_wind_speed2D_b, 
+            torch.zeros((self.num_envs, 1), device=self.device)), dim=-1), 
+            quat=self._robot.data.body_state_w[:, self._base_link, 3:7].reshape(self.num_envs, -1), 
             pos=None)[:, :2]
             true_wind_speed_world = torch.norm(true_wind_world, dim=-1) # magnitude of app_wind
             true_wind_angle_world = torch.atan2(true_wind_world[:, 1], true_wind_world[:, 0])
 
+            induced_wind_world = transform_points(-self._robot.data.root_lin_vel_b, 
+                quat=self._robot.data.body_state_w[:, self._base_link, 3:7].reshape(self.num_envs, -1), 
+            pos=None)[:, :2]
+            induced_wind_angle_world = torch.atan2(induced_wind_world[:, 1], induced_wind_world[:, 0])
+            induced_wind_speed_world = torch.norm(induced_wind_world, dim=-1) 
+
+            # sail unit vectors
+            sail_unit_vector_world = transform_points(torch.cat((self._aerodynamics.sail_unit_vector, 
+            torch.zeros((self.num_envs, 1), device=self.device)), dim=-1), 
+            quat=self._robot.data.body_state_w[:, self._base_link, 3:7].reshape(self.num_envs, -1), 
+            pos=None)[:, :2]
+
+            # sail ortho unit vector
+            sail_ortho_unit_vector_world = transform_points(torch.cat((self._aerodynamics.sail_ortho_unit_vector, 
+            torch.zeros((self.num_envs, 1), device=self.device)), dim=-1), 
+            quat=self._robot.data.body_state_w[:, self._base_link, 3:7].reshape(self.num_envs, -1), 
+            pos=None)[:, :2]
+
+            vec2d = torch.cat((sail_unit_vector_world, sail_ortho_unit_vector_world), dim=0)
+            #print(app_wind_world.shape, true_wind_world.shape, vec2d.shape)
+
+            self.vector_field1_visualization(vis_enabled=True, 
+                                             vectors_2d=sail_unit_vector_world,
+                                             body_ids=[3],
+                                             offset=[0.0, 0.0, 0.35], marker_obj=self.magenta_marker, max_arrow_length=10)
+            
+            self.vector_field1_visualization(vis_enabled=True, 
+                                             vectors_2d=sail_ortho_unit_vector_world,
+                                             body_ids=[3],
+                                             offset=[0.0, 0.0, 0.35], marker_obj=self.mimosa_marker)
+            
+            """print(f"Vector: app_transf: {app_wind_world} \ttrue: {true_wind_world} \tinduced:{induced_wind_world}")
+            print(f"Norm: app_transf: {app_wind_speed_world} \ttrue: {true_wind_speed_world} \tinduced:{induced_wind_speed_world}")
+            print(f"Angle: app_transf: {(180/torch.pi)*app_wind_angle_world} \ttrue: {(180/torch.pi)*true_wind_angle_world} \
+                  \tinduced:{(180/torch.pi)*induced_wind_angle_world}\n")"""
             #wind_drag_world = transform_points(self._aerodynamics.wind_drag[:, :3], quat=self._robot.data.root_link_state_w[:, 3:7], pos=None)
             self.vector_field_visualization(
                                 vis_enabled=True,
-                                directions=app_wind_speed_world,
-                                magnitudes=None,
+                                directions=app_wind_angle_world,
+                                magnitudes=app_wind_speed_world,
                                 marker_obj=self.blue_marker,
                                 marker_translations=self.marker_translations,
                                 wrap_distance=2.5,
                                 update_scale=0.1,
-                                body_ids=[3]
+                                body_ids=[3],
+                                offset=[0.0, 0.0, 0.2]
+                            )
+            
+            self.vector_field_visualization(
+                                vis_enabled=True,
+                                directions=true_wind_world,
+                                magnitudes=None,
+                                marker_obj=self.red_big_marker,
+                                marker_translations=self.marker_translations,
+                                wrap_distance=2.5,
+                                update_scale=0.1,
+                                body_ids=[3],
+                                offset=[0., 0.0, 0.2]
                             )
             
             # true wind visualization
-            self.vector_field_visualization(
+            """self.vector_field_visualization(
                                 vis_enabled=True,
-                                directions=true_wind_speed_world,
+                                directions=true_wind_world,
                                 magnitudes=None,
                                 marker_obj=self.red_marker,
                                 marker_translations=self.red_marker_translations,
                                 wrap_distance=2.0,
                                 update_scale=0.05,
+                            )"""
+            
+            self.vector_field_visualization(
+                                vis_enabled=True,
+                                directions=induced_wind_angle_world,
+                                magnitudes=induced_wind_speed_world,
+                                marker_obj=self.maroon_marker,
+                                marker_translations=self.marker_translations,
+                                wrap_distance=2.5,
+                                update_scale=0.1,
+                                body_ids=[3],
+                                offset=[0.0, 0.0, 0.2]
                             )
             #print(f"\napp_speed: {app_wind_world} app_angle: {app_wind_angle_world}")
             #print(f"true_speed: {self._aerodynamics.Uw*torch.cos(self._aerodynamics.Beta_w), self._aerodynamics.Uw*torch.sin(self._aerodynamics.Beta_w)} :{true_wind_world} true_angle: {true_wind_angle_world}\n")
 
             
-            thrust_left = self._thruster_forces[..., :3]
-            thrust_right = self._thruster_forces[..., 3:]
+            thrust_left = self._thruster_forces[..., :3].clone().detach().reshape(self.num_envs, -1)
+            thrust_right = self._thruster_forces[..., 3:].clone().detach().reshape(self.num_envs, -1)
+            aerodynamic_force_b = self._aerodynamic_force_b[:, :3].clone().detach().reshape(self.num_envs, -1)
+            aerodynamic_force_wing = self._aerodynamic_force_wing[:, :3].clone().detach().reshape(self.num_envs, -1)
+            hydrodynamic_force = self._hydrodynamic_force.clone().detach().reshape(self.num_envs, -1)[:, :3]
+            hydrodynamic_force_lateral = torch.zeros_like(hydrodynamic_force)
+            hydrodynamic_force_forward = torch.zeros_like(hydrodynamic_force)
+
+            hydrodynamic_force_lateral[:, 1] = hydrodynamic_force[:, 1]
+            hydrodynamic_force_forward[:, 0] = hydrodynamic_force[:, 0]
             """thrust_left[:, :1] = self._actions[:, :1]
             thrust_right[:, :1] = self._actions[:, 1:2]"""
-            #print(f"{thrust_left.shape} -> {thrust_right.shape} -> {self._aerodynamic_force.squeeze(0)[:, :2].shape}")
+            #print(f"{thrust_left.shape} -> {thrust_right.shape} -> {self._aerodynamic_force_b.squeeze(0)[:, :2].shape}")
             #array_forces_2D = torch.cat((thrust_left, thrust_right, self._aerodynamics.wind_lift[:, :2], self._aerodynamics.wind_drag[:, :2]), dim=0)
             #self.force_visualization(True, thrust_left.squeeze(0)[:, :2], body_ids=[1], marker_ob=self.green_marker)
             #self.force_visualization(True, thrust_right.squeeze(0)[:, :2], body_ids=[2], marker_ob=self.green_marker)
-            wind_lift_world = transform_points(self._aerodynamics.wind_lift[:, :3], quat=self._robot.data.root_link_state_w[:, 3:7], pos=None)
-            wind_drag_world = transform_points(self._aerodynamics.wind_drag[:, :3], quat=self._robot.data.root_link_state_w[:, 3:7], pos=None)
+            wind_lift_world = transform_points(self._aerodynamics.wind_lift_b[:, :3], 
+                quat=self._robot.data.body_state_w[:, self._base_link, 3:7].reshape(self.num_envs, -1), pos=None)
+            
+            wind_drag_world = transform_points(self._aerodynamics.wind_drag_b[:, :3], 
+                quat=self._robot.data.body_state_w[:, self._base_link, 3:7].reshape(self.num_envs, -1), pos=None)
 
-            self.force_visualization(True, wind_drag_world[:, :2], body_ids=[3], marker_ob=self.green_marker, offset=0.15)
-            self.force_visualization(True, wind_lift_world[:, :2], body_ids=[3], marker_ob=self.yellow_marker, offset=0.15)
+            aerodynamic_force_world = transform_points(aerodynamic_force_b, 
+                quat=self._robot.data.body_state_w[:, self._base_link, 3:7].reshape(self.num_envs, -1), pos=None)
+            
+            """wind_lift_world = transform_points(self._aerodynamics.wind_lift_wing[:, :3], 
+                quat=self._robot.data.body_state_w[:, self._sail_wing_id, 3:7].reshape(self.num_envs, -1), pos=None)
+            
+            wind_drag_world = transform_points(self._aerodynamics.wind_drag_wing[:, :3], 
+                quat=self._robot.data.body_state_w[:, self._sail_wing_id, 3:7].reshape(self.num_envs, -1), pos=None)
+            
+            aerodynamic_force_world = transform_points(aerodynamic_force_wing, 
+                quat=self._robot.data.body_state_w[:, self._sail_wing_id, 3:7].reshape(self.num_envs, -1), pos=None)"""
+            
+            #print(self._robot.data.body_state_w[:, self._sail_wing_id, 3:7].shape)
+            #print(f"aero_body: {aerodynamic_force_b.shape} \naero_world: {aerodynamic_force_world.shape}\n aero_wing: {self._aerodynamic_force_wing.shape}\n")
+            hydrodynamic_force_world = transform_points(hydrodynamic_force, quat=self._robot.data.root_link_state_w[:, 3:7], pos=None)
+            hydrodynamic_force_forward_world = transform_points(hydrodynamic_force_forward, 
+                quat=self._robot.data.root_link_state_w[:, 3:7], pos=None)
+            
+            hydrodynamic_force_lateral_world = transform_points(hydrodynamic_force_lateral, 
+                quat=self._robot.data.root_link_state_w[:, 3:7], pos=None)
+            
+            thrust_left_force_world = transform_points(thrust_left, 
+                quat=self._robot.data.body_state_w[:, self._left_thruster_id, 3:7].reshape(self.num_envs, -1), pos=None)
+            
+            thrust_right_force_world = transform_points(thrust_right, 
+                quat=self._robot.data.body_state_w[:, self._right_thruster_id, 3:7].reshape(self.num_envs, -1), pos=None)
 
+            #hydrodynamic_force_world[:, 1] = 0
+            heading_vec = torch.zeros_like(self._robot.data.root_link_lin_vel_b[:, :2])
+            heading_vec[:, 0] = torch.cos(self._robot.data.heading_w)
+            heading_vec[:, 1] = torch.sin(self._robot.data.heading_w)
+            unit_heading_vec = torch.zeros_like(heading_vec)
+
+            unit_heading_vec[:, 0] = heading_vec[:, 0]/torch.norm(heading_vec, dim=-1)
+            unit_heading_vec[:, 1] = heading_vec[:, 1]/torch.norm(heading_vec, dim=-1)
+            
+            self.force_visualization(True, wind_drag_world[:, :2], body_ids=[3], marker_ob=self.green_marker, offset=[0., 0., 0.15])
+            self.force_visualization(True, wind_lift_world[:, :2], body_ids=[3], marker_ob=self.yellow_marker, offset=[0., 0., 0.15])
+            self.force_visualization(True, aerodynamic_force_world[:, :2], body_ids=[3], marker_ob=self.beige_marker, offset=[0., 0., 0.15])
+            #self.force_visualization(True, hydrodynamic_force_world[:, :2], body_ids=[0], marker_ob=self.orange_marker, offset=[0., 0., 0.15])
+
+            array_forces_2D = torch.cat((hydrodynamic_force_lateral_world[:, :2], hydrodynamic_force_forward_world[:, :2], 
+                                         thrust_left_force_world[:, :2], thrust_right_force_world[:, :2]), dim=0)
+            
+            """self.force_visualization(True, thrust_left_force_world[:, :2], body_ids=[1], marker_ob=self.orange_marker, offset=[0., 0., 0.])
+            self.force_visualization(True, thrust_right_force_world[:, :2], body_ids=[2], marker_ob=self.orange_marker, offset=[0., 0., 0.])"""
+            self.force_visualization(True, array_forces_2D, body_ids=[0, 0, 1, 2], marker_ob=self.orange_marker, offset=[0., 0., 0.])
             """# force thruster visualization
             self.vector_field_visualization(
                                 vis_enabled=True,
@@ -696,8 +1066,8 @@ class KingfisherSailEnv(DirectRLEnv):
             # force wind visualization
             self.vector_field_visualization(
                                 vis_enabled=True,
-                                directions=self._aerodynamic_force.squeeze(0),
-                                magnitudes=self._aerodynamic_force,
+                                directions=self._aerodynamic_force_b.squeeze(0),
+                                magnitudes=self._aerodynamic_force_b,
                                 marker_obj=self.red_marker,
                                 marker_translations=self.red_marker_translations,
                                 wrap_distance=2.0,
@@ -705,6 +1075,62 @@ class KingfisherSailEnv(DirectRLEnv):
                                 body_ids=[3]
                             )"""
 
+    def vector_field1_visualization(
+        self,
+        vis_enabled: bool,
+        vectors_2d: torch.Tensor,
+        body_ids: list[int],
+        marker_obj,
+        offset: list[float] | None = None,
+        max_arrow_length: float = 5.0
+    ):
+        """
+        Visualize multiple 2D vectors (forces, winds, etc.) at specified body positions.
+
+        Args:
+            vis_enabled: Whether to enable visualization.
+            vectors_2d: (N, 2) tensor of 2D vectors to display.
+            body_ids: List of body IDs corresponding to each vector.
+            marker_obj: The marker object for visualization (e.g., self.blue_marker).
+            offset: Optional [x, y, z] offset applied to all markers.
+            max_arrow_length: Maximum visual arrow length.
+        """
+        if not vis_enabled or self.num_envs != 1:
+            return
+
+        n = len(body_ids)
+        assert vectors_2d.shape[0] == n, f"vectors_2d and body_ids must have matching lengths: they have {vectors_2d.shape[0]} and {n}"
+
+        # Compute rotation (yaw) angles for each vector
+        alpha = torch.atan2(vectors_2d[:, 1], vectors_2d[:, 0]).cpu().numpy()
+        
+        # Build quaternion rotations around Z-axis (yaw)
+        marker_orientations = np.zeros((n, 4))
+        marker_orientations[:, 0] = np.cos(alpha / 2)  # w
+        marker_orientations[:, 3] = np.sin(alpha / 2)  # z
+
+        # Get body positions
+        body_pos = self._robot.data.body_link_pos_w[:, body_ids, :].squeeze(0)
+        marker_translations = body_pos.cpu().numpy()
+
+        # Apply optional offset
+        if offset is not None:
+            marker_translations[:, 0] += offset[0]
+            marker_translations[:, 1] += offset[1]
+            marker_translations[:, 2] += offset[2]
+
+        # Compute scaling based on vector magnitudes
+        magnitudes = torch.norm(vectors_2d, dim=-1).cpu().numpy()
+        marker_scales = np.ones_like(marker_translations)  # Default to [1, 1, 1] scaling
+
+        #print(f"alpha: {alpha*(180/torch.pi)} \tmagn: {magnitudes}")
+
+        max_magnitude = self._aerodynamics.cfg.wind_speed + 2  # Or any configurable maximum
+        scale_factors = (magnitudes / max_magnitude) * max_arrow_length
+        marker_scales[:, 0] = scale_factors  # Scale along X only
+
+        # Visualize
+        marker_obj.visualize(translations=marker_translations, orientations=marker_orientations, scales=marker_scales)
 
 
     def vector_field_visualization(
@@ -718,6 +1144,8 @@ class KingfisherSailEnv(DirectRLEnv):
         update_scale: float=0.1,
         z_clip: tuple[float, float] = (0.0, 4.0),
         body_ids: list[int] | None = None,
+        offset:list[float] | None = None,
+        max_arrow_length=5
     ):
         """
         Generic function for visualizing vector fields (wind, forces, etc.)
@@ -732,6 +1160,7 @@ class KingfisherSailEnv(DirectRLEnv):
             update_scale: How much to move markers per timestep.
             z_clip: Min and max bounds for Z values.
             body_ids: Optional list of body IDs (used for static markers like forces).
+            offset: Optional list of offset over the three axes [x, y, z]
         """
         if not vis_enabled or self.num_envs != 1:
             return
@@ -751,7 +1180,7 @@ class KingfisherSailEnv(DirectRLEnv):
             np.zeros_like(alpha),
             np.sin(alpha / 2)
         ], axis=-1)
-
+        
         # Apply the same rotation to all markers
         marker_orientations = np.tile(rotation, (marker_translations.shape[0]//5, 1))
         
@@ -773,13 +1202,26 @@ class KingfisherSailEnv(DirectRLEnv):
         else:
             body_pos = self._robot.data.body_link_pos_w[:, body_ids, :].squeeze(0)
             marker_translations[:] = body_pos.cpu().numpy()
-            marker_translations[:, 2] += 0.15
-            #print(marker_translations.shape)
+            #print(f"{marker_translations.shape}")
+            if offset is not None:
+                marker_translations[:, 0] += offset[0]
+                marker_translations[:, 1] += offset[1]
+                marker_translations[:, 2] += offset[2]
+                
+            marker_scales = np.zeros_like(body_pos.cpu().numpy())
+            scale = np.array([1, 1, 1])
+            max_speeds = self._aerodynamics.cfg.wind_speed + 2 # assuming 2m/s is boat max speed
+            scale[0] = scale[0]*(1/max_speeds)*speeds*max_arrow_length
+            # np.maximum(np.ones_like(speeds), (1/max_speeds)*speeds*max_arrow_length)
+            marker_scales[:, :] = scale
 
+        #print(f"{marker_scales.shape}:{body_ids}")
+       
         # Visualize
-        marker_obj.visualize(translations=marker_translations, orientations=marker_orientations)
+        marker_obj.visualize(translations=marker_translations, orientations=marker_orientations, scales=marker_scales)
 
-    def force_visualization(self, force_vis:bool, array_forces_2D: torch.Tensor, body_ids:list, marker_ob, offset=0.):
+    def force_visualization(self, force_vis:bool, array_forces_2D: torch.Tensor, body_ids:list, marker_ob, 
+                            offset:list[float] | None = None, max_arrow_length=8):
         """
             This function visualize the forces arrow applied on the bodies based on their direction
             
@@ -805,10 +1247,21 @@ class KingfisherSailEnv(DirectRLEnv):
             # Apply the same rotation to all markers
             body_pos = self._robot.data.body_link_pos_w[:, body_ids, :].squeeze(0)
             marker_translations = body_pos.cpu().numpy()
-            marker_translations += offset
+            if offset is not None:
+                marker_translations[:, 0] += offset[0]
+                marker_translations[:, 1] += offset[1]
+                marker_translations[:, 2] += offset[2]
             #print(f"trans: {marker_translations} shape: {marker_translations.shape}")
+            magnitude = torch.norm(array_forces_2D, dim=-1).cpu().numpy()
+            #print(f"magnitude: {magnitude}")
+            marker_scales = np.zeros_like(body_pos.cpu().numpy())
+            scale = np.tile(np.array([1, 1, 1]), (len(body_ids), 1))
+            max_force = 8
+            for i in range(len(body_ids)):
+                scale[i][0] = scale[i][0]*(1/max_force)*magnitude[i]*max_arrow_length
+            marker_scales[:, :] = scale
 
             # Visualize markers in the world frame
-            marker_ob.visualize(translations=marker_translations, orientations=marker_orientations)
+            marker_ob.visualize(translations=marker_translations, orientations=marker_orientations, scales=marker_scales)
 
 

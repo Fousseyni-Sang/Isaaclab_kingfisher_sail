@@ -68,52 +68,18 @@ from omni.isaac.lab_tasks.utils.wrappers.rl_games import RlGamesGpuEnv, RlGamesV
 
 # Create Publisher Node
 import rclpy
-from rclpy.node import Node
-from std_msgs.msg import Float32MultiArray
-
-
-class RlAgentPublisher(Node):
-    def __init__(self):
-        super().__init__("rl_agent_publisher")
-        self.obs_publisher = self.create_publisher(Float32MultiArray, "rl_observations", 10)
-        self.act_publisher = self.create_publisher(Float32MultiArray, "rl_actions", 10)
-        self.rew_publisher = self.create_publisher(Float32MultiArray, "rl_rewards", 10)
-        self.aero_force_publisher = self.create_publisher(Float32MultiArray, "aero_force", 10)
-        self.thruster_force_publisher = self.create_publisher(Float32MultiArray, "thruster_force", 10)
-
-    def publish_obs(self, obs):
-        
-        msg = Float32MultiArray()
-        msg.data = obs.cpu().numpy().flatten().tolist()
-        self.obs_publisher.publish(msg)
-
-    def publish_act(self, act):
-        msg = Float32MultiArray()
-        msg.data = act.cpu().numpy().flatten().tolist()
-        self.act_publisher.publish(msg)
-
-    def publish_rew(self, rew):
-        msg = Float32MultiArray()
-        msg.data = rew.cpu().numpy().flatten().tolist()
-        self.rew_publisher.publish(msg)
-
-    def publish_aero_force(self, aero_force):
-        msg = Float32MultiArray()
-        msg.data = aero_force.cpu().numpy().flatten().tolist()
-        self.aero_force_publisher.publish(msg)
-
-    def publish_thruster_force(self, thruster_force):
-        msg = Float32MultiArray()
-        msg.data = thruster_force.cpu().numpy().flatten().tolist()
-        self.thruster_force_publisher.publish(msg)
+from ros2_Node import RlAgentPublisher, RewardWeightSubscriber
 
 
 def main():
     """Play with RL-Games agent."""
-
+        
     # ---- Initialize ROS2 ----
     rclpy.init()
-    ros_node = RlAgentPublisher()
+    ros_node = RlAgentPublisher(args_cli.num_envs)
+    slider_names = ['time', 'energy', 'goal']  # Must match the names you use in the publisher
+    slider_node = RewardWeightSubscriber(slider_names)
+    #rclpy.spin(slider_node)
 
     # parse env configuration
     env_cfg = parse_env_cfg(
@@ -191,6 +157,7 @@ def main():
     agent.reset()
 
     # reset environment
+    env.unwrapped.is_Training = False
     obs = env.reset()
     if isinstance(obs, dict):
         obs = obs["obs"]
@@ -205,21 +172,45 @@ def main():
     #   attempt to have complete control over environment stepping. However, this removes other
     #   operations such as masking that is used for multi-agent learning by RL-Games.
     while simulation_app.is_running():
+        rclpy.spin_once(slider_node, timeout_sec=0.0)
+        time_context = slider_node.reward_weights["time"]
+        energy_context = slider_node.reward_weights["energy"]
+        env.unwrapped.energy_context[:] = energy_context
+        env.unwrapped.time_context[:] = time_context
         # run everything in inference mode
         with torch.inference_mode():
             # convert obs to agent format
+
             obs = agent.obs_to_torch(obs)
             # agent stepping
             actions = agent.get_action(obs, is_deterministic=agent.is_deterministic)
+            
+
             # env stepping
             obs, rew, dones, _ = env.step(actions)
-
-            # ---- Publish observations and actions to ROS2 ----
-            ros_node.publish_obs(obs)
-            ros_node.publish_act(actions)
-            ros_node.publish_rew(rew)
-            ros_node.publish_aero_force(env.unwrapped._aerodynamic_force.squeeze(0))
-            ros_node.publish_thruster_force(env.unwrapped._thruster_forces.squeeze(0))
+            aero_force = env.unwrapped._aerodynamic_force_b.squeeze(0)
+            thruster_force = env.unwrapped._thruster_forces.squeeze(0)
+            lin_speed = env.unwrapped._robot.data.root_lin_vel_b
+            aoa = (180/torch.pi)*env.unwrapped._aerodynamics.angle_of_attack
+            app_angle = (180/torch.pi)*env.unwrapped._aerodynamics.apparent_wind_angle # in degree
+            sail = (180/torch.pi)*env.unwrapped.sail_angle
+            head_w = (180/torch.pi)*env.unwrapped._robot.data.heading_w
+            head_wrt_wind = torch.abs(head_w - (180/torch.pi)*env.unwrapped._aerodynamics.Beta_w)
+            lift = env.unwrapped._aerodynamics.wind_lift_b
+            drag = env.unwrapped._aerodynamics.wind_drag_b
+            ld_ratio = torch.norm(lift, dim=-1)/torch.norm(drag, dim=-1) #torch.abs(aero_force[:, 0]/(aero_force[:, 1]+1e-6))
+            robot_pos = env.unwrapped._robot.data.root_link_pos_w[:, :2]
+            goal_pos =  env.unwrapped._desired_pos_w[:, :2]
+            energy = env.unwrapped.energy
+            episode_energy = env.unwrapped.episode_energy
+            lift_coeff = env.unwrapped._aerodynamics.lift_coeff
+            drag_coeff = env.unwrapped._aerodynamics.drag_coeff
+            sum_angle = sail + app_angle + aoa
+            desired_pos = env.unwrapped.desired_pos_b
+            
+            ros_node.publish(obs, actions, rew, aero_force, thruster_force, lin_speed, aoa, app_angle, sail, 
+                             head_w, head_wrt_wind, ld_ratio, robot_pos, goal_pos, energy, episode_energy, lift, drag, 
+                             lift_coeff, drag_coeff, sum_angle, desired_pos)
 
             # perform operations for terminated episodes
             if len(dones) > 0:
@@ -235,6 +226,8 @@ def main():
     
     # Cleanup
     ros_node.destroy_node()
+    slider_node.destroy_node()
+
     rclpy.shutdown()
 
     # close the simulator
