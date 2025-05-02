@@ -78,6 +78,7 @@ class Aerodynamics:
         
         self.xfoil.n_crit = 9
         self.max_cl_cd_ratio = 0
+        self.max_cl = 0
         #self._aerodynamics.xfoil = self.xfoil
 
         self.sail_unit_vector = torch.zeros_like(self.apparent_wind_speed_b)
@@ -413,6 +414,7 @@ class Aerodynamics:
         cd_clean = torch.from_numpy(cd[valid_mask])
 
         self.max_cl_cd_ratio = torch.max(cl_clean/cd_clean)
+        self.max_cl = torch.max(cl_clean)
 
         idx_stall = torch.argmax(cl_clean)
         idx_min = torch.argmin(cl_clean)
@@ -510,7 +512,7 @@ class Aerodynamics:
     def reset_wind_condition(self, env_ids, randomize=False):
         """ randomize wind direction between 0 and 2*pi if params randomize=True """
         if randomize:
-            self.Beta_w [env_ids] = torch.zeros_like(self.Beta_w[env_ids]).uniform_(0, 2*torch.pi)
+            self.Beta_w [env_ids] = torch.pi*torch.zeros_like(self.Beta_w[env_ids]).uniform_(-1, 1)
         return
 
     def update_wind(self, wind_direction:float | None = None, wind_speed:float | None = None, env_ids: torch.Tensor | None = None):

@@ -8,20 +8,21 @@ class RewardSlider(Node):
     def __init__(self, sliders_config):
         super().__init__('reward_slider_gui')
         self.slider_publishers = {}
-
+        
         # PyQt setup
+        
         self.app = QApplication([])
         self.window = QWidget()
         self.window.setWindowTitle("Reward Weight Sliders")
         self.layout = QVBoxLayout()
-
+        
         for slider_name, config in sliders_config.items():
             min_val, max_val, initial = config['min'], config['max'], config['init']
 
             # ROS publisher
             topic_name = f"reward_{slider_name}_weight"
             self.slider_publishers[slider_name] = self.create_publisher(Float32, topic_name, 10)
-
+            
             # UI Components
             slider_layout = QHBoxLayout()
             label = QLabel(f"{slider_name}:")
@@ -30,7 +31,7 @@ class RewardSlider(Node):
             slider.setMinimum(int(min_val * 100))
             slider.setMaximum(int(max_val * 100))
             slider.setValue(int(initial * 100))
-
+            
             # Connect signal to callback
             slider.valueChanged.connect(
                 lambda value, name=slider_name, val_label=value_label: self.publish_value(name, value, val_label)
@@ -40,7 +41,7 @@ class RewardSlider(Node):
             slider_layout.addWidget(slider)
             slider_layout.addWidget(value_label)
             self.layout.addLayout(slider_layout)
-
+            
         self.window.setLayout(self.layout)
         self.window.show()
 
@@ -63,6 +64,7 @@ def main():
         'time':   {'min': 0., 'max': 2., 'init': 0.5},
         'energy': {'min': 0., 'max': 2., 'init': 0.5},
         'goal':   {'min': 0., 'max': 5., 'init': 1.0},
+        'wind_direct': {'min': -180., 'max': 180., 'init': -90.0}
         # Add more sliders here
     }
 

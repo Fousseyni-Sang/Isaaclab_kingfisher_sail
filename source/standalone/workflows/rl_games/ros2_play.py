@@ -77,7 +77,7 @@ def main():
     # ---- Initialize ROS2 ----
     rclpy.init()
     ros_node = RlAgentPublisher(args_cli.num_envs)
-    slider_names = ['time', 'energy', 'goal']  # Must match the names you use in the publisher
+    slider_names = ['time', 'energy', 'goal', 'wind_direct']  # Must match the names you use in the publisher
     slider_node = RewardWeightSubscriber(slider_names)
     #rclpy.spin(slider_node)
 
@@ -175,12 +175,15 @@ def main():
         rclpy.spin_once(slider_node, timeout_sec=0.0)
         time_context = slider_node.reward_weights["time"]
         energy_context = slider_node.reward_weights["energy"]
+        wind_direc = slider_node.reward_weights["wind_direct"]*(torch.pi/180)
+        wind_modulo = (wind_direc + torch.pi)%(2*torch.pi) - torch.pi
+        env.unwrapped._aerodynamics.update_wind(wind_direction=wind_modulo)
         env.unwrapped.energy_context[:] = energy_context
         env.unwrapped.time_context[:] = time_context
         # run everything in inference mode
         with torch.inference_mode():
             # convert obs to agent format
-
+            print(f"\nenergy: {env.unwrapped.energy_context} \ntime: {env.unwrapped.time_context} \nwind: {env.unwrapped._aerodynamics.Beta_w}\n")
             obs = agent.obs_to_torch(obs)
             # agent stepping
             actions = agent.get_action(obs, is_deterministic=agent.is_deterministic)

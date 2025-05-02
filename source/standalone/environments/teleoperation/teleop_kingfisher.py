@@ -135,7 +135,7 @@ def main():
         energy_context = slider_node.reward_weights["energy"]
         env.unwrapped.energy_context[:] = energy_context
         env.unwrapped.time_context[:] = time_context
-        print(time_context)
+        #print(time_context)
         # run everything in inference mode
         with torch.inference_mode():
             # get keyboard command
