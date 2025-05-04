@@ -183,7 +183,7 @@ def main():
         # run everything in inference mode
         with torch.inference_mode():
             # convert obs to agent format
-            print(f"\nenergy: {env.unwrapped.energy_context} \ntime: {env.unwrapped.time_context} \nwind: {env.unwrapped._aerodynamics.Beta_w}\n")
+            #print(f"\nenergy: {env.unwrapped.energy_context} \ntime: {env.unwrapped.time_context} \nwind: {env.unwrapped._aerodynamics.Beta_w}\n")
             obs = agent.obs_to_torch(obs)
             # agent stepping
             actions = agent.get_action(obs, is_deterministic=agent.is_deterministic)

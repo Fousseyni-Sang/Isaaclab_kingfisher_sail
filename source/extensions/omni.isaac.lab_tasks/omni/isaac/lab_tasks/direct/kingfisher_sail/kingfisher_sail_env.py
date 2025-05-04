@@ -229,7 +229,7 @@ class KingfisherSailEnvCfg(DirectRLEnvCfg):
 
     # reward scales
     distance_reward_scale = 0.0
-    distance_progress_reward_scale = 8 #5 # 6 too much
+    distance_progress_reward_scale = 20 #5 # 6 too much
     bearing_progress_reward_scale = 0.0
 
     goal_reached_threshold = 0.1
@@ -338,9 +338,12 @@ class KingfisherSailEnv(DirectRLEnv):
         self.episode_number = torch.ones(self.num_envs, device=self.device)
 
         # Discriminator repplay buffer memory
-        self.disc_memory = ReplayBuffer(1000, self.num_envs, self.cfg.observation_space, self.cfg.action_space, device=self.device)
-        self.discriminator1 = DiscriminatorNetwork(lr=0.0001, input_dims=self.cfg.observation_space-2, fc1_dims=256, fc2_dims=256, prediction_dims=1)
-        self.discriminator2 = DiscriminatorNetwork(lr=0.0001, input_dims=self.cfg.observation_space-2, fc1_dims=256, fc2_dims=256, prediction_dims=1)
+        #self.disc_memory = ReplayBuffer(self.num_envs, 1000, 2, device=self.device)
+        self.discriminator1 = DiscriminatorNetwork(lr=0.0001, input_dims=1, fc1_dims=256, fc2_dims=256, prediction_dims=1, 
+                                                   num_envs=self.num_envs)
+        self.discriminator2 = DiscriminatorNetwork(lr=0.0001, input_dims=1, fc1_dims=256, fc2_dims=256, prediction_dims=1, 
+                                                   num_envs=self.num_envs)
+        
         self.energy_context = torch.ones_like(self.episode_number)
         self.time_context = torch.ones_like(self.episode_number)
         self.progress_context = torch.ones_like(self.episode_number)
@@ -585,6 +588,10 @@ class KingfisherSailEnv(DirectRLEnv):
             self.progress_context[env_ids] = cluster_context(torch.abs(torch.normal(mean=torch.ones_like(self.progress_context[env_ids]), 
                             std=0.5*torch.ones_like(self.progress_context[env_ids]))), device=self.device)
             
+            apply_mask = (self.episode_length_buf%500)==0
+            env_ids = torch.nonzero(apply_mask, as_tuple=False).squeeze(-1)
+            self._aerodynamics.reset_wind_condition(env_ids=env_ids, randomize=True)    
+        
         obs = torch.cat(
             [
                 self._actions,  # 2
@@ -603,6 +610,11 @@ class KingfisherSailEnv(DirectRLEnv):
             ],
             dim=1,
         )
+        
+        self.discriminator1.memory.store_transition(self.episode_energy.reshape(self.num_envs, -1))
+        mu, sigma, _ = self.discriminator1.predict(self.episode_energy.reshape(self.num_envs, -1))
+        loss, log_prob = self.discriminator1.learn()
+        #print(f"loss: {loss} \nlog_prob: {log_prob}")
         #print(f"\nangle: {self.sail_angle} \naoa: {self._aerodynamics.angle_of_attack}\n")
         observations = {"policy": obs}
         return observations
@@ -621,12 +633,11 @@ class KingfisherSailEnv(DirectRLEnv):
         distance_progress_reward =  distance_progress_norm * self.cfg.distance_progress_reward_scale
 
         # Downwind and upwind condition check
-        direction_wind_robot = torch.sum(self._aerodynamics.apparent_wind_speed_b*position_progress[:, :2], dim=1)/ \
-        (torch.norm(position_progress, dim=-1)*torch.norm(self._aerodynamics.apparent_wind_speed_b, dim=-1))
+        direction_wind_robot = torch.atan2(self._aerodynamics.true_wind_speed2D_b[:, 1], self._aerodynamics.true_wind_speed2D_b[:, 0]) 
         #print(f"angle: {torch.atan2()}")
-        condition = (torch.cos(torch.pi/4*torch.ones_like(direction_wind_robot)) - torch.abs(direction_wind_robot) < 0)
-        distance_progress_reward[condition] = 0.01*distance_progress_reward[condition]
-
+        condition = (torch.cos(torch.pi/4*torch.ones_like(direction_wind_robot)) - torch.abs(torch.cos(direction_wind_robot)) < 0)
+        #distance_progress_reward[condition] = 0.1*distance_progress_reward[condition]
+        #print(f"direction: {direction_wind_robot*(180/torch.pi)} \tcondition: {condition}")
         # 0.005*(1 - 2.5*torch.tanh(distance_progress_norm))
         #print(f"episod: {distance_progress_reward}: {torch.sum((current_robot_pos - self.previous_robot_pos)*(grad_direction), dim=-1)/torch.norm(grad_direction, dim=-1)}")
         # self.cfg.distance_progress_reward_scale*self.distance_progress #
@@ -676,7 +687,9 @@ class KingfisherSailEnv(DirectRLEnv):
         # Don't penalize if too close to the goal as the bearing becomes unstable
         # bearing_penalty[self.distance < 0.2] = 0.0
         # Time
-        time_reward = self.cfg.time_penalty_scale * self.step_dt * self.time_context * torch.ones(self.num_envs, device=self.device) 
+        time = torch.abs(self.previous_distance - self.distance)/torch.norm(self._robot.data.root_lin_vel_b, dim=-1)
+        time_reward = self.cfg.time_penalty_scale * time * self.time_context * torch.ones(self.num_envs, device=self.device)
+        #self.cfg.time_penalty_scale * self.step_dt * self.time_context * torch.ones(self.num_envs, device=self.device) 
         
         #print(f"time: {time_reward}")
         #print(f"distance_progress: {distance_progress_reward} \ttime: {time_reward} \tenergy: {energy_reward}")
@@ -685,7 +698,7 @@ class KingfisherSailEnv(DirectRLEnv):
         rewards = {
             "1_distance_progress": distance_progress_reward,
             "2_goal_reached": goal_reward,
-            "3_energy": energy_reward,
+            "3_energy": 0*energy_reward,
             "5_bearing_penalty": ratio_reward,
             "6_time": time_reward,
             "4_backwards": backwards_penalty,
