@@ -4,11 +4,45 @@ import torch.optim as optim
 from torch.distributions.normal import Normal
 import os
 import torch
-from .buffer import ReplayBuffer
+import matplotlib.pyplot as plt
+#from .buffer import ReplayBuffer
+
+class ReplayBuffer:
+    def __init__(self, num_envs, max_size, input_shape, device="cpu"):
+        self.mem_size = max_size
+        self.mem_cntr = 0
+        self.device = device
+
+        # for the discriminator, it contains its state and context
+        self.state_memory = torch.zeros((num_envs, self.mem_size, input_shape), dtype=torch.float32, device=self.device)
+    
+    def store_transition(self, state):
+        index = self.mem_cntr % self.mem_size
+
+        self.state_memory[:, index] = state
+        
+        self.mem_cntr += 1
+
+    def sample_buffer(self, num_envs, batch_size):
+        max_mem = min(self.mem_cntr, self.mem_size)
+        batch = torch.randint(0, max_mem*num_envs, (batch_size, ), device=self.device)
+        # Create environment indices: [0, 1, ..., 99] repeated for each sample
+        #env_ids = torch.arange(num_envs, device=self.device).unsqueeze(1).expand(-1, batch_size)  
+
+        states = self.state_memory.reshape(num_envs*self.mem_size, -1)[batch]  
+
+        #flat = states.reshape(-1, states.shape[-1])  # shape: (1024*1000, D)
+
+        #idx = torch.randperm(flat.size(0))[:256]
+        #state_context = flat[idx]
+
+        #states = self.state_memory[batch]
+        #print(f"batch: {batch.shape} state_buffer: {states.shape}")
+        return states
 
 class DiscriminatorNetwork(nn.Module):
     def __init__(self, lr, input_dims, fc1_dims=256,
-            fc2_dims=256, prediction_dims=1, memory_dim=2, num_envs=1024, mem_size=1000, name='discriminator', chkpt_dir='/tmp/sac'):
+            fc2_dims=256, prediction_dims=1, memory_dim=2, num_envs=1024, mem_size=1000, name='discriminator', chkpt_dir='/tmp/sac', device='cpu'):
         super(DiscriminatorNetwork, self).__init__()
         self.input_dims = input_dims
         self.fc1_dims = fc1_dims
@@ -26,10 +60,10 @@ class DiscriminatorNetwork(nn.Module):
         self.sigma = nn.Linear(self.fc2_dims, self.prediction_dims)
 
         self.optimizer = optim.Adam(self.parameters(), lr=self.lr)
-        self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+        self.device = device #torch.device('cpu' if torch.cuda.is_available() else 'cpu')
         self.to(self.device)
 
-        self.memory = ReplayBuffer(num_envs, mem_size, memory_dim, 'cuda:0')
+        self.memory = ReplayBuffer(num_envs, mem_size, memory_dim, device)
         self.batch_size = 256
         self.num_envs = num_envs
 
@@ -38,13 +72,34 @@ class DiscriminatorNetwork(nn.Module):
         prob = F.tanh(self.fc2(prob))*5
 
         mu = torch.sigmoid(self.mu(prob))
-        sigma = torch.sigmoid(self.sigma(prob))
+        sigma = F.softplus(self.sigma(prob)) + 1e-4 #torch.sigmoid(self.sigma(prob))
+        #print(f"forward sigma: :{sigma}")
 
-        sigma = torch.clamp(sigma, min=.1, max=1)
+        if torch.isnan(sigma).any():
+            print("⚠️ NaN detected in raw sigma")
+        if (sigma <= 0).any():
+            print(f"⚠️ Invalid sigma value detected: min={sigma.min().item()}")
+            sigma = torch.clamp(sigma, min=.1, max=1)
+
+        assert (sigma > 0).all(), f"Invalid sigma: {sigma}"
+
 
         return mu, sigma
-
+    
     def predict(self, state, reparameterize=True, requires_grad=True):
+        mu, sigma = self.forward(state)
+        sigma = F.softplus(sigma) + 1e-2
+        dist = Normal(mu, sigma)
+
+        with torch.set_grad_enabled(requires_grad):
+            predictions = dist.rsample() if reparameterize else dist.sample()
+            prediction = torch.clamp(predictions, 0.0001, 0.9999)
+            log_probs = dist.log_prob(predictions)
+            log_probs -= torch.log(1 - prediction.pow(2) + self.reparam_noise)
+
+        return prediction, log_probs, dist
+
+    """def predict(self, state, reparameterize=True, requires_grad=True):
         if requires_grad:
             mu, sigma = self.forward(state)
             probabilities = Normal(mu, sigma)
@@ -53,7 +108,7 @@ class DiscriminatorNetwork(nn.Module):
             else:
                 predictions = probabilities.sample()
 
-            prediction = predictions.to(self.device)
+            prediction = predictions #.to(self.device)
             prediction = torch.clamp(prediction, .0001, .9999)
             log_probs = probabilities.log_prob(predictions)
             log_probs -= torch.log(1-prediction.pow(2)+self.reparam_noise)
@@ -69,13 +124,13 @@ class DiscriminatorNetwork(nn.Module):
                 else:
                     predictions = probabilities.sample()
 
-                prediction = predictions.to(self.device)
+                prediction = predictions #.to(self.device)
                 prediction = torch.clamp(prediction, .0001, .9999)
                 log_probs = probabilities.log_prob(predictions)
                 log_probs -= torch.log(1-prediction.pow(2)+self.reparam_noise)
                 #log_probs = log_probs.sum(0, keepdim=True)
 
-                return prediction, log_probs, probabilities
+                return prediction, log_probs, probabilities"""
 
     def learn(self):
 
@@ -86,12 +141,13 @@ class DiscriminatorNetwork(nn.Module):
 
         state = state_context[:, 0].reshape(-1, self.input_dims)
         context = state_context[:, -1].reshape(-1, self.input_dims)
-
+        print(f"state: {state[:30]} \ncontext: {context[:30]}\n")
         predictions, log_probs, dist1 = self.predict(state, requires_grad=True)
+        #print(f"pred: {predictions.requires_grad}")
         #print(f"st_cont: {state_context.shape} state: {state.shape} context: {context.shape} predic: {predictions.shape}")
         self.optimizer.zero_grad()
-        loss = (F.mse_loss(predictions, context) * 10 + (1 / torch.abs(torch.min(dist1.loc) - torch.max(dist1.loc)))) * 10
-        loss.requires_grad = True
+        loss = (F.mse_loss(predictions, context)) #* 10 + (1 / torch.abs(torch.min(dist1.loc) - torch.max(dist1.loc)))) * 10
+        #loss.requires_grad = True
         #print(f"required: {loss.requires_grad}")
         loss.backward()
         self.optimizer.step()
@@ -99,152 +155,55 @@ class DiscriminatorNetwork(nn.Module):
         return loss, torch.mean(log_probs).item()
             
 
-class Agent():
-    def __init__(self, num_envs=1024, disc_lr=.0001, input_dims=[2], env=None, gamma=0.99, n_actions=2, tau=0.005,
-             disc_layer1_size=256, disc_layer2_size=256, batch_size=256, reward_scale=2, 
-                reparam_noise=1e-6, disc_input_dims=[1], predict_dims=1):
-        self.gamma = gamma
-        self.tau = tau
+
+if __name__=="__main__":
+    num_envs = 1024
+    discriminator1 = DiscriminatorNetwork(lr=0.0001, input_dims=1, fc1_dims=256, fc2_dims=256, prediction_dims=1, 
+                                                   num_envs=num_envs)
+    discriminator2 = DiscriminatorNetwork(lr=0.0001, input_dims=1, fc1_dims=256, fc2_dims=256, prediction_dims=1, 
+                                                num_envs=num_envs)
+    
+    max_energy = 2
+    max_speed = 2
+    energy_context = torch.ones(num_envs)
+    time_context = torch.ones(num_envs)
+
+    energy = max_energy*torch.rand(num_envs)
+    robot_speed = max_speed*torch.rand((num_envs, 2))
+
+    energy_context = torch.zeros_like(energy_context).uniform_(0, 1)
+    time_context = torch.zeros_like(time_context).uniform_(0, 1)
+    
+    discriminator1.memory.store_transition(torch.cat((energy.reshape(num_envs, -1), 
+                                            energy_context.reshape(num_envs, -1)), dim=-1))
         
-        self.disc_memory = ReplayBuffer(num_envs, 1000000, input_dims)
-        self.batch_size = batch_size
-        self.n_actions = n_actions
-        self.max_action = 1
-        self.env = env
-        self.auto_entropy = True
-
-        self.limit_factor_dist = torch.distributions.Uniform(low=torch.tensor(0.0).to('cuda:0' if torch.cuda.is_available() else 'cpu'),  high=torch.tensor(1.0).to('cuda:0' if torch.cuda.is_available() else 'cpu'))
-
-        self.discriminator1 = DiscriminatorNetwork(lr=disc_lr, input_dims=disc_input_dims, fc1_dims=disc_layer1_size, fc2_dims=disc_layer2_size, prediction_dims=predict_dims)
-        self.discriminator2 = DiscriminatorNetwork(lr=disc_lr, input_dims=disc_input_dims, fc1_dims=disc_layer1_size, fc2_dims=disc_layer2_size, prediction_dims=predict_dims)
-
-        self.scale = reward_scale
-        self.update_network_parameters(tau=1)
-
-    def remember(self, state, action, reward, new_state, done):
-        self.disc_memory.store_transition(state, action, reward, new_state, done)
-        
-
-    def learn(self, update_params=True, update_disc=False):
-        if(self.auto_entropy):
-            actor_loss = None
-            if self.memory.mem_cntr < self.batch_size:
-                return None, None
-
-            state, action, reward, new_state, done = \
-                    self.disc_critic_1.sample_buffer(self.batch_size)
-
-            reward = torch.tensor(reward, dtype=torch.float).to(self.actor.device)
-            done = torch.tensor(done).to(self.actor.device)
-            state_ = torch.tensor(new_state, dtype=torch.float).to(self.actor.device)
-            state = torch.tensor(state, dtype=torch.float).to(self.actor.device)
-            action = torch.tensor(action, dtype=torch.float).to(self.actor.device)
-
-
-            limit_factor = torch.clone(state)
-            limit_factor = limit_factor[:, -2:]
-            limit_factor1 = limit_factor[:,0]
-            limit_factor2 = limit_factor[:,1]
-            limit_factor1 = limit_factor1[:,None]
-            limit_factor2 = limit_factor2[:,None]
-
-            disc_state = torch.clone(state)
+    discriminator1.memory.store_transition(torch.cat((torch.norm(robot_speed, 
+                        dim=-1).reshape(num_envs, -1), time_context.reshape(num_envs, -1)), dim=-1))
     
 
-            #speed and hull angle:
-            disc1_state =  disc_state[:, 0:1]
-            disc2_state =  disc_state[:, 2:3]
-            
+    prediction1, log_prob1, distribution1 = discriminator1.predict(energy.reshape(num_envs, -1))
+    prediction2, log_prob2, distribution2 = discriminator2.predict(torch.norm(robot_speed, dim=-1).reshape(num_envs, -1))
 
-            disc1_predictions, disc1_log_probs, dist1 = self.discriminator1.predict(disc1_state, requires_grad=False)
-            disc1_log_probs.to('cuda:0' if torch.cuda.is_available() else 'cpu')
-            value_ = torch.clone(value_).detach().to('cuda:0' if torch.cuda.is_available() else 'cpu')
-            
-            # log probability of the limit factor
-            log_prob_of_lf1 = self.limit_factor_dist.log_prob(disc1_predictions.detach())
+    predicted_energy_context, log_probs1, distrib1 = discriminator1.predict(energy.reshape(num_envs, -1))
+    predic_error_energy = torch.abs(predicted_energy_context.reshape(-1) - energy_context.reshape(-1))
+    predicted_time_context, log_probs2, distrib2= discriminator2.predict(energy.reshape(num_envs, -1))
+    predic_error_time = torch.abs(predicted_time_context.reshape(-1) - time_context.reshape(-1))
 
-            log_prob_of_lf1 = torch.clone(log_prob_of_lf1).to('cuda:0' if torch.cuda.is_available() else 'cpu')
+    reward_acord = 0.5*(-torch.log(predic_error_energy) - torch.log(predic_error_time))
+    #print(f"prediction error: {predic_error_energy.shape} \tprediction error time: {predic_error_time.shape}")
+    print(f"prediction energy: {predicted_energy_context[:10]} \nreal: {energy_context[:10]}")
+    print(f"prediction time: {predicted_time_context[:10]} \nreal: {time_context[:10]}")
+    print(f"reward: {reward_acord[:10]}")
 
-            
+    plt.figure()
+    plt.plot(predicted_energy_context.detach().numpy(), label="pr_ener")
+    plt.plot(energy_context.detach().numpy(), label="rl_ener")
+    plt.plot(predicted_time_context.detach().numpy(), label="pr_time")
+    plt.plot(time_context.detach().numpy(), label="rl_time")
+    plt.legend()
+    plt.savefig("/tmp/acord_prediction.png")
 
-            if torch.any(torch.isinf(disc1_log_probs)) or torch.any(torch.isnan(disc1_log_probs)) :
-                print(disc1_log_probs, "disc_log_probs")
-            if torch.any(torch.isinf(log_prob_of_lf1)) or torch.any(torch.isnan(log_prob_of_lf1)):
-                log_prob_of_lf1 = torch.nan_to_num(log_prob_of_lf1, posinf=0, neginf=0)
-
-            disc2_predictions, disc2_log_probs, dist2 = self.discriminator2.predict(disc2_state, requires_grad=False)
-            disc2_log_probs.to('cuda:0' if torch.cuda.is_available() else 'cpu')
-
-            log_prob_of_lf2 = self.limit_factor_dist.log_prob(disc2_predictions.detach())
-
-            log_prob_of_lf2 = torch.clone(log_prob_of_lf2).to('cuda:0' if torch.cuda.is_available() else 'cpu')
-
-            
-
-            if torch.any(torch.isinf(disc2_log_probs)) or torch.any(torch.isnan(disc2_log_probs)) :
-                print(disc2_log_probs, "disc_log_probs")
-            if torch.any(torch.isinf(log_prob_of_lf2)) or torch.any(torch.isnan(log_prob_of_lf2)):
-                log_prob_of_lf2 = torch.nan_to_num(log_prob_of_lf2, posinf=0, neginf=0)
-
-            if torch.any(torch.isinf(value_)) or torch.any(torch.isnan(value_)):
-                print(value_, "log_prob_of_lf")    
-
-            rew=(-torch.log(torch.clamp(torch.abs(disc1_predictions-limit_factor1)**2, min=.000001, max=.99999)) + \
-                -torch.log(torch.clamp(torch.abs(disc2_predictions-limit_factor2)**2, min=.000001, max=.99999)))/2
-
-            if torch.any(torch.isinf(rew)) or torch.any(torch.isnan(rew)):
-                print(rew, "rew")    
-                print((dist1.cdf(disc1_predictions)-dist1.cdf(limit_factor))**2, "diff")
-            
-
-            rew = (rew[:,-1])*10
-            rew = torch.where(reward<-29, reward*12, rew)
-
-            
-
-            
-
-            disc_loss = None
-            disc1_loss = None
-            disc2_loss = None
-            if update_disc:
-                state, action, reward, new_state, done = \
-                    self.disc_memory.sample_buffer(self.batch_size)
-
-                reward = torch.tensor(reward, dtype=torch.float).to(self.actor.device)
-                done = torch.tensor(done).to(self.actor.device)
-                state_ = torch.tensor(new_state, dtype=torch.float).to(self.actor.device)
-                state = torch.tensor(state, dtype=torch.float).to(self.actor.device)
-                action = torch.tensor(action, dtype=torch.float).to(self.actor.device)
-
-                limit_factor = torch.clone(state)
-                limit_factor = limit_factor[:, -2:]
-                limit_factor1 = limit_factor[:,0]
-                limit_factor2 = limit_factor[:,1]
-                limit_factor1 = limit_factor1[:,None]
-                limit_factor2 = limit_factor2[:,None]
-
-                disc_state = torch.clone(state)
-
-                ##speed and hull angle:
-                disc1_state =  disc_state[:, 0:1]
-                disc2_state =  disc_state[:, 2:3]
-                
-                disc1_predictions, disc1_log_probs, dist1 = self.discriminator1.predict(disc1_state, requires_grad=True)
-                self.discriminator1.optimizer.zero_grad()
-                disc1_loss = (F.mse_loss(disc1_predictions, limit_factor1)*10+ (1/torch.abs((min(dist1.loc)-max(dist1.loc)))))*10 
-                disc1_loss.backward()
-                self.discriminator1.optimizer.step()
-
-                disc2_predictions, disc2_log_probs, dist2 = self.discriminator2.predict(disc2_state, requires_grad=True)
-                self.discriminator2.optimizer.zero_grad()
-                disc2_loss = (F.mse_loss(disc2_predictions, limit_factor2)*10+ (1/torch.abs((min(dist2.loc)-max(dist2.loc)))))*10 
-                disc2_loss.backward()
-                self.discriminator2.optimizer.step()
-
-            
-            if disc1_loss is not None and disc2_loss is not None:
-                return disc1_loss, disc2_loss, torch.mean(disc1_log_probs).item(),\
-                torch.mean(disc2_log_probs).item()
-            else:
-                return actor_loss, disc_loss
+    plt.figure()
+    plt.plot(reward_acord.detach().numpy(), label="reward")
+    plt.legend()
+    plt.savefig("/tmp/acord_reward.png")

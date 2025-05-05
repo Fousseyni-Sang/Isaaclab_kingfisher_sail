@@ -169,17 +169,10 @@ def run_simulator(sim: sim_utils.SimulationContext, entities: dict[str, Articula
             apparent_wind2D = utils.generate_apparent_wind_components_bis(True_wind2D, ship_speed2D)
             apparent_wind_angle = utils.get_apparent_wind_angle(-apparent_wind2D)
             joint_pos = robot.data.joint_pos
-            #print(f"joint_pos: {joint_pos}")
-            #print(f"sail_ang_simple: {utils.get_sail_angle(apparent_wind_angle, angle_of_attack_alpha)}")
+            
             sail_angle_target = utils.get_sail_angle(apparent_wind_angle, angle_of_attack_alpha) #+ torch.pi
             #angle_of_attack_alpha = utils.get_angle_of_attack(apparent_wind_angle, sail_angle)
             coeff_L, coeff_D = utils.generate_coeffs(angle_of_attack_alpha, asp_ratio)
-
-            #print(f"true_wind: min: {True_wind2D.min(dim=0)} mean: {True_wind2D.mean(dim=0)} median: {True_wind2D.median(dim=0)} max: {True_wind2D.max(dim=0)}")
-            #print(f"app_wind: min: {apparent_wind2D.min(dim=0)} mean: {apparent_wind2D.mean(dim=0)} median: {apparent_wind2D.median(dim=0)} max: {apparent_wind2D.max(dim=0)}")
-            #print(f"app_ang_min: {apparent_wind_angle.min()} app_ang mean: {apparent_wind_angle.mean()} app_ang_medi: {apparent_wind_angle.median()} app_ang_max: {apparent_wind_angle.max()}")
-            # generate the guassian for all environments
-            #print(f"aspec: {self.cfg.asp_ratio} apparent_wind: {apparent_wind_angle} AoA: {angle_of_attack_alpha}")
            
             # Update marker positions based on wind velocity
             marker_translations += wind_speed * 0.0002
@@ -213,29 +206,8 @@ def run_simulator(sim: sim_utils.SimulationContext, entities: dict[str, Articula
             # Proportional control gain
             k_p = 0.1  # Adjust this value based on the simulation's requirement
 
-            
-
-            #print(f" jp_target: {control_command}  true_ang: {wind_direction} app_wind_ang: {apparent_wind_angle} aoa: {angle_of_attack_alpha}")
-            #joint_pos_target =  robot.data.joint_pos + sail_angle #0.0*math.pi
             robot.set_joint_position_target(target=control_command, joint_ids=[0])
-            #print(f"error: {error}")
-            joint_vel = torch.zeros(1, device=sim.device) #robot.data.default_joint_vel 
-            #joint_pos = robot.data.default_joint_pos
 
-
-            """joint_vel = joint_vel + 0.1
-            print(f"joint_vel: {robot.data.joint_vel}")
-            """
-            #robot.write_joint_state_to_sim(angle, joint_vel)
-            
-            #robot.set_joint_effort_target(target=joint_pos_target, joint_ids=[0])
-            #robot.set_external_force_and_torque(forces=torch.zeros((1, 3), device=sim.device), torques=torch.tensor([[0., 0., 10.]], device=sim.device), body_ids=[3])
-            
-            
-            
-            
-            #robot.write_joint_state_to_sim(joint_pos, joint_vel, None)
-            #print(f"joint effort: {robot.data.joint_effort_target}")
 
             # -- write data to sim
             robot.write_data_to_sim()
