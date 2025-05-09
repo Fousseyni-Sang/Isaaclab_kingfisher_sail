@@ -1,7 +1,7 @@
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Float32
-from PyQt5.QtWidgets import QApplication, QSlider, QWidget, QVBoxLayout, QLabel, QHBoxLayout
+from PyQt5.QtWidgets import QApplication, QSlider, QWidget, QVBoxLayout, QLabel, QHBoxLayout, QPushButton
 from PyQt5.QtCore import Qt
 
 class RewardSlider(Node):
@@ -64,7 +64,9 @@ def main():
         'time':   {'min': 0., 'max': 2., 'init': 0.5},
         'energy': {'min': 0., 'max': 2., 'init': 0.5},
         'goal':   {'min': 0., 'max': 5., 'init': 1.0},
-        'wind_direct': {'min': -180., 'max': 180., 'init': -90.0}
+        'desired_speed':   {'min': 0.3, 'max': 1.5, 'init': 1.0},
+        'wind_direct': {'min': -180., 'max': 180., 'init': -90.0},
+        'wind_speed': {'min': 4., 'max': 8., 'init': 5}
         # Add more sliders here
     }
 

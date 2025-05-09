@@ -71,7 +71,7 @@ def main():
     rclpy.init()
     ros_node = RlAgentPublisher(args_cli.num_envs)
 
-    slider_names = ['time', 'energy', 'goal']  # Must match the names you use in the publisher
+    slider_names = ['time', 'energy', 'goal', 'speed']  # Must match the names you use in the publisher
     slider_node = RewardWeightSubscriber(slider_names)
     #rclpy.spin(slider_node)
 
@@ -125,6 +125,7 @@ def main():
     wind_direction = 1
     wind_speed = env.unwrapped._aerodynamics.cfg.wind_speed
     is_wind_speed = True
+    env.unwrapped.is_Training = False
     wind_modulo = env.unwrapped._aerodynamics.cfg.wind_direction
     # simulate environment
     while simulation_app.is_running():
@@ -133,6 +134,8 @@ def main():
         rclpy.spin_once(slider_node, timeout_sec=0.0)
         time_context = slider_node.reward_weights["time"]
         energy_context = slider_node.reward_weights["energy"]
+        reset_env = energy_context > 1.5 or time_context > 1.5
+        desired_speed = slider_node.reward_weights["speed"]
         env.unwrapped.energy_context[:] = energy_context
         env.unwrapped.time_context[:] = time_context
         #print(time_context)
@@ -151,10 +154,10 @@ def main():
             delta_pose = torch.tensor(delta_pose, device=env.unwrapped.device).repeat(env.unwrapped.num_envs, 1)
             # pre-process actions
             if is_wind_speed:
-                wind_speed += 0.1*delta_pose[:, -1]
+                wind_speed += 0.1*delta_pose[:, -1] if torch.abs(delta_pose[:, -1]) > 0.6 else 0
                 env.unwrapped._aerodynamics.update_wind(wind_speed=wind_speed)
             else: 
-                wind_direction += 0.1*delta_pose[:, -1]
+                wind_direction += 0.1*delta_pose[:, -1] if torch.abs(delta_pose[:, -1]) > 0.6 else 0
                 wind_modulo = (wind_direction + torch.pi)%(2*torch.pi) - torch.pi
                 env.unwrapped._aerodynamics.update_wind(wind_direction=wind_modulo)
             
@@ -168,6 +171,7 @@ def main():
             obs, rew, dones, _, _ = env.step(actions)
             obs = obs['policy']
 
+            env.unwrapped.desired_speed_b[:] = desired_speed
             aero_force = env.unwrapped._aerodynamic_force_b.squeeze(0)
             thruster_force = env.unwrapped._thruster_forces.squeeze(0)
             lin_speed = env.unwrapped._robot.data.root_lin_vel_b
@@ -188,10 +192,19 @@ def main():
             drag_coeff = env.unwrapped._aerodynamics.drag_coeff
             sum_angle = sail + app_angle + aoa
             desired_pos = torch.abs(env.unwrapped.desired_pos_b)
+            rew_progress = env.unwrapped.reward_progress
+            rew_bearing = env.unwrapped.reward_bearing
+            rew_energy = env.unwrapped.reward_energy
+            rew_backward = env.unwrapped.reward_backward
+
+
+
+            if reset_env:
+                env.reset()
 
             ros_node.publish(obs, actions, rew, aero_force, thruster_force, lin_speed, aoa, app_angle, sail, 
                              head_w, head_wrt_wind, ld_ratio, robot_pos, goal_pos, energy, episode_energy, lift, 
-                             drag, lift_coeff, drag_coeff, sum_angle, desired_pos)
+                             drag, lift_coeff, drag_coeff, sum_angle, desired_pos, rew_progress, rew_bearing, rew_energy, rew_backward)
             
     # Cleanup
     ros_node.destroy_node()

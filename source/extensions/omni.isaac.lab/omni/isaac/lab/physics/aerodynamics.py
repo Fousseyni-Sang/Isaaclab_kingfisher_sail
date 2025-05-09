@@ -34,6 +34,8 @@ class AerodynamicsCfg:
 
     wind_direction:float = MISSING # rad/s
     wind_speed:float = MISSING # m/s
+    min_upwind_angle:float = MISSING # m/s # Minimum upwind tolerable angle
+    min_downwind_angle:float = MISSING # m/s # Minimum downwind tolerable angle
 
     angle_of_attack: float = MISSING # angle of attack of the sail w.r.t wind
 
@@ -509,10 +511,24 @@ class Aerodynamics:
         #print(f"sail: {angle*(180/torch.pi)} \tapp_ang: {apparent_wind_angle*(180/torch.pi)} \t aoa: {angle_of_attack*(180/torch.pi)}")
         return angle
     
-    def reset_wind_condition(self, env_ids, randomize=False):
-        """ randomize wind direction between 0 and 2*pi if params randomize=True """
-        if randomize:
+    def reset_wind_condition(self, env_ids, upwind: torch.Tensor | bool=False, downwind: torch.Tensor | bool=False, 
+                             randomize_direction=False, randomize_speed=False):
+        """ randomize wind direction between 0 and 2*pi if params randomize=True 
+            upwind: a tensor of boolean or simply a boolean indicating which environments should be upwind
+            downwind: a tensor of boolean or simply a boolean indicating which environments should be downwind
+        """
+        if randomize_direction:
             self.Beta_w [env_ids] = torch.pi*torch.zeros_like(self.Beta_w[env_ids]).uniform_(-1, 1)
+            
+            up_wind_mask = torch.abs(self.Beta_w [env_ids]) > (145/180)*torch.pi
+            self.Beta_w [env_ids][~up_wind_mask & upwind] = - torch.pi
+            
+            down_wind_mask = torch.abs(self.Beta_w [env_ids]) < (35/180)*torch.pi
+            self.Beta_w [env_ids][~down_wind_mask & downwind] = 0
+                
+        if randomize_speed:
+            self.Uw[env_ids] = torch.pi*torch.zeros_like(self.Beta_w[env_ids]).uniform_(self.cfg.wind_speed, self.cfg.wind_speed + 3)
+
         return
 
     def update_wind(self, wind_direction:float | None = None, wind_speed:float | None = None, env_ids: torch.Tensor | None = None):

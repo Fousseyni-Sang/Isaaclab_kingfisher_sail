@@ -77,7 +77,7 @@ def main():
     # ---- Initialize ROS2 ----
     rclpy.init()
     ros_node = RlAgentPublisher(args_cli.num_envs)
-    slider_names = ['time', 'energy', 'goal', 'wind_direct']  # Must match the names you use in the publisher
+    slider_names = ['time', 'energy', 'goal', 'wind_direct', 'desired_speed', 'wind_speed']  # Must match the names you use in the publisher
     slider_node = RewardWeightSubscriber(slider_names)
     #rclpy.spin(slider_node)
 
@@ -171,15 +171,22 @@ def main():
     # note: We simplified the logic in rl-games player.py (:func:`BasePlayer.run()`) function in an
     #   attempt to have complete control over environment stepping. However, this removes other
     #   operations such as masking that is used for multi-agent learning by RL-Games.
+
     while simulation_app.is_running():
         rclpy.spin_once(slider_node, timeout_sec=0.0)
+        
         time_context = slider_node.reward_weights["time"]
         energy_context = slider_node.reward_weights["energy"]
+        reset_env = energy_context > 1.5 or time_context > 1.5
+        desired_speed = slider_node.reward_weights["desired_speed"]
         wind_direc = slider_node.reward_weights["wind_direct"]*(torch.pi/180)
+        wind_speed = slider_node.reward_weights["wind_speed"] if slider_node.reward_weights["wind_speed"] else 1e-6
         wind_modulo = (wind_direc + torch.pi)%(2*torch.pi) - torch.pi
         env.unwrapped._aerodynamics.update_wind(wind_direction=wind_modulo)
         env.unwrapped.energy_context[:] = energy_context
         env.unwrapped.time_context[:] = time_context
+        env.unwrapped.desired_speed_b[:] = desired_speed
+        env.unwrapped._aerodynamics.update_wind(wind_speed=wind_speed)
         # run everything in inference mode
         with torch.inference_mode():
             # convert obs to agent format
@@ -210,10 +217,20 @@ def main():
             drag_coeff = env.unwrapped._aerodynamics.drag_coeff
             sum_angle = sail + app_angle + aoa
             desired_pos = env.unwrapped.desired_pos_b
+            rew_progress = env.unwrapped.reward_progress
+            rew_bearing = env.unwrapped.reward_bearing
+            rew_energy = env.unwrapped.reward_energy
+            rew_backward = env.unwrapped.reward_backward
+
+            if reset_env:
+                env.reset()
+
+
+            
             
             ros_node.publish(obs, actions, rew, aero_force, thruster_force, lin_speed, aoa, app_angle, sail, 
                              head_w, head_wrt_wind, ld_ratio, robot_pos, goal_pos, energy, episode_energy, lift, drag, 
-                             lift_coeff, drag_coeff, sum_angle, desired_pos)
+                             lift_coeff, drag_coeff, sum_angle, desired_pos, rew_progress, rew_bearing, rew_energy, rew_backward)
 
             # perform operations for terminated episodes
             if len(dones) > 0:

@@ -30,9 +30,14 @@ class RlAgentPublisher(rclpy.node.Node):
         self.lift_coeff_publisher = [self.create_publisher(Float32MultiArray, f"rl_lift_coeff_{i}", 10) for i in range(num_agents)]
         self.sum_angle_publisher =  [self.create_publisher(Float32MultiArray, f"rl_sum_angle_{i}", 10) for i in range(num_agents)]
         self.desired_pos_publisher =  [self.create_publisher(Float32MultiArray, f"rl_desired_pos_{i}", 10) for i in range(num_agents)]
+        self.reward_progress_publisher =  [self.create_publisher(Float32MultiArray, f"rl_rew_progress_{i}", 10) for i in range(num_agents)]
+        self.reward_energy_publisher =  [self.create_publisher(Float32MultiArray, f"rl_rew_energy_{i}", 10) for i in range(num_agents)]
+        self.reward_bearing_publisher =  [self.create_publisher(Float32MultiArray, f"rl_rew_bearing_{i}", 10) for i in range(num_agents)]
+        self.reward_backward_publisher =  [self.create_publisher(Float32MultiArray, f"rl_rew_backward_{i}", 10) for i in range(num_agents)]
 
     def publish(self, obs, act, rew, aero_force, thruster_force, speed, aoa, app_angle, sail_ang, head_w, head_wrt_wind, 
-                ld_ratio, robot_pos, goal_pos, energy, episode_energy, lift, drag, lift_coeff, drag_coeff, sum_angle, desired_pos):
+                ld_ratio, robot_pos, goal_pos, energy, episode_energy, lift, drag, lift_coeff, drag_coeff, sum_angle, desired_pos,
+                rew_progress, rew_bearing, rew_energy, rew_backward):
         for i in range(self.num_agents):
             msg_obs = Float32MultiArray(data=obs[i].cpu().numpy().flatten().tolist())
             msg_act = Float32MultiArray(data=act[i].cpu().numpy().flatten().tolist())
@@ -56,6 +61,10 @@ class RlAgentPublisher(rclpy.node.Node):
             msg_drag_coeff = Float32MultiArray(data=drag_coeff[i].cpu().numpy().flatten().tolist())
             msg_sum_angle = Float32MultiArray(data=sum_angle[i].cpu().numpy().flatten().tolist())
             msg_desired_pos = Float32MultiArray(data=desired_pos[i].cpu().numpy().flatten().tolist())
+            msg_rew_progress = Float32MultiArray(data=rew_progress[i].cpu().numpy().flatten().tolist())
+            msg_rew_backward = Float32MultiArray(data=rew_backward[i].cpu().numpy().flatten().tolist())
+            msg_rew_energy = Float32MultiArray(data=rew_energy[i].cpu().numpy().flatten().tolist())
+            msg_rew_bearing = Float32MultiArray(data=rew_bearing[i].cpu().numpy().flatten().tolist())
 
             self.obs_publishers[i].publish(msg_obs)
             self.act_publishers[i].publish(msg_act)
@@ -79,6 +88,10 @@ class RlAgentPublisher(rclpy.node.Node):
             self.lift_coeff_publisher[i].publish(msg_lift_coeff)
             self.sum_angle_publisher[i].publish(msg_sum_angle)
             self.desired_pos_publisher[i].publish(msg_desired_pos)
+            self.reward_progress_publisher[i].publish(msg_rew_progress)
+            self.reward_energy_publisher[i].publish(msg_rew_energy)
+            self.reward_bearing_publisher[i].publish(msg_rew_bearing)
+            self.reward_backward_publisher[i].publish(msg_rew_backward)
 
 
 class RewardWeightSubscriber(Node):
