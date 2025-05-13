@@ -5,6 +5,7 @@ from torch.distributions.normal import Normal
 import os
 import torch
 import matplotlib.pyplot as plt
+import time
 #from .buffer import ReplayBuffer
 
 class ReplayBuffer:
@@ -71,7 +72,7 @@ class DiscriminatorNetwork(nn.Module):
         self.batch_size = 256
         self.num_envs = num_envs
 
-    def forward(self, x):
+    """def forward(self, x):
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
         x = self.output(x)  # No activation, raw output for regression
@@ -87,23 +88,25 @@ class DiscriminatorNetwork(nn.Module):
 
         prediction = self.forward(state)
         loss = F.mse_loss(prediction, context)
-
+        loss.requires_grad = True
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
 
-        return loss
+        return loss"""
 
-    """def forward(self, state):
+    def forward(self, state):
         prob = F.relu(self.fc1(state))
         prob = F.tanh(self.fc2(prob))*5
 
         mu = torch.sigmoid(self.mu(prob))
-        sigma = F.softplus(self.sigma(prob)) + 1e-4 #torch.sigmoid(self.sigma(prob))
+        sigma = torch.sigmoid(self.sigma(prob)) #F.softplus(self.sigma(prob)) + 1e-4 #
+
+        sigma = torch.clamp(sigma, min=.1, max=1)
 
         return mu, sigma
     
-    def predict(self, state, reparameterize=True, requires_grad=True):
+    """def predict(self, state, reparameterize=True, requires_grad=True):
         mu, sigma = self.forward(state)
         sigma = F.softplus(sigma) + 1e-2
         dist = Normal(mu, sigma)
@@ -114,7 +117,40 @@ class DiscriminatorNetwork(nn.Module):
             log_probs = dist.log_prob(predictions)
             log_probs -= torch.log(1 - prediction.pow(2) + self.reparam_noise)
 
-        return prediction, log_probs, dist
+        return prediction, log_probs, dist"""
+    
+    def predict(self, state, reparameterize=True, requires_grad=True):
+        if requires_grad:
+            mu, sigma = self.forward(state)
+            probabilities = Normal(mu, sigma)
+            if reparameterize:
+                predictions = probabilities.rsample()
+            else:
+                predictions = probabilities.sample()
+
+            prediction = predictions.to(self.device)
+            prediction = torch.clamp(prediction, .0001, .9999)
+            log_probs = probabilities.log_prob(predictions)
+            log_probs -= torch.log(1-prediction.pow(2)+self.reparam_noise)
+
+            return prediction, log_probs, probabilities
+        else:
+            with torch.no_grad():
+                mu, sigma = self.forward(state)
+                probabilities = Normal(mu, sigma)
+
+                if reparameterize:
+                    predictions = probabilities.rsample()
+                else:
+                    predictions = probabilities.sample()
+
+                prediction = predictions.to(self.device)
+                prediction = torch.clamp(prediction, .0001, .9999)
+                log_probs = probabilities.log_prob(predictions)
+                log_probs -= torch.log(1-prediction.pow(2)+self.reparam_noise)
+                #log_probs = log_probs.sum(0, keepdim=True)
+
+                return prediction, log_probs, probabilities
 
 
     def learn(self):
@@ -123,24 +159,24 @@ class DiscriminatorNetwork(nn.Module):
                 return None, None
         
         state_context = self.memory.sample_buffer(self.num_envs, self.batch_size)
-        print(f"state_context: {state_context[:10]}\n")
+        #print(f"state_context: {state_context[:10]}\n")
         state = state_context[:, 0].reshape(-1, self.input_dims)
         context = state_context[:, -1].reshape(-1, self.input_dims)
-        print(f"state: {state[:10]} \ncontext: {context[:10]}\n")
+        #print(f"state: {state[:10]} \ncontext: {context[:10]}\n")
         predictions, log_probs, dist1 = self.predict(state)
-        print(f"prediction: {predictions[:10]}\n")
+        #print(f"prediction: {predictions[:10]}\n")
         #print(f"pred: {predictions.requires_grad}")
         #print(f"st_cont: {state_context.shape} state: {state.shape} context: {context.shape} predic: {predictions.shape}")
         self.optimizer.zero_grad()
-        loss = (F.mse_loss(predictions, context)) #* 10 + (1 / torch.abs(torch.min(dist1.loc) - torch.max(dist1.loc)))) * 10
-        print(f"loss: {loss}\n")
-        #loss.requires_grad = True
+        loss = (F.mse_loss(predictions, context))*10 + (1 / torch.abs(torch.min(dist1.loc) - torch.max(dist1.loc))) * 0.01
+        #print(f"loss: {loss}\n")
+        loss.requires_grad = True
         #print(f"required: {loss.requires_grad}")
         loss.backward()
         self.optimizer.step()
 
         return loss, torch.mean(log_probs).item()
-        """
+        
 
 
 if __name__=="__main__":
@@ -154,30 +190,47 @@ if __name__=="__main__":
     
     # Instantiate and test
     torch.manual_seed(0)
-
+    start = time.time()
     # Fill the buffer with synthetic data
     for _ in range(mem_size):
-        s = torch.rand(num_envs, 2, device=discriminator1.device)  # state and context
+        s = torch.rand((num_envs, 2), device=discriminator1.device)  # state and context
+        s[:, 0] =  _*0.002
+        s[:, 1] = 0 if _ %10==0 else _*0.001
         discriminator1.memory.store_transition(s)
-
+    sample = discriminator1.memory.sample_buffer(num_envs, 30)
+    print(sample)
     # Run learning steps
     losses = []
     logprobs = []
-    for _ in range(1000):
+    for _ in range(1):
         #loss, logp = discriminator1.learn()
-        loss = discriminator1.learn()
+        loss, mean = discriminator1.learn()
         if loss is not None:
             losses.append(loss.detach().numpy())
             #logprobs.append(logp)
 
+    state_context = discriminator1.memory.sample_buffer(num_envs, 100)
+    #print(f"state_context: {state_context[:10]}\n")
+    state = state_context[:, 0].reshape(-1, 1)
+    context = state_context[:, -1].reshape(-1, 1)
+    #print(f"state: {state[:10]} \ncontext: {context[:10]}\n")
+    predictions, log_probs, dist1 = discriminator1.predict(state, False, False)
+    
+    end = time.time()
+    print(f"Time taken: {end - start} seconds")
+    print(f"losses: {losses[-1]}")
     plt.figure()
     plt.subplot(2, 1, 1)
     plt.plot(losses, label="loss_determ")
     plt.legend()
 
-    """plt.subplot(2, 1, 2)
-    plt.plot(logprobs, label="log_prob")
-    plt.legend()"""
+    plt.subplot(2, 1, 2)
+    plt.plot(predictions, label="predictions")
+    plt.plot(context, label="context")
+    #plt.plot(state, label="state")
+    plt.plot(torch.abs(predictions - context), label="pred_error")
+    plt.legend()
+
 
     plt.savefig("/home/isaac_user/asv-sawasp-fousseyni/IsaacLab_kingfisher/loss.png")
 

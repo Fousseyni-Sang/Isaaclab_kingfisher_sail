@@ -196,6 +196,8 @@ def main():
             rew_bearing = env.unwrapped.reward_bearing
             rew_energy = env.unwrapped.reward_energy
             rew_backward = env.unwrapped.reward_backward
+            loss = env.unwrapped.loss_discrim_energy
+            loss_disc = loss if loss is not None else torch.zeros_like(env.unwrapped.energy)
 
 
 
@@ -204,7 +206,7 @@ def main():
 
             ros_node.publish(obs, actions, rew, aero_force, thruster_force, lin_speed, aoa, app_angle, sail, 
                              head_w, head_wrt_wind, ld_ratio, robot_pos, goal_pos, energy, episode_energy, lift, 
-                             drag, lift_coeff, drag_coeff, sum_angle, desired_pos, rew_progress, rew_bearing, rew_energy, rew_backward)
+                             drag, lift_coeff, drag_coeff, sum_angle, desired_pos, rew_progress, rew_bearing, rew_energy, rew_backward, loss_disc)
             
     # Cleanup
     ros_node.destroy_node()

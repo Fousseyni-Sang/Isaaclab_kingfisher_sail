@@ -74,7 +74,7 @@ class KingfisherSailEnvCfg(DirectRLEnvCfg):
     decimation = 3
     step_dt = physics_dt * decimation  # 20 Hz
     action_space = 3
-    observation_space = 14 #16
+    observation_space = 15 #16
     state_space = 0
     debug_vis = True
 
@@ -231,7 +231,7 @@ class KingfisherSailEnvCfg(DirectRLEnvCfg):
 
     # reward scales
     distance_reward_scale = 0.0
-    distance_progress_reward_scale = 15 #5 # 6 too much
+    distance_progress_reward_scale = 5 #5 # 6 too much
     bearing_progress_reward_scale = 0.0
 
     goal_reached_threshold = 0.1
@@ -241,7 +241,7 @@ class KingfisherSailEnvCfg(DirectRLEnvCfg):
     backwards_penalty_scale = -0.05
     time_penalty_scale = -0.008 #-1
     tack_penalty_scale = 0.0005
-    bearing_penalty_scale = 0.005 #1.0
+    bearing_penalty_scale = 0.001 #1.0
     beargin_penalty_coef = -0.5 #-4
     lift_drag_ratio_scale = 0.05
     acord_reward_scale = 0.005
@@ -277,7 +277,7 @@ def tack_corridor_reward(p_boat:torch.Tensor, p_k:torch.Tensor, p_k1:torch.Tenso
     penalty = torch.relu(torch.abs(cross) - corridor_half)
 
     # Optional: return negative penalty (reward)
-    return -penalty
+    return -penalty, cross
 
 class KingfisherSailEnv(DirectRLEnv):
     cfg: KingfisherSailEnvCfg
@@ -372,6 +372,7 @@ class KingfisherSailEnv(DirectRLEnv):
         self.previous_sail_action = torch.zeros_like(self.actions[:, -1])
 
         self.episode_number = torch.ones(self.num_envs, device=self.device)
+        self.global_step = 0
 
         # Discriminator repplay buffer memory
         #self.disc_memory = ReplayBuffer(self.num_envs, 1000, 2, device=self.device)
@@ -382,6 +383,9 @@ class KingfisherSailEnv(DirectRLEnv):
 
         self.loss_discrim_energy = None #torch.zeros(self.num_envs, device=self.device)
         self.loss_discrim_time = None #torch.zeros(self.num_envs, device=self.device)
+        self.disc_prediction_mean = torch.zeros(self.num_envs, device=self.device)
+        self.disc_prediction_std = torch.zeros(self.num_envs, device=self.device)
+        self.disc_prediction_error = torch.zeros(self.num_envs, device=self.device)
         
         self.energy_context = torch.ones_like(self.episode_number)
         self.time_context = torch.ones_like(self.episode_number)
@@ -605,7 +609,7 @@ class KingfisherSailEnv(DirectRLEnv):
     def _get_observations(self) -> dict:
 
         # Observations
-
+        self.global_step += 1
         # Desired position in the robot frame (2D)
         self.desired_pos_b_3d, _ = subtract_frame_transforms(
             self._robot.data.root_link_state_w[:, :3], self._robot.data.root_link_state_w[:, 3:7], self._desired_pos_w
@@ -615,12 +619,13 @@ class KingfisherSailEnv(DirectRLEnv):
         self.bearing = torch.atan2(self.desired_pos_b[:, 1], self.desired_pos_b[:, 0])
         
         #print((self.episode_energy/((self.episode_length_buf+1)*self.cfg.max_energy)).reshape(self.num_envs, -1))
-        
+        sampling_rate = 500
         if self.is_Training:
-            apply_mask = (self.episode_length_buf%400)==0
+            apply_mask = (self.episode_length_buf%sampling_rate)==0
             env_ids = torch.nonzero(apply_mask, as_tuple=False).squeeze(-1)
-            self.energy_context[env_ids] = torch.zeros_like(self.time_context[env_ids]).uniform_(0, 1)
-            #cluster_context(context=torch.zeros_like(self.time_context[env_ids]).uniform_(0, 1), device=self.device)
+            self.energy_context[env_ids] = cluster_context(context=torch.zeros_like(self.time_context[env_ids]).uniform_(0, 1), device=self.device, n=10)
+            
+            #torch.zeros_like(self.time_context[env_ids]).uniform_(0, 1)
             """self.time_context[env_ids] = torch.zeros_like(self.time_context[env_ids]).uniform_(0, 1)
             #cluster_context(torch.zeros_like(self.time_context[env_ids]).uniform_(0, 1), device=self.device)
             self.progress_context[env_ids] = cluster_context(torch.abs(torch.normal(mean=torch.ones_like(self.progress_context[env_ids]), 
@@ -645,11 +650,13 @@ class KingfisherSailEnv(DirectRLEnv):
                 torch.cos(self._aerodynamics.apparent_wind_angle).reshape(self.num_envs, -1), # 1
                 torch.sin(self._aerodynamics.apparent_wind_angle).reshape(self.num_envs, -1), # 1
                 torch.norm(self._aerodynamics.apparent_wind_speed_b, dim=-1).reshape(self.num_envs, -1), # 1
-                (self.episode_energy/((self.episode_length_buf+1)*self.cfg.max_energy)).reshape(self.num_envs, -1), # 1,
+                self.episode_energy.reshape(self.num_envs, -1), # 1,
+                self.energy_context.reshape(self.num_envs, -1), # 1
                 
             ],
             dim=1,
         )
+        #/((self.episode_length_buf+1)*self.cfg.max_energy))
         #self.desired_speed_b.reshape(self.num_envs, -1), # 1
         #self.energy_context.reshape(self.num_envs, -1), #1
         #/((self.episode_length_buf+1)*self.cfg.max_energy)
@@ -659,8 +666,9 @@ class KingfisherSailEnv(DirectRLEnv):
         #self.time_context.reshape(self.num_envs, -1), # 1
         #
         #
-        
+        #print(f"obs: {obs.shape} \tenergy: {self.energy.shape} \tcontext: {self.energy_context.shape}")
         self.energy = torch.sum(torch.square(self._actions[:, :2]), dim=1)
+        
         
         self.discriminator_energy.memory.store_transition(torch.cat((self.energy.reshape(self.num_envs, -1), 
                                             self.energy_context.reshape(self.num_envs, -1)), dim=-1))
@@ -668,7 +676,9 @@ class KingfisherSailEnv(DirectRLEnv):
         self.discriminator_time.memory.store_transition(torch.cat((torch.norm(self._robot.data.root_lin_vel_b[:, :2], 
                         dim=-1).reshape(self.num_envs, -1), self.time_context.reshape(self.num_envs, -1)), dim=-1))"""
         
-        #self.loss_discrim_energy = self.discriminator_energy.learn() #, log_prob1
+        if self.global_step % 20 == 0:
+            #print(self.global_step)
+            self.loss_discrim_energy, _ = self.discriminator_energy.learn() #, log_prob1
         #self.loss_discrim_time, log_prob2 = self.discriminator_time.learn()
 
         #print(f"loss1: {self.loss_discrim_energy} \tloss2: {self.loss_discrim_time} ")
@@ -767,7 +777,14 @@ class KingfisherSailEnv(DirectRLEnv):
 
         #print(f"bearing: {bearing_penalty.item()} \tspeed: {reward_speed.item()} \tprogr: {distance_progress_reward.item()}\n")
 
-        #predicted_energy_context, log_probs1, distrib1 = self.discriminator_energy.predict(self.episode_energy.reshape(self.num_envs, -1), requires_grad=False, reparameterize=False)
+        predicted_energy_context, log_probs1, distrib1 = self.discriminator_energy.predict(
+            self.episode_energy.reshape(self.num_envs, -1), requires_grad=False, reparameterize=False)
+        self.disc_prediction_mean = distrib1.loc.clone()
+        self.disc_prediction_std = distrib1.scale.clone()
+        #predicted_energy_context = self.discriminator_energy.forward(self.episode_energy.reshape(self.num_envs, -1))
+        predic_error_energy = torch.clamp(torch.abs(predicted_energy_context.reshape(-1)-self.energy_context.reshape(-1))**2, min=0.000001, max=0.99999)
+        #torch.abs(predicted_energy_context.reshape(-1) - self.energy_context.reshape(-1))
+        self.disc_prediction_error = predic_error_energy.clone()
         #predic_error_energy = torch.abs(predicted_energy_context.reshape(-1) - self.energy_context.reshape(-1))
         #predicted_time_context, log_probs2, distrib2= self.discriminator_time.predict(self.episode_energy.reshape(self.num_envs, -1), requires_grad=False)
         #predic_error_time = torch.abs(predicted_time_context.reshape(-1) - self.time_context.reshape(-1))
@@ -777,23 +794,25 @@ class KingfisherSailEnv(DirectRLEnv):
         eps = 1e-6
         #safe_time_error = torch.clamp(predic_error_time, min=eps)
         #safe_energy_error = torch.clamp(predic_error_energy, min=eps)
-
-        #reward_acord = -self.cfg.acord_reward_scale * ( predic_error_time.pow(2) + predic_error_energy.pow(2))
+        #print(f"predic_error_energy: {predic_error_energy} \tenergy_context: {self.energy_context} \tprediction: {predicted_energy_context}")
+        reward_acord = -self.cfg.acord_reward_scale * torch.log(predic_error_energy)# .pow(2) + predic_error_energy.pow(2))
         #reward_acord = self.cfg.acord_reward_scale * 0.5 * (- torch.log(safe_energy_error)) # - torch.log(safe_time_error)
-        
-        tack_reward = self.cfg.tack_penalty_scale*tack_corridor_reward(p_boat=current_robot_pos[:, :2], 
-                    p_k=self.initial_robot_pos[:, :2], p_k1=self._desired_pos_w[:, :2], corridor_width=5)
-        #print(f"tack_reward: {tack_reward}")
+        self.reward_backward = reward_acord.clone()
+        penalty, cross = tack_corridor_reward(p_boat=current_robot_pos[:, :2], 
+                    p_k=self.initial_robot_pos[:, :2], p_k1=self._desired_pos_w[:, :2], corridor_width=8)
+        tack_reward = self.cfg.tack_penalty_scale * penalty
+
+        #print(f"tack_reward: {tack_reward} \tcross: {cross}")
         #print(f"reward_acord: {reward_acord}")
         #print(f"std1: {distrib1.scale} \tstd2: {distrib2.scale} ")
         rewards = {
-            "1_distance_progress": distance_progress_reward,
+            "1_distance_progress": 0*distance_progress_reward,
             "2_goal_reached": goal_reward,
-            "3_energy": energy_reward,
-            "4_backwards": backwards_penalty,
-            "5_bearing_penalty": 0*reward_speed,
-            "6_time": time_reward,
-            "7_tack_penalty": tack_reward,
+            "3_energy": 0*energy_reward,
+            "4_backwards": 0*backwards_penalty,
+            "5_bearing_penalty": reward_acord,
+            "6_time": 0*time_reward,
+            "7_tack_penalty": 0*tack_reward,
         }
         # #"6_time": time_reward
         self.previous_distance = self.distance.clone()
@@ -855,6 +874,9 @@ class KingfisherSailEnv(DirectRLEnv):
         extras = dict()
         extras["Contexts/time_weight_sampled"] = self.time_context[env_ids].mean().item()
         extras["Contexts/energy_weight_sampled"] = self.energy_context[env_ids].mean().item()
+        extras["Contexts/disc_prediction_mean"] = self.disc_prediction_mean[env_ids].mean().item()
+        extras["Contexts/disc_prediction_std"] = self.disc_prediction_std[env_ids].mean().item()
+        extras["Contexts/disc_prediction_error"] = self.disc_prediction_error[env_ids].mean().item()
         extras["Contexts/progress_weight_sampled"] = self.progress_context[env_ids].mean().item()
         extras["Contexts/loss_discrim_energy"] = self.loss_discrim_energy.item() if self.loss_discrim_energy is not None else 0
         extras["Contexts/loss_discrim_time"] = self.loss_discrim_time.item() if self.loss_discrim_time is not None else 0
@@ -894,8 +916,9 @@ class KingfisherSailEnv(DirectRLEnv):
                     [self.env_pos[0]+d/2, self.env_pos[1]+d/2, 1.5], (n_markers//5, 3))
 
         if self.is_Training:
-            self.energy_context[env_ids] = torch.zeros_like(self.time_context[env_ids]).uniform_(0, 1)
-            #cluster_context(torch.zeros_like(self.time_context[env_ids]).uniform_(0, 1), device=self.device)
+            self.energy_context[env_ids] = cluster_context(torch.zeros_like(self.time_context[env_ids]).uniform_(0, 1), device=self.device)
+            #torch.zeros_like(self.time_context[env_ids]).uniform_(0, 1)
+            
             self.time_context[env_ids] = torch.zeros_like(self.time_context[env_ids]).uniform_(0, 1)
             #cluster_context(torch.zeros_like(self.time_context[env_ids]).uniform_(0, 1), device=self.device)
             self.progress_context[env_ids] = cluster_context(torch.abs(torch.normal(mean=torch.ones_like(self.progress_context[env_ids]), 
@@ -909,7 +932,7 @@ class KingfisherSailEnv(DirectRLEnv):
             downwind = random > 0.85
             self._aerodynamics.reset_wind_condition(env_ids=env_ids, randomize_direction=True, randomize_speed=True, upwind=upwind, downwind=downwind)
 
-
+        
         self.episode_number[env_ids]  = self.episode_number[env_ids] + 1 
         self.episode_energy[env_ids] = 0
         self.episode_avg_speed[env_ids] = 0

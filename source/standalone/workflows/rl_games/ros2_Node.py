@@ -34,10 +34,11 @@ class RlAgentPublisher(rclpy.node.Node):
         self.reward_energy_publisher =  [self.create_publisher(Float32MultiArray, f"rl_rew_energy_{i}", 10) for i in range(num_agents)]
         self.reward_bearing_publisher =  [self.create_publisher(Float32MultiArray, f"rl_rew_bearing_{i}", 10) for i in range(num_agents)]
         self.reward_backward_publisher =  [self.create_publisher(Float32MultiArray, f"rl_rew_backward_{i}", 10) for i in range(num_agents)]
+        self.loss_disc_publisher =  [self.create_publisher(Float32MultiArray, f"rl_loss_disc_{i}", 10) for i in range(num_agents)]
 
     def publish(self, obs, act, rew, aero_force, thruster_force, speed, aoa, app_angle, sail_ang, head_w, head_wrt_wind, 
                 ld_ratio, robot_pos, goal_pos, energy, episode_energy, lift, drag, lift_coeff, drag_coeff, sum_angle, desired_pos,
-                rew_progress, rew_bearing, rew_energy, rew_backward):
+                rew_progress, rew_bearing, rew_energy, rew_backward, loss_disc):
         for i in range(self.num_agents):
             msg_obs = Float32MultiArray(data=obs[i].cpu().numpy().flatten().tolist())
             msg_act = Float32MultiArray(data=act[i].cpu().numpy().flatten().tolist())
@@ -65,6 +66,7 @@ class RlAgentPublisher(rclpy.node.Node):
             msg_rew_backward = Float32MultiArray(data=rew_backward[i].cpu().numpy().flatten().tolist())
             msg_rew_energy = Float32MultiArray(data=rew_energy[i].cpu().numpy().flatten().tolist())
             msg_rew_bearing = Float32MultiArray(data=rew_bearing[i].cpu().numpy().flatten().tolist())
+            msg_loss_disc = Float32MultiArray(data=loss_disc[i].cpu().numpy().flatten().tolist())
 
             self.obs_publishers[i].publish(msg_obs)
             self.act_publishers[i].publish(msg_act)
@@ -92,6 +94,7 @@ class RlAgentPublisher(rclpy.node.Node):
             self.reward_energy_publisher[i].publish(msg_rew_energy)
             self.reward_bearing_publisher[i].publish(msg_rew_bearing)
             self.reward_backward_publisher[i].publish(msg_rew_backward)
+            self.loss_disc_publisher[i].publish(msg_loss_disc)
 
 
 class RewardWeightSubscriber(Node):
