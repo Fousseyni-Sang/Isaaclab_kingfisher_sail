@@ -133,7 +133,7 @@ class DiscriminatorNetwork(nn.Module):
             log_probs = probabilities.log_prob(predictions)
             log_probs -= torch.log(1-prediction.pow(2)+self.reparam_noise)
 
-            return prediction, log_probs, probabilities
+            return mu, log_probs, probabilities
         else:
             with torch.no_grad():
                 mu, sigma = self.forward(state)
@@ -150,7 +150,7 @@ class DiscriminatorNetwork(nn.Module):
                 log_probs -= torch.log(1-prediction.pow(2)+self.reparam_noise)
                 #log_probs = log_probs.sum(0, keepdim=True)
 
-                return prediction, log_probs, probabilities
+                return mu, log_probs, probabilities
 
 
     def learn(self):
@@ -164,11 +164,12 @@ class DiscriminatorNetwork(nn.Module):
         context = state_context[:, -1].reshape(-1, self.input_dims)
         #print(f"state: {state[:10]} \ncontext: {context[:10]}\n")
         predictions, log_probs, dist1 = self.predict(state)
+        #predictions, dist1 = self.forward(state)
         #print(f"prediction: {predictions[:10]}\n")
         #print(f"pred: {predictions.requires_grad}")
         #print(f"st_cont: {state_context.shape} state: {state.shape} context: {context.shape} predic: {predictions.shape}")
         self.optimizer.zero_grad()
-        loss = (F.mse_loss(predictions, context))*10 + (1 / torch.abs(torch.min(dist1.loc) - torch.max(dist1.loc))) * 0.01
+        loss = (F.mse_loss(predictions, context)) #*100 + (1 / torch.abs(torch.min(dist1.loc) - torch.max(dist1.loc))) * 0.1
         #print(f"loss: {loss}\n")
         loss.requires_grad = True
         #print(f"required: {loss.requires_grad}")

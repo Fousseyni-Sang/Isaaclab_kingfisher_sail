@@ -54,7 +54,7 @@ class KingfisherSailEnvWindow(BaseEnvWindow):
                     # add command manager visualization
                     self._create_debug_vis_ui_element("targets", self.env)
 
-def cluster_context(context: torch.Tensor, device, n: int=5) -> torch.Tensor:
+def cluster_context(context: torch.Tensor, device, n: int=2) -> torch.Tensor:
     # Create n intervals between 0 and 1 (exclusive)
     boundaries = torch.linspace(0, 1, n+1, device=device)
     
@@ -227,7 +227,7 @@ class KingfisherSailEnvCfg(DirectRLEnvCfg):
 
     max_energy = 2.0  # Max of 1.0 per thruster
     max_available_energy = episode_length_s*max_energy
-    max_robot_speed = 0.7 # Max speed for energy optimization
+    max_robot_speed = 1.5 # Max speed for energy optimization
 
     # reward scales
     distance_reward_scale = 0.0
@@ -376,19 +376,19 @@ class KingfisherSailEnv(DirectRLEnv):
 
         # Discriminator repplay buffer memory
         #self.disc_memory = ReplayBuffer(self.num_envs, 1000, 2, device=self.device)
-        self.discriminator_energy = DiscriminatorNetwork(lr=0.0001, input_dims=1, fc1_dims=256, fc2_dims=256, prediction_dims=1, 
+        self.discriminator_heading = DiscriminatorNetwork(lr=0.0001, input_dims=1, fc1_dims=256, fc2_dims=256, prediction_dims=1, 
                                                    num_envs=self.num_envs, device=self.device)
-        self.discriminator_time = DiscriminatorNetwork(lr=0.0001, input_dims=1, fc1_dims=256, fc2_dims=256, prediction_dims=1, 
+        self.discriminator_speed = DiscriminatorNetwork(lr=0.0001, input_dims=1, fc1_dims=256, fc2_dims=256, prediction_dims=1, 
                                                    num_envs=self.num_envs, device=self.device)
 
-        self.loss_discrim_energy = None #torch.zeros(self.num_envs, device=self.device)
-        self.loss_discrim_time = None #torch.zeros(self.num_envs, device=self.device)
+        self.loss_discrim_heading = None #torch.zeros(self.num_envs, device=self.device)
+        self.loss_discrim_speed = None #torch.zeros(self.num_envs, device=self.device)
         self.disc_prediction_mean = torch.zeros(self.num_envs, device=self.device)
         self.disc_prediction_std = torch.zeros(self.num_envs, device=self.device)
         self.disc_prediction_error = torch.zeros(self.num_envs, device=self.device)
         
-        self.energy_context = torch.ones_like(self.episode_number)
-        self.time_context = torch.ones_like(self.episode_number)
+        self.heading_context = torch.ones_like(self.episode_number)
+        self.speed_context = torch.ones_like(self.episode_number)
         self.progress_context = torch.ones_like(self.episode_number)
         self.is_Training = True
 
@@ -396,10 +396,10 @@ class KingfisherSailEnv(DirectRLEnv):
         self.reward_bearing = torch.zeros(self.num_envs, device=self.device)
         self.reward_energy = torch.zeros(self.num_envs, device=self.device)
         self.reward_backward = torch.zeros(self.num_envs, device=self.device)
+        self.n_buckets = 2
         
         self.normalize_heading = torch.zeros(self.num_envs, device=self.device)
-        self.normalized_energy = torch.zeros(self.num_envs, device=self.device)
-
+        self.normalize_speed = torch.zeros(self.num_envs, device=self.device)
         # ============================================================================================#
         # ======================== Markers for the wind visualization ================================#
         # ============================================================================================#
@@ -620,37 +620,51 @@ class KingfisherSailEnv(DirectRLEnv):
         self.bearing = torch.atan2(self.desired_pos_b[:, 1], self.desired_pos_b[:, 0])
         
         #print((self.episode_energy/((self.episode_length_buf+1)*self.cfg.max_energy)).reshape(self.num_envs, -1))
-        sampling_rate = 300
+        sampling_rate = 400
         if self.is_Training:
             apply_mask = (self.episode_length_buf%sampling_rate)==0
             env_ids = torch.nonzero(apply_mask, as_tuple=False).squeeze(-1)
-            self.energy_context[env_ids] = torch.zeros_like(self.time_context[env_ids]).uniform_(0, 1)
+            self.heading_context[env_ids] = torch.zeros_like(self.heading_context[env_ids]).uniform_(0, 1)
             
-            #torch.zeros_like(self.time_context[env_ids]).uniform_(0, 1)
-            """self.time_context[env_ids] = torch.zeros_like(self.time_context[env_ids]).uniform_(0, 1)
-            #cluster_context(torch.zeros_like(self.time_context[env_ids]).uniform_(0, 1), device=self.device)
+            #torch.zeros_like(self.heading_context[env_ids]).uniform_(0, 1)
+            
+            self.speed_context[env_ids] = torch.zeros_like(self.speed_context[env_ids]).uniform_(0, 1)
+            
+            #torch.zeros_like(self.speed_context[env_ids]).uniform_(0, 1)
             self.progress_context[env_ids] = cluster_context(torch.abs(torch.normal(mean=torch.ones_like(self.progress_context[env_ids]), 
-                            std=0.5*torch.ones_like(self.progress_context[env_ids]))), device=self.device)"""
+                            std=0.5*torch.ones_like(self.progress_context[env_ids]))), device=self.device)
             
-            apply_mask = (self.episode_length_buf%500)==0
+            apply_mask = (self.episode_length_buf%300)==0
             env_ids = torch.nonzero(apply_mask, as_tuple=False).squeeze(-1)
             #self._aerodynamics.reset_wind_condition(env_ids=env_ids)    
 
             # Resample speed every 300 steps
-            self.desired_speed_b[env_ids] = torch.zeros_like(self.desired_speed_b[env_ids]).uniform_(0.2, 1.5)
+            #self.desired_speed_b[env_ids] = torch.zeros_like(self.desired_speed_b[env_ids]).uniform_(0.2, 1.5)
+        #self.heading_context = cluster_context(self.heading_context, device=self.device, n=5)
         
-        self.energy = torch.sum(torch.square(self._actions[:, :2]), dim=1)
-        self.normalized_energy = self.energy / self.cfg.max_energy
+        normalize_heading = torch.abs(self._robot.data.heading_w.clone().detach())
+        self.normalize_heading = (1/torch.pi) * normalize_heading
+        
+        normalize_speed = torch.abs(self._robot.data.root_lin_vel_b[:, 0].clone().detach())
+        self.normalize_speed = (1/self.cfg.max_robot_speed) * normalize_speed
 
         obs = torch.cat(
             [
-                self.normalized_energy.reshape(self.num_envs, -1), # 1,
-                self.energy_context.reshape(self.num_envs, -1), # 1
+                
+                self.normalize_heading.unsqueeze(1),  # 1
+                self.heading_context.reshape(self.num_envs, -1), # 1
+        
                 
             ],
             dim=1,
-        )
-
+            )
+        #self.normalize_speed.reshape(self.num_envs, -1),  # 1
+        #self.speed_context.reshape(self.num_envs, -1), # 1,
+        #print("heading: ", normalize_heading)
+        #print(f"contexts: {cluster_context(self.heading_context, device=self.device)}\n")
+        #self._robot.data.root_lin_vel_b[:, 0].reshape(self.num_envs, -1),  # 1
+        #self.speed_context.reshape(self.num_envs, -1), # 1,
+        #
         """obs = torch.cat(
             [
                 self._actions,  # 2
@@ -663,38 +677,37 @@ class KingfisherSailEnv(DirectRLEnv):
                 torch.cos(self._aerodynamics.apparent_wind_angle).reshape(self.num_envs, -1), # 1
                 torch.sin(self._aerodynamics.apparent_wind_angle).reshape(self.num_envs, -1), # 1
                 torch.norm(self._aerodynamics.apparent_wind_speed_b, dim=-1).reshape(self.num_envs, -1), # 1
-                self.normalized_energy.reshape(self.num_envs, -1), # 1,
-                self.energy_context.reshape(self.num_envs, -1), # 1
+                self.episode_energy.reshape(self.num_envs, -1), # 1,
+                self.heading_context.reshape(self.num_envs, -1), # 1
                 
             ],
             dim=1,
         )"""
         #/((self.episode_length_buf+1)*self.cfg.max_energy))
         #self.desired_speed_b.reshape(self.num_envs, -1), # 1
-        #self.energy_context.reshape(self.num_envs, -1), #1
+        #self.heading_context.reshape(self.num_envs, -1), #1
         #/((self.episode_length_buf+1)*self.cfg.max_energy)
-        #self.energy_context.reshape(self.num_envs, -1), # 1
+        #self.heading_context.reshape(self.num_envs, -1), # 1
         #self.desired_speed_b.reshape(self.num_envs, -1), # 1
         # self._actions,  # 2
-        #self.time_context.reshape(self.num_envs, -1), # 1
+        #self.speed_context.reshape(self.num_envs, -1), # 1
         #
         #
-        #print(f"obs: {obs.shape} \tenergy: {self.energy.shape} \tcontext: {self.energy_context.shape}")
+        #print(f"obs: {obs.shape} \tenergy: {self.energy.shape} \tcontext: {self.heading_context.shape}")
+        self.energy = torch.sum(torch.square(self._actions[:, :2]), dim=1)
         
         
+        self.discriminator_heading.memory.store_transition(torch.cat((self._robot.data.heading_w.reshape(self.num_envs, -1), 
+                                            self.heading_context.reshape(self.num_envs, -1)), dim=-1))
         
-        self.discriminator_energy.memory.store_transition(torch.cat((self.energy.reshape(self.num_envs, -1), 
-                                            self.energy_context.reshape(self.num_envs, -1)), dim=-1))
-        """
-        self.discriminator_time.memory.store_transition(torch.cat((torch.norm(self._robot.data.root_lin_vel_b[:, :2], 
-                        dim=-1).reshape(self.num_envs, -1), self.time_context.reshape(self.num_envs, -1)), dim=-1))"""
+        self.discriminator_speed.memory.store_transition(torch.cat((self._robot.data.root_lin_vel_b[:, 0].reshape(self.num_envs, -1), self.speed_context.reshape(self.num_envs, -1)), dim=-1))
         
-        if self.global_step % 20 == 0:
+        if self.global_step % 10 == 0:
             #print(self.global_step)
-            self.loss_discrim_energy, _ = self.discriminator_energy.learn() #, log_prob1
-        #self.loss_discrim_time, log_prob2 = self.discriminator_time.learn()
+            self.loss_discrim_heading, _ = self.discriminator_heading.learn() #, log_prob1
+            self.loss_discrim_speed, _ = self.discriminator_speed.learn()
 
-        #print(f"loss1: {self.loss_discrim_energy} \tloss2: {self.loss_discrim_time} ")
+        #print(f"loss1: {self.loss_discrim_heading} \tloss2: {self.loss_discrim_speed} ")
 
         #print(f"\nangle: {self.sail_angle} \naoa: {self._aerodynamics.angle_of_attack}\n")
         observations = {"policy": obs}
@@ -750,11 +763,11 @@ class KingfisherSailEnv(DirectRLEnv):
         
         energy_norm = self.energy * self.step_dt / self.cfg.max_energy
         #energy_reward = torch.zeros_like(energy_norm)
-        energy_reward = self.cfg.energy_penalty_scale *energy_norm #* self.energy_context
+        energy_reward = self.cfg.energy_penalty_scale *energy_norm #* self.heading_context
         self.reward_energy = energy_reward.clone()
         mask = root_lin_vel_b_x > self.cfg.max_robot_speed
         #energy_reward[mask] = 100*self.cfg.energy_penalty_scale * energy_norm[mask] #+ torch.abs(root_lin_vel_b_x-self.cfg.max_robot_speed)[mask])
-        #print((torch.abs(self.previous_distance - self.distance)/torch.norm(self._robot.data.root_lin_vel_b, dim=-1)) * self.cfg.time_penalty_scale * self.step_dt * self.time_context)
+        #print((torch.abs(self.previous_distance - self.distance)/torch.norm(self._robot.data.root_lin_vel_b, dim=-1)) * self.cfg.time_penalty_scale * self.step_dt * self.speed_context)
         # Penalize bearing errors
         root_vel_w = self._robot.data.root_lin_vel_w.clone()
         bearing_penalty = torch.zeros_like(self.bearing) #torch.exp(self.cfg.beargin_penalty_coef * torch.abs(self.bearing)) - 1
@@ -774,8 +787,8 @@ class KingfisherSailEnv(DirectRLEnv):
         # bearing_penalty[self.distance < 0.2] = 0.0
         # Time
         time = torch.ones_like(self.energy) #torch.abs(self.previous_distance - self.distance)/torch.norm(self._robot.data.root_lin_vel_b, dim=-1)
-        time_reward = self.cfg.time_penalty_scale * time * self.step_dt #* (1- self.energy_context)
-        #self.cfg.time_penalty_scale * self.step_dt * self.time_context * torch.ones(self.num_envs, device=self.device) 
+        time_reward = self.cfg.time_penalty_scale * time * self.step_dt #* (1- self.heading_context)
+        #self.cfg.time_penalty_scale * self.step_dt * self.speed_context * torch.ones(self.num_envs, device=self.device) 
         
         reward_speed = self.cfg.speed_penalty_scale*(torch.square(root_lin_vel_b_x - self.desired_speed_b))*self.step_dt
         self.reward_energy = reward_speed.clone()
@@ -790,31 +803,42 @@ class KingfisherSailEnv(DirectRLEnv):
 
         #print(f"bearing: {bearing_penalty.item()} \tspeed: {reward_speed.item()} \tprogr: {distance_progress_reward.item()}\n")
 
-        predicted_energy_context, log_probs1, distrib1 = self.discriminator_energy.predict(
-            self.episode_energy.reshape(self.num_envs, -1), requires_grad=False, reparameterize=False)
+        predicted_heading_context, log_probs1, distrib1 = self.discriminator_heading.predict(
+            self._robot.data.heading_w.reshape(self.num_envs, -1), requires_grad=False, reparameterize=False)
+        
         self.disc_prediction_mean = distrib1.loc.clone()
         self.disc_prediction_std = distrib1.scale.clone()
-        #predicted_energy_context = self.discriminator_energy.forward(self.episode_energy.reshape(self.num_envs, -1))
-        predic_error_energy = torch.clamp(torch.abs(self.normalized_energy.reshape(-1)-self.energy_context.reshape(-1))**2, min=0.000001, max=0.99999)
-        #print(f"\npredic_error_energy: {predic_error_energy} \tenergy_context: {self.energy_context} \tprediction: {self.normalized_energy}")
-        self.disc_prediction_error = predic_error_energy.clone()
-        #predic_error_energy = torch.abs(predicted_energy_context.reshape(-1) - self.energy_context.reshape(-1))
-        #predicted_time_context, log_probs2, distrib2= self.discriminator_time.predict(self.episode_energy.reshape(self.num_envs, -1), requires_grad=False)
-        #predic_error_time = torch.abs(predicted_time_context.reshape(-1) - self.time_context.reshape(-1))
-        #print(f"\nenerg: {predicted_energy_context[:10], self.energy_context[:10]}")
-        #print(f"speed: {predicted_time_context[:10], self.time_context[:10]}\n")
-        #print(self.discriminator_energy.memory.state_memory)
+        #predicted_heading_context = self.discriminator_heading.forward(self.episode_energy.reshape(self.num_envs, -1))
+        predic_error_heading = torch.clamp(torch.abs(predicted_heading_context.reshape(-1)-self.heading_context.reshape(-1))**2, min=0.000001, max=0.99999)
+        #torch.abs(predicted_heading_context.reshape(-1) - self.heading_context.reshape(-1))
+        self.disc_prediction_error = predic_error_heading.clone()
+        #predic_error_heading = torch.abs(predicted_heading_context.reshape(-1) - self.heading_context.reshape(-1))
+
+        predicted_speed_context, log_probs2, distrib2= self.discriminator_speed.predict(
+            root_lin_vel_b_x.reshape(self.num_envs, -1), requires_grad=False, reparameterize=False)
+        
+        predic_error_speed = torch.clamp(torch.abs(self.normalize_speed.reshape(-1)-self.speed_context.reshape(-1))**2, min=0.000001, max=0.99999)
+        #torch.abs(predicted_speed_context.reshape(-1) - self.speed_context.reshape(-1))
+        
+        #print(f"\nenerg: {predicted_heading_context[:10], self.heading_context[:10]}")
+        #print(f"speed: {predicted_speed_context[:10], self.speed_context[:10]}\n")
+        #print(self.discriminator_heading.memory.state_memory)
         eps = 1e-6
-        #safe_time_error = torch.clamp(predic_error_time, min=eps)
-        #safe_energy_error = torch.clamp(predic_error_energy, min=eps)
-        #print(f"predic_error_energy: {predic_error_energy} \tenergy_context: {self.energy_context} \tprediction: {predicted_energy_context}")
-        reward_acord = -self.cfg.acord_reward_scale * predic_error_energy # .pow(2) + predic_error_energy.pow(2))
+        #safe_time_error = torch.clamp(predic_error_speed, min=eps)
+        #safe_energy_error = torch.clamp(predic_error_heading, min=eps)
+        #print(f"predic_error_heading: {predic_error_heading} \tenergy_context: {self.heading_context} \tprediction: {predicted_heading_context}")
+        predic_error_heading = torch.clamp(torch.abs(self.normalize_heading.reshape(-1)-self.heading_context.reshape(-1))**2, min=0.000001, max=0.99999)
+        #print(f"predic_error_heading: {predic_error_heading} \theading_context: {self.heading_context} \tprediction: {self.normalize_heading}")
+        #reward_acord = -self.cfg.acord_reward_scale * (torch.log(predic_error_heading)+ torch.log(predic_error_speed))
+        reward_acord = -self.cfg.acord_reward_scale * (predic_error_heading+ predic_error_speed)
+        #print(f"\nreward_acord: {reward_acord} \nheading: {self.normalize_heading} \tcontext: {self.heading_context} \terror: {predic_error_heading}")
+        #print(f"speed: {self.normalize_speed} \tcontext: {self.speed_context} \tpredic_error_speed: {predic_error_speed}\n")
         #reward_acord = self.cfg.acord_reward_scale * 0.5 * (- torch.log(safe_energy_error)) # - torch.log(safe_time_error)
         self.reward_backward = reward_acord.clone()
         penalty, cross = tack_corridor_reward(p_boat=current_robot_pos[:, :2], 
                     p_k=self.initial_robot_pos[:, :2], p_k1=self._desired_pos_w[:, :2], corridor_width=8)
         tack_reward = self.cfg.tack_penalty_scale * penalty
-
+        
         #print(f"tack_reward: {tack_reward} \tcross: {cross}")
         #print(f"reward_acord: {reward_acord}")
         #print(f"std1: {distrib1.scale} \tstd2: {distrib2.scale} ")
@@ -850,7 +874,8 @@ class KingfisherSailEnv(DirectRLEnv):
 
         # Finish episode if the goal is reached
         done = torch.zeros_like(time_out)
-        done[self.distance < self.cfg.goal_reached_threshold] = True
+        done[:] = False
+        #done[self.distance < self.cfg.goal_reached_threshold] = True
         if (torch.any(done) or torch.any(time_out)) and self.num_envs==1:
             print(f"done: {done} \tdistance: {self.distance} \ttime: {time_out}     \
                 \tepisod_length: {self.episode_length_buf}: > {self.max_episode_length - 1}")
@@ -885,14 +910,14 @@ class KingfisherSailEnv(DirectRLEnv):
         self.extras["log"].update(extras)
 
         extras = dict()
-        extras["Contexts/time_weight_sampled"] = self.time_context[env_ids].mean().item()
-        extras["Contexts/energy_weight_sampled"] = self.energy_context[env_ids].mean().item()
+        extras["Contexts/time_weight_sampled"] = self.speed_context[env_ids].mean().item()
+        extras["Contexts/energy_weight_sampled"] = self.heading_context[env_ids].mean().item()
         extras["Contexts/disc_prediction_mean"] = self.disc_prediction_mean[env_ids].mean().item()
         extras["Contexts/disc_prediction_std"] = self.disc_prediction_std[env_ids].mean().item()
         extras["Contexts/disc_prediction_error"] = self.disc_prediction_error[env_ids].mean().item()
         extras["Contexts/progress_weight_sampled"] = self.progress_context[env_ids].mean().item()
-        extras["Contexts/loss_discrim_energy"] = self.loss_discrim_energy.item() if self.loss_discrim_energy is not None else 0
-        extras["Contexts/loss_discrim_time"] = self.loss_discrim_time.item() if self.loss_discrim_time is not None else 0
+        extras["Contexts/loss_discrim_energy"] = self.loss_discrim_heading.item() if self.loss_discrim_heading is not None else 0
+        extras["Contexts/loss_discrim_time"] = self.loss_discrim_speed.item() if self.loss_discrim_speed is not None else 0
         self.extras["log"].update(extras)
 
         
@@ -929,13 +954,14 @@ class KingfisherSailEnv(DirectRLEnv):
                     [self.env_pos[0]+d/2, self.env_pos[1]+d/2, 1.5], (n_markers//5, 3))
 
         if self.is_Training:
-            self.energy_context[env_ids] = torch.zeros_like(self.time_context[env_ids]).uniform_(0, 1)
-            #torch.zeros_like(self.time_context[env_ids]).uniform_(0, 1)
+            self.heading_context[env_ids] = torch.zeros_like(self.heading_context[env_ids]).uniform_(0, 1)
+            #torch.zeros_like(self.heading_context[env_ids]).uniform_(0, 1)
+            #torch.zeros_like(self.speed_context[env_ids]).uniform_(0, 1)
             
-            self.time_context[env_ids] = torch.zeros_like(self.time_context[env_ids]).uniform_(0, 1)
-            #cluster_context(torch.zeros_like(self.time_context[env_ids]).uniform_(0, 1), device=self.device)
-            self.progress_context[env_ids] = cluster_context(torch.abs(torch.normal(mean=torch.ones_like(self.progress_context[env_ids]), 
-                            std=0.5*torch.ones_like(self.progress_context[env_ids]))), device=self.device)
+            self.speed_context[env_ids] = torch.zeros_like(self.speed_context[env_ids]).uniform_(0, 1)
+            #cluster_context(torch.zeros_like(self.speed_context[env_ids]).uniform_(0, 1), device=self.device)
+            self.progress_context[env_ids] = torch.abs(torch.normal(mean=torch.ones_like(self.progress_context[env_ids]), 
+                            std=0.5*torch.ones_like(self.progress_context[env_ids])))
             
             self.desired_speed_b[env_ids] = torch.zeros_like(self.desired_speed_b[env_ids]).uniform_(0.2, 1.5)
 
@@ -945,7 +971,6 @@ class KingfisherSailEnv(DirectRLEnv):
             downwind = random > 0.85
             self._aerodynamics.reset_wind_condition(env_ids=env_ids, randomize_direction=True, randomize_speed=True, upwind=upwind, downwind=downwind)
 
-        
         self.episode_number[env_ids]  = self.episode_number[env_ids] + 1 
         self.episode_energy[env_ids] = 0
         self.episode_avg_speed[env_ids] = 0
