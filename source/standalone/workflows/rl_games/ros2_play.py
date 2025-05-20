@@ -185,7 +185,8 @@ def main():
         env.unwrapped._aerodynamics.update_wind(wind_direction=wind_modulo)
         env.unwrapped.energy_context[:] = energy_context
         env.unwrapped.time_context[:] = time_context
-        env.unwrapped.desired_speed_b[:] = desired_speed
+        #env.unwrapped.desired_speed_b[:] = desired_speed
+        env.unwrapped.corridor_width[:] = desired_speed
         env.unwrapped._aerodynamics.update_wind(wind_speed=wind_speed)
         # run everything in inference mode
         with torch.inference_mode():

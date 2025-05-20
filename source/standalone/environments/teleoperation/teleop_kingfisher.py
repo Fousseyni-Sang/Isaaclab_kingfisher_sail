@@ -136,8 +136,8 @@ def main():
         energy_context = slider_node.reward_weights["energy"]
         reset_env = energy_context > 1.5 or time_context > 1.5
         desired_speed = slider_node.reward_weights["speed"]
-        env.unwrapped.heading_context[:] = energy_context
-        env.unwrapped.speed_context[:] = time_context
+        env.unwrapped.energy_context[:] = energy_context
+        env.unwrapped.time_context[:] = time_context
         #print(time_context)
         # run everything in inference mode
         with torch.inference_mode():
@@ -196,7 +196,7 @@ def main():
             rew_bearing = env.unwrapped.reward_bearing
             rew_energy = env.unwrapped.reward_energy
             rew_backward = env.unwrapped.reward_backward
-            loss = env.unwrapped.loss_discrim_heading
+            loss = env.unwrapped.loss_discrim_energy
             loss_disc = torch.tensor([loss.item()], device=rew_backward.device) if loss is not None else torch.zeros_like(rew_energy)
             
 

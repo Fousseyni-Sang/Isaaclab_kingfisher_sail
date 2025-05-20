@@ -419,6 +419,7 @@ class Aerodynamics:
         self.max_cl = torch.max(cl_clean)
 
         idx_stall = torch.argmax(cl_clean)
+        idx_min_Cl = torch.argmin(cl_clean)
         idx_min = torch.argmin(cl_clean)
 
         alpha_stall = a_clean[idx_stall].item()
@@ -428,6 +429,8 @@ class Aerodynamics:
         #print(idx_stall, np.max(cl_clean), cl_clean, a_clean) =======> VALID 
         Cd_stall = cd_clean[idx_stall].item()
         Cl_stall = cl_clean[idx_stall].item()
+        Cl_min = cl_clean[idx_min_Cl].item()
+        #print(f"cl: {Cl_stall} cl_min: {Cl_min} alpha_stall: {alpha_stall} alpha_min: {alpha_min}")
         alpha_to_90 = torch.linspace(alpha_stall, 90, 50)
         #print(alpha_to_90)
         # Viterna Corigan methods for extrapolation
@@ -435,10 +438,15 @@ class Aerodynamics:
 
         alpha_n_90_to_180 = torch.linspace(-180, -90, 66)
         alpha_p_90_to_180 = torch.linspace(90, 180, 66)
-
+        
         AR = 5
         CL_to_90, CD_to_90 = self.generate_viterna_coeff((np.pi/180)*alpha_to_90, AR, Cl_stall, Cd_stall, (np.pi/180)*alpha_stall)
-        CL_below_min_90, CD_below_min_90 = self.generate_viterna_coeff((np.pi/180)*alpha_below_min_90, AR, Cl_stall, Cd_stall, (np.pi/180)*alpha_stall)
+        mask = alpha_to_90<20
+        CL_to_90[~mask] = 0.1*Cl_stall*torch.rand_like(CL_to_90[~mask])
+        #print(CL_to_90)
+        CL_below_min_90, CD_below_min_90 = self.generate_viterna_coeff((np.pi/180)*alpha_below_min_90, AR, Cl_min, Cd_stall, (np.pi/180)*alpha_min)
+        mask = torch.abs(alpha_below_min_90)<20
+        CL_below_min_90[~mask] = 0.1*Cl_stall*torch.rand_like(CL_below_min_90[~mask])
         CL_90_to_0 = torch.concatenate((CL_below_min_90, cl_clean[idx_min:idx_zero]))
         CD_90_to_0 = torch.concatenate((CD_below_min_90, cd_clean[idx_min:idx_zero]))
         #CD_90_to_0[::-1]
@@ -447,18 +455,11 @@ class Aerodynamics:
         Cd_concatenate = torch.concatenate((CD_90_to_0.flip(dims=(0, )), CD_below_min_90, cd_clean[idx_min+1:idx_stall], CD_to_90, CD_90_to_0))
         total_alpha = torch.concatenate((alpha_n_90_to_180, alpha_below_min_90, a_clean[idx_min+1:idx_stall], alpha_to_90, alpha_p_90_to_180))
 
-        """f_cl = interpolate.interp1d(total_alpha, Cl_concatenate, kind='linear', fill_value='extrapolate')
-        f_cd = interpolate.interp1d(total_alpha, Cd_concatenate, kind='linear', fill_value='extrapolate')"""
 
         self.lift_coeff_interpolator = LinearInterpolation(total_alpha, Cl_concatenate, self.device)
         self.drag_coeff_interpolator = LinearInterpolation(total_alpha, Cd_concatenate, self.device)
 
-        # Convert to tensors once, cache for use on GPU later
-        """total_alpha_torch = torch.tensor(total_alpha, dtype=torch.float32)
-        Cl_torch = torch.tensor(Cl_concatenate, dtype=torch.float32)
-        Cd_torch = torch.tensor(Cd_concatenate, dtype=torch.float32)"""
 
-        #return total_alpha_torch, Cl_torch, Cd_torch #f_cl, f_cd
     
     def generate_coeffs(self, angle_attack_alpha: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
@@ -472,26 +473,9 @@ class Aerodynamics:
         - Tuple of tensors: (coeff_L, coeff_D) each of shape (num_envs,).
         """
 
-        #total_alpha, cl_vals, cd_vals = self.get_coeffs_interpolators()
-
-        # Move lookup tables to same device as input (GPU)
-        """total_alpha = total_alpha.to(angle_attack_alpha.device)
-        cl_vals = cl_vals.to(angle_attack_alpha.device)
-        cd_vals = cd_vals.to(angle_attack_alpha.device)
-
-        coeff_L = linear_interp_1d(angle_attack_alpha, total_alpha, cl_vals)
-        coeff_D = linear_interp_1d(angle_attack_alpha, total_alpha, cd_vals)"""
-
         coeff_L = self.lift_coeff_interpolator.compute(angle_attack_alpha)
         coeff_D = self.drag_coeff_interpolator.compute(angle_attack_alpha)
 
-
-        """f_cl_interp, f_cd_interp = self.get_coeffs_interpolators()
-
-        coeff_L = torch.from_numpy(f_cl_interp(angle_attack_alpha.cpu().numpy())).to(self.device)
-        coeff_D = torch.from_numpy(f_cd_interp(angle_attack_alpha.cpu().numpy())).to(self.device)"""
-        """coeff_L = (2 * math.pi * angle_attack_alpha) / (1 + (2 / asp_ratio))
-        coeff_D = 0.2 * coeff_L  # Taken from "Sail Performance" by Marchaj, page 323"""
 
         return coeff_L, coeff_D
     

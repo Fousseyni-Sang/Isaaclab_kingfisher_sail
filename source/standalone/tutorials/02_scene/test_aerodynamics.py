@@ -24,7 +24,8 @@ aerodynamics = Aerodynamics(num_envs=1, device=device, cfg=aerodynamics_cfg)
 angle_of_attack = torch.linspace(-180, 180, 360, device=device)
 cl, cd = aerodynamics.generate_coeffs(angle_of_attack)
 
-"""plt.figure()
+# Open Aerodynamics figure:  xdg-open /tmp/cl_cd_aoa.png
+plt.figure()
 plt.plot(angle_of_attack.cpu(), cl.cpu(), '--', c='g', label="cl")
 plt.plot(angle_of_attack.cpu(), cd.cpu(), '--', c='y', label="cd")
 plt.xlabel("angle of attack (degree)")
@@ -44,5 +45,5 @@ plt.plot(cd.cpu(), cl.cpu(), c='grey', label="cl vs cd")
 plt.xlabel("cd")
 plt.ylabel("cl")
 plt.legend()
-plt.savefig("/tmp/cl_vs_cd.png")"""
+plt.savefig("/tmp/cl_vs_cd.png")
 
