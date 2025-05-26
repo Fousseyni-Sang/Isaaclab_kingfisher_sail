@@ -60,11 +60,11 @@ params:
     schedule_type: legacy
     kl_threshold: 0.016
     score_to_win: 20000000
-    max_epochs: 700
+    max_epochs: 400
     save_best_after: 25
-    save_frequency: 100
+    save_frequency: 50
     grad_norm: 1.0
-    entropy_coef: 0.00
+    entropy_coef: 0.0015
     truncate_grads: True
     e_clip: 0.2
     horizon_length: 48

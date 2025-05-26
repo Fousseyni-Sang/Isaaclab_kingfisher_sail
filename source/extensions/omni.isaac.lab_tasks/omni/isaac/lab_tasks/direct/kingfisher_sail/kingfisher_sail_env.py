@@ -66,20 +66,121 @@ def cluster_context(context: torch.Tensor, device, n: int=5) -> torch.Tensor:
     
     return context
 
+import torch
 
-def get_desired_bearing(bearing: torch.Tensor, wind_direction: torch.Tensor) -> torch.Tensor:
+class TackManager:
+    def __init__(self, min_upwind_angle: float, max_downwind_angle: float, max_cross_track: float):
+        self.min_upwind_angle = min_upwind_angle
+        self.max_downwind_angle = max_downwind_angle
+        self.max_cross_track = max_cross_track
+
+        self.tack_mode = None  # 0 = no tack, 1/2 = upwind left/right, 3/4 = downwind left/right
+        self.desired_bearing = None
+
+    def reset(self, num_envs: int, device=None):
+        self.tack_mode = torch.zeros(num_envs, dtype=torch.long, device=device)
+        self.desired_bearing = torch.zeros(num_envs, device=device)
+
+    def get_desired_bearing(self, bearing: torch.Tensor, wind_direction: torch.Tensor, cross_track: torch.Tensor) -> torch.Tensor:
+        ks = bearing - wind_direction + torch.pi
+        ks = torch.atan2(torch.sin(ks), torch.cos(ks))
+
+        is_upwind = torch.abs(ks) < self.min_upwind_angle
+        is_downwind = torch.abs(ks) > self.max_downwind_angle
+        needs_switch = torch.abs(cross_track) > self.max_cross_track
+
+        # Compute possible target angles
+        desired_upwind_angle = torch.where(
+            torch.logical_and(cross_track > 0, needs_switch),
+            -self.min_upwind_angle + wind_direction + torch.pi,
+             self.min_upwind_angle + wind_direction + torch.pi,
+        )
+        desired_downwind_angle = torch.where(
+            torch.logical_and(cross_track > 0, needs_switch),
+             -self.max_downwind_angle + wind_direction + torch.pi,
+            self.max_downwind_angle + wind_direction + torch.pi,
+        )
+
+        # --- Start vectorized logic ---
+
+        # Enter tack if in up/downwind and not in tack mode
+        entering_upwind = is_upwind & (self.tack_mode == 0)
+        entering_downwind = is_downwind & (self.tack_mode == 0)
+
+        self.tack_mode = torch.where(
+            entering_upwind,
+            torch.where(cross_track > 0, torch.tensor(1, device=bearing.device), torch.tensor(2, device=bearing.device)),
+            self.tack_mode
+        )
+
+        self.tack_mode = torch.where(
+            entering_downwind,
+            torch.where(cross_track > 0, torch.tensor(3, device=bearing.device), torch.tensor(4, device=bearing.device)),
+            self.tack_mode
+        )
+
+        # Set desired bearing when entering tack
+        self.desired_bearing = torch.where(
+            entering_upwind, desired_upwind_angle, self.desired_bearing
+        )
+        self.desired_bearing = torch.where(
+            entering_downwind, desired_downwind_angle, self.desired_bearing
+        )
+
+        
+        # If already tacking and need to switch sides
+        switching_upwind = (self.tack_mode == 1) & needs_switch
+        switching_downwind = (self.tack_mode == 3) & needs_switch
+
+        self.tack_mode = torch.where(switching_upwind, torch.tensor(2, device=bearing.device), self.tack_mode)
+        self.tack_mode = torch.where(switching_downwind, torch.tensor(4, device=bearing.device), self.tack_mode)
+
+        self.desired_bearing = torch.where(switching_upwind, desired_upwind_angle, self.desired_bearing)
+        self.desired_bearing = torch.where(switching_downwind, desired_downwind_angle, self.desired_bearing)
+
+        #print(f"tack_mode: {self.tack_mode}, desired_bearing: {self.desired_bearing*(180/torch.pi)}\n")
+        # Exit tack mode if not upwind or downwind anymore
+        exit_tack = ~(is_upwind | is_downwind)
+        self.tack_mode = torch.where(exit_tack, torch.tensor(0, device=bearing.device), self.tack_mode)
+        self.desired_bearing = torch.where(exit_tack, bearing, self.desired_bearing)
+
+        return torch.atan2(torch.sin(self.desired_bearing), torch.cos(self.desired_bearing))  # wrap to [-π, π]
+
+
+def get_desired_bearing(bearing: torch.Tensor, wind_direction: torch.Tensor, min_upwind_angle:float, 
+                        max_downwind_angle:float, cross_track:torch.Tensor, max_cross_track:float, sail_mode:torch.Tensor, 
+                        in_tack_mode:torch.Tensor, tack_side:torch.Tensor):
     # Calculate the desired heading based on the bearing and wind direction
-    ks = bearing - wind_direction + torch.pi #direction_wind_robot
-    ks = torch.atan2(torch.sin(ks), torch.cos(ks))
 
-    is_upwind = torch.abs(ks)< 45*torch.pi/180 #135*torch.pi/180
-    is_downwind = torch.abs(ks)> 140*torch.pi/180 #45*torch.pi/180
+    is_upwind = sail_mode[:, 0]==1
+    is_downwind = sail_mode[:, 1]==1
+    is_nominal = sail_mode[:, 2]==1
 
-    bearing[is_upwind] = torch.pi/4
-    bearing[is_downwind] = torch.pi/4
+    # put tack_side to -1 if cross>0 and we're not already in tack_mode (to avoid flips every time) otherwise 
+    # 1 (if not in tack_mode still, this avoids conflict with the condiion of cross>max_cross_track)
+    tack_side = tack_side
+    tack_side = torch.where(torch.logical_and(cross_track>0, in_tack_mode==0), -1.0, 
+                            torch.where(torch.logical_and(cross_track<0, in_tack_mode==0), 1.0, tack_side))
+    
+    in_tack_mode = torch.where(is_nominal, 0, 1) # Check if in tack mode
+    
+    # switch tack side if in tack mode and cross_track > max_cross_track
+    need_switch = torch.logical_and(torch.abs(cross_track) > max_cross_track, in_tack_mode==1)
+
+    # Switch is you need to switch and only change side to the opposite. This is to avoid conflict with the first tack_side 
+    # condition above cos you're changiing only in tack mode
+    tack_side = torch.where(torch.logical_and(need_switch, tack_side==1), -tack_side, tack_side)
+    tack_side = torch.where(torch.logical_and(need_switch, tack_side==-1), -tack_side, tack_side)
+
+    desired_upwind_angle =   tack_side*min_upwind_angle + wind_direction
+    """desired_downwind_angle = torch.where(torch.logical_and(cross_track>0, need_switch), 
+                    max_downwind_angle + wind_direction + torch.pi, -max_downwind_angle + wind_direction + torch.pi)"""
+
+    bearing[is_upwind] = torch.atan2(torch.sin(desired_upwind_angle[is_upwind]), torch.cos(desired_upwind_angle[is_upwind]))
+    #bearing[sail_mode[:, 1]==1] = torch.atan2(torch.sin(desired_downwind_angle[is_downwind]), torch.cos(desired_downwind_angle[is_downwind]))
     
     #print(f"\nis_upwind: {is_upwind} \tis_downwind: {is_downwind}")
-    return bearing
+    return bearing, in_tack_mode, tack_side
 
 def tack_corridor_reward(p_boat:torch.Tensor, p_k:torch.Tensor, p_k1:torch.Tensor, corridor_width, margin=0.0):
     
@@ -115,7 +216,7 @@ class KingfisherSailEnvCfg(DirectRLEnvCfg):
     decimation = 3
     step_dt = physics_dt * decimation  # 20 Hz
     action_space = 3
-    observation_space = 15
+    observation_space = 17
     state_space = 0
     debug_vis = True
 
@@ -168,10 +269,10 @@ class KingfisherSailEnvCfg(DirectRLEnvCfg):
     aerodynamics_cfg.wing_span = 1
     aerodynamics_cfg.wing_chord = 0.2
     aerodynamics_cfg.wind_direction = -90*torch.pi/180
-    aerodynamics_cfg.wind_speed = 5
+    aerodynamics_cfg.wind_speed = 8
     aerodynamics_cfg.angle_of_attack = 20*torch.pi/180
     aerodynamics_cfg.min_upwind_angle = 45*torch.pi/180
-    aerodynamics_cfg.min_downwind_angle = 20*torch.pi/180
+    aerodynamics_cfg.max_downwind_angle = 140*torch.pi/180
     
 
     # Hydrostatics
@@ -278,9 +379,10 @@ class KingfisherSailEnvCfg(DirectRLEnvCfg):
     goal_reached_threshold = 0.1
     goal_reached_scale = 100.0 # 150
 
-    energy_penalty_scale = -0.08 #-0.08  #-0.001
+    energy_penalty_scale = -0.2 #-0.08  #-0.001
     backwards_penalty_scale = -0.05
-    time_penalty_scale = -0.008 #-1
+    time_penalty_scale = -1 #-0.008 #
+    penalty_inefficient_sailing_scale = -0.1
     tack_penalty_scale = -1
     bearing_penalty_scale = 0.001 #1.0
     beargin_penalty_coef = -0.5 #-4
@@ -293,6 +395,7 @@ class KingfisherSailEnvCfg(DirectRLEnvCfg):
     max_target_distance = 60.0
     min_target_bearing = 0 #-torch.pi / 2
     max_target_bearing = 5*torch.pi/180 #torch.pi / 2
+    max_cross_track = 8.0
 
 
 
@@ -375,6 +478,7 @@ class KingfisherSailEnv(DirectRLEnv):
         self.desired_pos_b = torch.zeros(self.num_envs, 2, device=self.device)
         self.desired_trajectory_b = torch.zeros(self.num_envs, 10, 2) # 10 pts
         self.desired_speed_b = torch.zeros(self.num_envs, device=self.device)
+        self.desired_bearing = torch.zeros(self.num_envs, device=self.device)
 
         self.is_upwind = torch.zeros(self.num_envs, device=self.device)
         self.is_downwind = torch.zeros(self.num_envs, device=self.device)
@@ -423,6 +527,12 @@ class KingfisherSailEnv(DirectRLEnv):
         self.normalized_energy = torch.zeros(self.num_envs, device=self.device)
 
         self.corridor_width = torch.ones(self.num_envs, device=self.device)
+
+        self.tack_manager = TackManager(min_upwind_angle=self._aerodynamics.cfg.min_upwind_angle, 
+                        max_downwind_angle=self._aerodynamics.cfg.max_downwind_angle, max_cross_track=3.0)
+        self.tack_manager.reset(num_envs=self.num_envs, device=self.device)
+        self.tack_side = torch.ones(self.num_envs, device=self.device)
+        self.in_tack_mode = torch.ones(self.num_envs, device=self.device)
 
         # ============================================================================================#
         # ======================== Markers for the wind visualization ================================#
@@ -517,8 +627,11 @@ class KingfisherSailEnv(DirectRLEnv):
             sail_wing_action_scale = 0.01 * torch.pi  # Small increment per timestep
             self.sail_angle = sail_wing_action_scale * actions[:, 2:3]  # Shape: (num_envs, 1)
 
-            # Compute the new joint target: current + increment, wrapped to [-2π, 2π]
-            self.joint_pos_target = (current_joint_pos + self.sail_angle + 2 * torch.pi) % (4 * torch.pi) - 2 * torch.pi
+            max_angle = torch.pi / 2  # or other joint limit
+            self.joint_pos_target = actions[:, 2:3] * max_angle
+
+            """# Compute the new joint target: current + increment, wrapped to [-2π, 2π]
+            self.joint_pos_target = (current_joint_pos + self.sail_angle + 2 * torch.pi) % (4 * torch.pi) - 2 * torch.pi"""
 
             # For AoA calculation, map the joint to [-π, π]
             joint_pos_mapped_pi = (self.joint_pos_target + torch.pi) % (2 * torch.pi) - torch.pi
@@ -572,15 +685,15 @@ class KingfisherSailEnv(DirectRLEnv):
 
     def _apply_action(self):
         sail_wing_force_b = self._aerodynamic_force_b.clone()
-
+        # only apply thruster forces if they are not zero, otherwise it disables external previous forces.
+        lft_thruster_force = self._thruster_forces[..., 3:]
+        rgt_thruster_force = self._thruster_forces[..., :3] #self._thruster_forces[..., 3:] #-
+        torque = torch.zeros_like(self._no_torque)
+        torque[:, 0, 2] = lft_thruster_force[:, 0, 0] 
         combined = self._hydrostatic_force + self._hydrodynamic_force
         combined[:, 0, :3] = combined[:, 0, :3] + sail_wing_force_b[:, 0, :]
+        combined[:, 0, 3:] = combined[:, 0, 3:] + torque[:, 0, :]
         self._robot.set_external_force_and_torque(combined[..., :3], combined[..., 3:], body_ids=self._base_link)
-
-        # only apply thruster forces if they are not zero, otherwise it disables external previous forces.
-        lft_thruster_force = self._thruster_forces[..., :3]
-        rgt_thruster_force = self._thruster_forces[..., 3:] #-self._thruster_forces[..., :3] #
-        
 
         apply_mask = self.episode_energy <= self.max_available_episode_energy
         env_ids = torch.nonzero(apply_mask, as_tuple=False).squeeze(-1)
@@ -596,10 +709,13 @@ class KingfisherSailEnv(DirectRLEnv):
             """lft_thruster_force[random_mask_left] = 0.0
             rgt_thruster_force[random_mask_right] = 0.0"""
 
-
-        if lft_thruster_force.any():
+        """if lft_thruster_force.any():
             self._robot.set_external_force_and_torque(
                 lft_thruster_force, self._no_torque, body_ids=self._left_thruster_id
+            )"""
+        if rgt_thruster_force.any():
+            self._robot.set_external_force_and_torque(
+                rgt_thruster_force, self._no_torque, body_ids=self._left_thruster_id
             )
         if rgt_thruster_force.any():
             self._robot.set_external_force_and_torque(
@@ -641,15 +757,28 @@ class KingfisherSailEnv(DirectRLEnv):
         self.distance = torch.linalg.norm(self.desired_pos_b, dim=1)
         self.bearing = torch.atan2(self.desired_pos_b[:, 1], self.desired_pos_b[:, 0])
         
-        ks = self.bearing - self._aerodynamics.Beta_w + torch.pi #direction_wind_robot
+        direction_wind_robot = torch.atan2(self._aerodynamics.true_wind_speed2D_b[:, 1], self._aerodynamics.true_wind_speed2D_b[:, 0])
+        ks = self.bearing - direction_wind_robot + torch.pi
         ks = torch.atan2(torch.sin(ks), torch.cos(ks))
         
-        desired_bearing = get_desired_bearing(self.bearing, self._aerodynamics.Beta_w)
+        #desired_bearing = # In your control loop:
+        #self.desired_bearing = self.tack_manager.get_desired_bearing(self.bearing, self._aerodynamics.Beta_w, self.cross_track_error)
         
-        #print(f"\ndesired_bearing: {(180/torch.pi)*desired_bearing} \tks: {(180/torch.pi)*ks} \twind: {(180/torch.pi)*self._aerodynamics.Beta_w}")
-        #print(f"cross: {self.cross_track_error}")
-        #print(f"bearing: {(180/torch.pi)*self.bearing} \tks: {(180/torch.pi)*ks} \twind: {(180/torch.pi)*self._aerodynamics.Beta_w}")
-        #print((self.episode_energy/((self.episode_length_buf+1)*self.cfg.max_energy)).reshape(self.num_envs, -1))
+        sailing_mode = torch.zeros((self.num_envs, 3), device=self.device)
+        upwind_mask = (torch.abs(ks) < self._aerodynamics.cfg.min_upwind_angle) 
+        downwind_mask = (torch.abs(ks) > self._aerodynamics.cfg.max_downwind_angle) 
+        sailing_mode[upwind_mask, 0] = 1.0
+        sailing_mode[downwind_mask, 1] = 1.0
+        sailing_mode[~upwind_mask & ~downwind_mask, 2] = 1.0
+        RAD2DEG = 180.0 / torch.pi
+        self.in_tack_mode = torch.where(sailing_mode[:, 2] == 0, 1.0, 0)
+        self.bearing, self.in_tack_mode, self.tack_side = get_desired_bearing(self.bearing, self._aerodynamics.Beta_w, self._aerodynamics.cfg.min_upwind_angle, 
+                self._aerodynamics.cfg.max_downwind_angle, self.cross_track_error, self.cfg.max_cross_track, sailing_mode,
+                self.in_tack_mode, self.tack_side)
+        
+        """print(f"\nbearing: {RAD2DEG*self.bearing} \tks: {RAD2DEG*ks} \tsailing_mode: {sailing_mode}")
+        print(f"cross_track_error: {self.cross_track_error} \ttack_side: {self.tack_side} \tin_tack_mode: {self.in_tack_mode}\n")"""
+        
         sampling_rate = 400
         left_thruster_enabled = torch.ones_like(self.thruster_left_randn)
         right_thruster_enabled = torch.ones_like(self.thruster_left_randn)
@@ -686,14 +815,6 @@ class KingfisherSailEnv(DirectRLEnv):
         penalty, cross = tack_corridor_reward(p_boat=self._robot.data.root_link_pos_w[:, :2], 
                     p_k=self.initial_robot_pos[:, :2], p_k1=self._desired_pos_w[:, :2], corridor_width=8*self.corridor_width)
         self.cross_track_error = cross.clone()
-        """obs = torch.cat(
-            [
-                self.normalized_energy.reshape(self.num_envs, -1), # 1,
-                self.energy_context.reshape(self.num_envs, -1), # 1
-                
-            ],
-            dim=1,
-        )"""
         
         obs = torch.cat(
             [
@@ -708,11 +829,13 @@ class KingfisherSailEnv(DirectRLEnv):
                 torch.sin(self._aerodynamics.apparent_wind_angle).reshape(self.num_envs, -1), # 1
                 torch.norm(self._aerodynamics.apparent_wind_speed_b, dim=-1).reshape(self.num_envs, -1), # 1
                 self.cross_track_error.reshape(self.num_envs, -1), #1
-                self.energy_context.reshape(self.num_envs, -1), #1
+                sailing_mode.reshape(self.num_envs, -1), #3
                 
             ],
             dim=1,
         )
+        #self.energy_context.reshape(self.num_envs, -1), #1
+        #desired_bearing.reshape(self.num_envs, -1), # 1
         #left_thruster_enabled.reshape(self.num_envs, -1), #1
         #right_thruster_enabled.reshape(self.num_envs, -1), #1
    
@@ -754,7 +877,8 @@ class KingfisherSailEnv(DirectRLEnv):
         
         current_robot_pos = self._robot.data.root_link_pos_w.clone()
         self.position_progress = current_robot_pos - self.previous_robot_pos
-        grad_direction = self._desired_pos_w - self.previous_robot_pos
+        grad_direction = self._desired_pos_w - self.previous_robot_pos #self.initial_robot_pos
+        grad_direction = grad_direction / torch.norm(grad_direction, dim=-1, keepdim=True)
         # Distance progress
         self.distance_progress = torch.sum(self.position_progress*grad_direction, dim=-1)/torch.norm(grad_direction, dim=-1) 
         #self.previous_distance - self.distance #
@@ -765,22 +889,21 @@ class KingfisherSailEnv(DirectRLEnv):
         distance_progress_reward =  distance_progress_norm * self.cfg.distance_progress_reward_scale #*self.step_dt
         self.reward_progress = distance_progress_reward.clone()
         distance_progress_reward = distance_progress_reward.clone()
+
+
         # Downwind and upwind condition check
-        direction_wind_robot = torch.atan2(self._aerodynamics.true_wind_speed2D_b[:, 1], self._aerodynamics.true_wind_speed2D_b[:, 0]) 
-        #print(f"angle: {torch.atan2()}")
-        ks = self.bearing - self._aerodynamics.Beta_w #direction_wind_robot
+        direction_wind_robot = torch.atan2(self._aerodynamics.true_wind_speed2D_b[:, 1], self._aerodynamics.true_wind_speed2D_b[:, 0])
+        ks = direction_wind_robot + torch.pi
         ks = torch.atan2(torch.sin(ks), torch.cos(ks))
-
+        
         DEG2RAD = torch.pi/180
+        #print(f"wind: {direction_wind_robot*(180/torch.pi)} \tbearing: {self.bearing*(180/torch.pi)} \tks: {ks*(180/torch.pi)}")
         #condition = (torch.cos(torch.pi/4*torch.ones_like(direction_wind_robot)) - torch.abs(torch.cos(direction_wind_robot)) < 0)
-        self.is_upwind = torch.abs(ks)>135*DEG2RAD
-        self.is_downwind = torch.abs(ks)<45*DEG2RAD
+        self.is_upwind = torch.abs(ks)<self._aerodynamics.cfg.min_upwind_angle
+        self.is_downwind = torch.abs(ks)>self._aerodynamics.cfg.max_downwind_angle
         condition = torch.logical_or(self.is_downwind, self.is_upwind)
-        #print(f"condition: {condition} \tupwind: {self.is_upwind} \tdownwind: {self.is_downwind}")
-        #print(direction_wind_robot*(180/torch.pi))
-        upwind_deviation = (torch.abs(ks)-135*DEG2RAD)/(135*DEG2RAD)
-        downwind_deviation = ((45*DEG2RAD) - torch.abs(ks))/(45*DEG2RAD)
-
+        
+        
         """distance_progress_reward[self.is_upwind] *= upwind_deviation[self.is_upwind]
         distance_progress_reward[self.is_downwind] *= downwind_deviation[self.is_downwind]"""
         #print(f"direction: {direction_wind_robot*(180/torch.pi)} \tcondition: {condition}")
@@ -789,7 +912,7 @@ class KingfisherSailEnv(DirectRLEnv):
         # self.cfg.distance_progress_reward_scale*self.distance_progress #
         
         # Energy
-        self.energy = torch.sum(torch.square(self._actions[:, :2]), dim=1)
+        self.energy = torch.sum(torch.square(self._actions[:, :1]), dim=1)
         self.episode_energy += self.energy
         #-torch.sum(torch.square(self._actions[:, -1:]), dim=1)
         
@@ -798,9 +921,10 @@ class KingfisherSailEnv(DirectRLEnv):
         goal_reward[self.distance < self.cfg.goal_reached_threshold] = self.cfg.goal_reached_scale
 
         # Goal passed
-        #timeout = self.episode_length_buf >= self.max_episode_length - 1
-        #goal_reward[timeout] = -((self.distance/self.initial_distance)*self.cfg.goal_reached_scale)[timeout]
-        #print(goal_reward)
+        goal_passed = torch.sum((self._desired_pos_w[:, :2] - self.initial_robot_pos[:, :2])*(self._robot.data.root_link_pos_w[:, :2] \
+        - self.initial_robot_pos[:, :2]), dim=-1)>torch.square(torch.norm(self._desired_pos_w[:, :2] - self.initial_robot_pos[:, :2], dim=-1))+3
+        goal_reward[goal_passed] = -0.1*self.cfg.goal_reached_scale
+
         # Penalize going backwards
         backwards_penalty = torch.zeros(self.num_envs, device=self.device)
         root_lin_vel_b_x = self._robot.data.root_lin_vel_b[:, 0]
@@ -814,17 +938,18 @@ class KingfisherSailEnv(DirectRLEnv):
         
         energy_norm = self.energy * self.step_dt / self.cfg.max_energy
         #energy_reward = torch.zeros_like(energy_norm)
-        energy_reward = self.cfg.energy_penalty_scale * energy_norm * self.energy_context
+        energy_reward = self.cfg.energy_penalty_scale * energy_norm #* self.energy_context
         self.reward_energy = energy_reward.clone()
         mask = root_lin_vel_b_x > self.cfg.max_robot_speed
         #energy_reward[mask] = 100*self.cfg.energy_penalty_scale * energy_norm[mask] #+ torch.abs(root_lin_vel_b_x-self.cfg.max_robot_speed)[mask])
         #print((torch.abs(self.previous_distance - self.distance)/torch.norm(self._robot.data.root_lin_vel_b, dim=-1)) * self.cfg.time_penalty_scale * self.step_dt * self.time_context)
         # Penalize bearing errors
         root_vel_w = self._robot.data.root_lin_vel_w.clone()
-        bearing_penalty = torch.zeros_like(self.bearing) #torch.exp(self.cfg.beargin_penalty_coef * torch.abs(self.bearing)) - 1
-        bearing_penalty = torch.sum(root_vel_w*(grad_direction), dim=-1)/(torch.norm(grad_direction, dim=-1)*torch.norm(root_vel_w, dim=-1))
-        bearing_penalty = 0.1*bearing_penalty*self.step_dt
+        bearing_penalty = torch.exp(self.cfg.beargin_penalty_coef * torch.abs(self.bearing)) - 1
+        #bearing_penalty = torch.sum(root_vel_w*(grad_direction), dim=-1)/(torch.norm(grad_direction, dim=-1)*torch.norm(root_vel_w, dim=-1))
+        #bearing_penalty = 0.1*bearing_penalty*self.step_dt
         #bearing_penalty[condition] = 0.01*bearing_penalty[condition]
+        #torch.zeros_like(self.bearing) #
 
         lift_drag_ratio = 0.1*torch.max(torch.zeros_like(self._aerodynamics.lift_coeff), self._aerodynamics.lift_coeff/self._aerodynamics.drag_coeff)
         lift_ratio = torch.max(torch.zeros_like(self._aerodynamics.lift_coeff), self._aerodynamics.lift_coeff/self._aerodynamics.max_cl)
@@ -833,20 +958,20 @@ class KingfisherSailEnv(DirectRLEnv):
         self.reward_bearing = bearing_penalty.clone()
         #self.episode_avg_lift_drag_ratio += 
         #print(f"max_ratio: {self._aerodynamics.max_cl_cd_ratio}")
-        #print(f"lift: {self._aerodynamics.lift_coeff} \tdrag: {self._aerodynamics.drag_coeff} \tratio: {ratio_reward}")
+        #print(f"\nlift: {self._aerodynamics.lift_coeff} \tratio: {lift_ratio} \tratio_rew: {ratio_reward}")
         
         # Don't penalize if too close to the goal as the bearing becomes unstable
         # bearing_penalty[self.distance < 0.2] = 0.0
         # Time
         time = torch.ones_like(self.energy) #torch.abs(self.previous_distance - self.distance)/torch.norm(self._robot.data.root_lin_vel_b, dim=-1)
-        time_reward = self.cfg.time_penalty_scale * time * self.step_dt * (1- self.energy_context)
+        time_reward = self.cfg.time_penalty_scale * time * self.step_dt #* (1- self.energy_context)
         #self.cfg.time_penalty_scale * self.step_dt * self.time_context * torch.ones(self.num_envs, device=self.device) 
         
         reward_speed = self.cfg.speed_penalty_scale*(torch.square(root_lin_vel_b_x - self.desired_speed_b))*self.step_dt
         self.reward_energy = reward_speed.clone()
 
         penalty_inefficient_sailing = torch.zeros_like(reward_speed)
-        penalty_inefficient_sailing[torch.logical_or(self.is_downwind, self.is_upwind)] = self.cfg.time_penalty_scale*self.step_dt
+        penalty_inefficient_sailing[condition] = 0.5*self.cfg.penalty_inefficient_sailing_scale*self.step_dt*torch.norm(self._aerodynamics.Uw, dim=-1)
         self.reward_backward = penalty_inefficient_sailing.clone()
         #print(f"time: {time_reward}")
         #print(f"distance_progress: {distance_progress_reward} \ttime: {time_reward} \tenergy: {energy_reward}")
@@ -880,9 +1005,18 @@ class KingfisherSailEnv(DirectRLEnv):
         self.reward_backward = reward_acord.clone()
         
         tack_reward = torch.zeros_like(energy_reward)
-        mask = torch.abs(self.cross_track_error)>8
+        mask = torch.abs(self.cross_track_error)>5
         tack_reward[mask] = self.cfg.tack_penalty_scale*self.step_dt
-        
+
+        aerodynamic_force_b = self._aerodynamics.wind_lift_b.clone().reshape_as(self._aerodynamic_force_b)
+        aerodynamic_force_world = transform_points(aerodynamic_force_b, 
+                quat=self._robot.data.body_state_w[:, self._base_link, 3:7].reshape(self.num_envs, -1), pos=None)
+        #print(f"inefficient_sailing: {penalty_inefficient_sailing} ")
+        #print(f"{(self._desired_pos_w).shape}, {self.initial_robot_pos.shape} ,{aerodynamic_force_world[:, 0, :2].shape}")
+        force_dot_dist = 0.01*self.step_dt*torch.sum(aerodynamic_force_world[:, 0, :2]*(self._desired_pos_w-self.initial_robot_pos)[:, :2],
+                                     dim=-1)/torch.norm(self._desired_pos_w-self._robot.data.root_link_pos_w, dim=-1)
+        #force_dot_dist = torch.where(force_dot_dist>0, force_dot_dist, (self.distance/self.initial_distance)*force_dot_dist)
+        #print(f"force_dot_dist: {force_dot_dist} : \t{(self._desired_pos_w-self.initial_robot_pos)[:, :2]} \t{self._aerodynamic_force_b[:, 0, :2]}")
         #self.cross_track_error = cross.clone()
         #print(f"tack_reward: {tack_reward} \tcross: {self.cross_track_error}: {8*self.corridor_width} \tmask: {mask}")
         #print(f"reward_acord: {reward_acord}")
@@ -892,10 +1026,10 @@ class KingfisherSailEnv(DirectRLEnv):
             "2_goal_reached": goal_reward,
             "3_energy": energy_reward,
             "4_backwards": 0*backwards_penalty,
-            "5_bearing_penalty": 0*reward_acord,
+            "5_bearing_penalty": 0.*bearing_penalty,
             "6_time": time_reward,
             "7_tack_penalty": tack_reward,
-            "8_lift_drag_ratio": ratio_reward,
+            "8_lift_drag_ratio": force_dot_dist,
         }
         # #"6_time": time_reward
         self.previous_distance = self.distance.clone()
@@ -919,7 +1053,7 @@ class KingfisherSailEnv(DirectRLEnv):
         self.bearing = torch.atan2(self.desired_pos_b[:, 1], self.desired_pos_b[:, 0])
 
         goal_passed = torch.sum((self._desired_pos_w[:, :2] - self.initial_robot_pos[:, :2])*(self._robot.data.root_link_pos_w[:, :2] \
-        - self.initial_robot_pos[:, :2]), dim=-1)>torch.square(torch.norm(self._desired_pos_w[:, :2] - self.initial_robot_pos[:, :2], dim=-1))+1
+        - self.initial_robot_pos[:, :2]), dim=-1)>torch.square(torch.norm(self._desired_pos_w[:, :2] - self.initial_robot_pos[:, :2], dim=-1))+3
         
         # Finish episode if the goal is reached
         done = torch.zeros_like(time_out)
@@ -984,9 +1118,25 @@ class KingfisherSailEnv(DirectRLEnv):
         self.bearing[env_ids] = self.initial_bearing[env_ids]
         self.previous_bearing = self.initial_bearing[env_ids]
 
+        mask1 = torch.any(self.episode_number[env_ids] < 50)
+        mask2 = torch.any(torch.logical_and(self.episode_number[env_ids] >= 50 , self.episode_number[env_ids] < 150))
+        mask3 = torch.any(self.episode_number[env_ids] >= 150)
+
+        if self.is_Training:
+            if mask1:
+                self.cfg.max_target_distance = 10
+                self.cfg.min_target_distance = 5
+            elif mask2:
+                self.cfg.max_target_distance = 25
+                self.cfg.min_target_distance = 15
+            elif mask3:
+                self.cfg.max_target_distance = 60
+                self.cfg.min_target_distance = 20
+
         self.initial_distance[env_ids] = torch.zeros_like(self._desired_pos_w[env_ids, 0]).uniform_(
             self.cfg.min_target_distance, self.cfg.max_target_distance
         )
+    
         self.distance[env_ids] = self.initial_distance[env_ids]
         self.previous_distance[env_ids] = self.initial_distance[env_ids]
         self._desired_pos_w[env_ids, 0] = torch.cos(self.initial_bearing[env_ids]) * self.initial_distance[env_ids]
@@ -1012,17 +1162,20 @@ class KingfisherSailEnv(DirectRLEnv):
                             std=0.5*torch.ones_like(self.progress_context[env_ids]))), device=self.device)
             
             self.desired_speed_b[env_ids] = torch.zeros_like(self.desired_speed_b[env_ids]).uniform_(0.2, 1.5)
-
+            
             random = torch.rand_like(self.episode_number[env_ids])
 
-            upwind = torch.logical_and(random > 0.4, random < 0.85)
-            downwind = random > 0.85
+            #upwind = torch.logical_and(random > 0.2, torch.logical_and(random <= 0.6, self.episode_number[env_ids] > 200))
+            upwind = torch.logical_and(random > 0.2, random <= 0.8)
+            #downwind = torch.logical_and(random > 0.6,  self.episode_number[env_ids] > 200)
+            downwind = random > 0.8
             self._aerodynamics.reset_wind_condition(env_ids=env_ids, randomize_direction=True, randomize_speed=True, upwind=upwind, downwind=downwind)
 
             self.thruster_left_randn[env_ids] = torch.zeros_like(self.thruster_left_randn[env_ids]).uniform_(0, 1)
             self.thruster_right_randn[env_ids] = torch.zeros_like(self.thruster_right_randn[env_ids]).uniform_(0, 1)
 
-
+        self.tack_side[env_ids] = torch.ones_like(self.tack_side[env_ids])
+        self.in_tack_mode = torch.zeros_like(self.in_tack_mode[env_ids])
         self.episode_number[env_ids]  = self.episode_number[env_ids] + 1 
         self.episode_energy[env_ids] = 0
         self.episode_avg_speed[env_ids] = 0

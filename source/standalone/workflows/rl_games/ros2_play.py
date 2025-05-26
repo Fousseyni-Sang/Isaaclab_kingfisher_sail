@@ -181,6 +181,8 @@ def main():
         desired_speed = slider_node.reward_weights["desired_speed"]
         wind_direc = slider_node.reward_weights["wind_direct"]*(torch.pi/180)
         wind_speed = slider_node.reward_weights["wind_speed"] if slider_node.reward_weights["wind_speed"] else 1e-6
+        goal_pos = slider_node.reward_weights["goal"]
+        env.unwrapped.cfg.min_target_distance *= goal_pos
         wind_modulo = (wind_direc + torch.pi)%(2*torch.pi) - torch.pi
         env.unwrapped._aerodynamics.update_wind(wind_direction=wind_modulo)
         env.unwrapped.energy_context[:] = energy_context

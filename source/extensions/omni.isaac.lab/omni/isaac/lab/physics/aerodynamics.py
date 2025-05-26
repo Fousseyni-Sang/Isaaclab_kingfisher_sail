@@ -35,7 +35,7 @@ class AerodynamicsCfg:
     wind_direction:float = MISSING # rad/s
     wind_speed:float = MISSING # m/s
     min_upwind_angle:float = MISSING # m/s # Minimum upwind tolerable angle
-    min_downwind_angle:float = MISSING # m/s # Minimum downwind tolerable angle
+    max_downwind_angle:float = MISSING # m/s # Maximum downwind tolerable angle
 
     angle_of_attack: float = MISSING # angle of attack of the sail w.r.t wind
 
@@ -495,12 +495,12 @@ class Aerodynamics:
         #print(f"sail: {angle*(180/torch.pi)} \tapp_ang: {apparent_wind_angle*(180/torch.pi)} \t aoa: {angle_of_attack*(180/torch.pi)}")
         return angle
     
-    def reset_wind_condition(self, env_ids, upwind: torch.Tensor | bool=False, downwind: torch.Tensor | bool=False, 
+    """def reset_wind_condition(self, env_ids, upwind: torch.Tensor | bool=False, downwind: torch.Tensor | bool=False, 
                              randomize_direction=False, randomize_speed=False):
-        """ randomize wind direction between 0 and 2*pi if params randomize=True 
+        randomize wind direction between 0 and 2*pi if params randomize=True 
             upwind: a tensor of boolean or simply a boolean indicating which environments should be upwind
             downwind: a tensor of boolean or simply a boolean indicating which environments should be downwind
-        """
+        
         if randomize_direction:
             self.Beta_w [env_ids] = torch.pi*torch.zeros_like(self.Beta_w[env_ids]).uniform_(-1, 1)
             
@@ -513,7 +513,69 @@ class Aerodynamics:
         if randomize_speed:
             self.Uw[env_ids] = torch.pi*torch.zeros_like(self.Beta_w[env_ids]).uniform_(self.cfg.wind_speed, self.cfg.wind_speed + 3)
 
+        return"""
+    
+    def reset_wind_condition(self, env_ids, 
+                         upwind: torch.Tensor | bool = False,
+                         downwind: torch.Tensor | bool = False,
+                         beam: torch.Tensor | bool = False,
+                         close: torch.Tensor | bool = False,
+                         broad: torch.Tensor | bool = False,
+                         randomize_direction=False, 
+                         randomize_speed=False):
+        """
+        Randomize wind direction and/or speed for selected environments.
+        
+        Parameters:
+        - env_ids: indices of environments to update
+        - upwind: wind from ±180° (against ASV)
+        - downwind: wind from 0° (from behind)
+        - beam: wind from ±90°
+        - close: wind from ±45°
+        - broad: wind from ±135°
+        - randomize_direction: randomize direction uniformly
+        - randomize_speed: randomize speed from cfg.wind_speed to cfg.wind_speed + 3
+        """
+
+        num_envs = len(env_ids)
+
+        # Initialize with random direction if requested
+        if randomize_direction:
+            self.Beta_w[env_ids] = torch.pi * torch.zeros_like(self.Beta_w[env_ids]).uniform_(-1, 1)
+
+        # Define masks
+        def to_tensor(val):
+            return val if isinstance(val, torch.Tensor) else torch.full((num_envs,), val, dtype=torch.bool, device=self.device)
+
+        upwind_mask = to_tensor(upwind)
+        downwind_mask = to_tensor(downwind)
+        beam_mask = to_tensor(beam)
+        close_mask = to_tensor(close)
+        broad_mask = to_tensor(broad)
+
+        # Overwrite direction for each condition
+        if upwind_mask.any():
+            self.Beta_w[env_ids][upwind_mask] = torch.full_like(self.Beta_w[env_ids][upwind_mask], torch.pi)
+
+        if downwind_mask.any():
+            self.Beta_w[env_ids][downwind_mask] = 0.0
+
+        if beam_mask.any():
+            self.Beta_w[env_ids][beam_mask] = torch.pi / 2 * torch.randint_like(self.Beta_w[env_ids][beam_mask], low=-1, high=2)
+
+        if close_mask.any():
+            self.Beta_w[env_ids][close_mask] = (torch.pi / 4) * torch.randint_like(self.Beta_w[env_ids][close_mask], low=-1, high=2)
+
+        if broad_mask.any():
+            self.Beta_w[env_ids][broad_mask] = (3 * torch.pi / 4) * torch.randint_like(self.Beta_w[env_ids][broad_mask], low=-1, high=2)
+
+        # Randomize speed
+        if randomize_speed:
+            self.Uw[env_ids] = torch.empty_like(self.Uw[env_ids]).uniform_(
+                self.cfg.wind_speed, self.cfg.wind_speed + 5)
+
         return
+
 
     def update_wind(self, wind_direction:float | None = None, wind_speed:float | None = None, env_ids: torch.Tensor | None = None):
         """
