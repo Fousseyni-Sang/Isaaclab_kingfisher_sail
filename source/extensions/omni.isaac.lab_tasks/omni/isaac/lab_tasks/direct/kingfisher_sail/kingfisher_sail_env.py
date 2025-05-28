@@ -373,7 +373,7 @@ class KingfisherSailEnvCfg(DirectRLEnvCfg):
 
     # reward scales
     distance_reward_scale = 0.0
-    distance_progress_reward_scale = 15 #5 # 6 too much
+    distance_progress_reward_scale = 35 #5 # 6 too much
     bearing_progress_reward_scale = 0.0
 
     goal_reached_threshold = 0.1
@@ -427,7 +427,6 @@ class KingfisherSailEnv(DirectRLEnv):
         }
         # Get specific body indices
         self._base_link = self._robot.find_bodies("base_link")[0]
-
         self._left_thruster_id = self._robot.find_bodies("thruster_left")[0]
         self._right_thruster_id = self._robot.find_bodies("thruster_right")[0]
         self._sail_wing_id = self._robot.find_bodies("sailwing")[0]
@@ -713,14 +712,14 @@ class KingfisherSailEnv(DirectRLEnv):
             self._robot.set_external_force_and_torque(
                 lft_thruster_force, self._no_torque, body_ids=self._left_thruster_id
             )"""
-        if rgt_thruster_force.any():
+        """if rgt_thruster_force.any():
             self._robot.set_external_force_and_torque(
                 rgt_thruster_force, self._no_torque, body_ids=self._left_thruster_id
             )
         if rgt_thruster_force.any():
             self._robot.set_external_force_and_torque(
                 rgt_thruster_force, self._no_torque, body_ids=self._right_thruster_id
-            )
+            )"""
     
         """
         if sail_wing_force_wing.any():
@@ -1024,11 +1023,11 @@ class KingfisherSailEnv(DirectRLEnv):
         rewards = {
             "1_distance_progress": distance_progress_reward,
             "2_goal_reached": goal_reward,
-            "3_energy": energy_reward,
+            "3_energy": 0*energy_reward,
             "4_backwards": 0*backwards_penalty,
             "5_bearing_penalty": 0.*bearing_penalty,
             "6_time": time_reward,
-            "7_tack_penalty": tack_reward,
+            "7_tack_penalty": 0*tack_reward,
             "8_lift_drag_ratio": force_dot_dist,
         }
         # #"6_time": time_reward
@@ -1124,8 +1123,8 @@ class KingfisherSailEnv(DirectRLEnv):
 
         if self.is_Training:
             if mask1:
-                self.cfg.max_target_distance = 10
-                self.cfg.min_target_distance = 5
+                self.cfg.max_target_distance = 15
+                self.cfg.min_target_distance = 10
             elif mask2:
                 self.cfg.max_target_distance = 25
                 self.cfg.min_target_distance = 15

@@ -48,7 +48,7 @@ from omni.isaac.lab.sim import SimulationContext
 # Pre-defined configs
 ##
 import sys
-sys.path.append('/home/isaac_user/asv-sawasp-fousseyni/IsaacLab/source')
+sys.path.append('/home/fousseyni/asv-sawasp-fousseyni/IsaacLab/source')
 
 import math
 from my_standalone.test_rl.sailboat import SAILBOAT_ART_CFG

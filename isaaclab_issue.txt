@@ -1,0 +1,14 @@
+turn off the iommu: cd /etc/default/grub and change a line to quiet slash intel_iommu=off
+error regarding pip for isaac bundle python: get pip and then assign it to isaac self contained python: cd /tmp
+curl -O https://bootstrap.pypa.io/get-pip.py
+/home/fousseyni/asv-sawasp-fousseyni/Isaaclab_kingfisher_sail/_isaac_sim/kit/python/bin/python3 get-pip.py
+and reinstall
+
+
+
+
+Mini conda stuff:
+run this command when miniconda is activated
+conda config --set auto_activate_base false
+
+or undo that automation with: conda init --reverse $SHELL

@@ -16,12 +16,12 @@ from omni.isaac.lab.markers.visualization_markers import VisualizationMarkersCfg
 
 ##
 # Configuration
-##/home/isaac_user/asv-saw
+##/home/fousseyni/asv-saw
 
 KINGFISHER_SAIL_CFG = ArticulationCfg(
     prim_path="{ENV_REGEX_NS}/Robot",
     spawn=sim_utils.UsdFileCfg(
-        usd_path=f"/home/isaac_user/asv-sawasp-fousseyni/Usd/kingfisher_sail.usd",
+        usd_path=f"/home/fousseyni/asv-sawasp-fousseyni/Usd/kingfisher_sail.usd",
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             disable_gravity=False,
             rigid_body_enabled=True,
@@ -88,7 +88,7 @@ CUBOID_MARKER_CFG = VisualizationMarkersCfg(
 RED_ARROW_X_MARKER_CFG = VisualizationMarkersCfg(
     markers={
         "arrow": sim_utils.UsdFileCfg(
-            usd_path=f"/home/isaac_user/asv-sawasp-fousseyni/Usd/arrow.usd",
+            usd_path=f"/home/fousseyni/asv-sawasp-fousseyni/Usd/arrow.usd",
             scale=(0.1, 0.3, 0.1),
             visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.0, 0.0)),
         )
@@ -98,7 +98,7 @@ RED_ARROW_X_MARKER_CFG = VisualizationMarkersCfg(
 MAGENTA_ARROW_X_MARKER_CFG = VisualizationMarkersCfg(
     markers={
         "arrow": sim_utils.UsdFileCfg(
-            usd_path=f"/home/isaac_user/asv-sawasp-fousseyni/Usd/arrow.usd",
+            usd_path=f"/home/fousseyni/asv-sawasp-fousseyni/Usd/arrow.usd",
             scale=(0.1, 0.3, 0.1),
             visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1, 0.113, 0.8)),
         )
@@ -108,7 +108,7 @@ MAGENTA_ARROW_X_MARKER_CFG = VisualizationMarkersCfg(
 MIMOSA_ARROW_X_MARKER_CFG = VisualizationMarkersCfg(
     markers={
         "arrow": sim_utils.UsdFileCfg(
-            usd_path=f"/home/isaac_user/asv-sawasp-fousseyni/Usd/arrow.usd",
+            usd_path=f"/home/fousseyni/asv-sawasp-fousseyni/Usd/arrow.usd",
             scale=(0.1, 0.3, 0.1),
             visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.95, 0.72, 0.3)),
         )
@@ -118,7 +118,7 @@ MIMOSA_ARROW_X_MARKER_CFG = VisualizationMarkersCfg(
 RED_BIG_ARROW_X_MARKER_CFG = VisualizationMarkersCfg(
     markers={
         "arrow": sim_utils.UsdFileCfg(
-            usd_path=f"/home/isaac_user/asv-sawasp-fousseyni/Usd/arrow.usd",
+            usd_path=f"/home/fousseyni/asv-sawasp-fousseyni/Usd/arrow.usd",
             scale=(0.2, 0.2, 0.3),
             visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.0, 0.0)),
         )
@@ -128,7 +128,7 @@ RED_BIG_ARROW_X_MARKER_CFG = VisualizationMarkersCfg(
 BLUE_ARROW_X_MARKER_CFG = VisualizationMarkersCfg(
     markers={
         "arrow": sim_utils.UsdFileCfg(
-            usd_path=f"/home/isaac_user/asv-sawasp-fousseyni/Usd/arrow.usd",
+            usd_path=f"/home/fousseyni/asv-sawasp-fousseyni/Usd/arrow.usd",
             scale=(0.2, 0.2, 0.3),
             visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 0.0, 1.0)),
         )
@@ -138,7 +138,7 @@ BLUE_ARROW_X_MARKER_CFG = VisualizationMarkersCfg(
 MAROON_ARROW_X_MARKER_CFG = VisualizationMarkersCfg(
     markers={
         "arrow": sim_utils.UsdFileCfg(
-            usd_path=f"/home/isaac_user/asv-sawasp-fousseyni/Usd/arrow.usd",
+            usd_path=f"/home/fousseyni/asv-sawasp-fousseyni/Usd/arrow.usd",
             scale=(0.2, 0.2, 0.3),
             visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.85, 0.0, 0.15)),
         )
@@ -149,7 +149,7 @@ MAROON_ARROW_X_MARKER_CFG = VisualizationMarkersCfg(
 BEIGE_ARROW_X_MARKER_CFG = VisualizationMarkersCfg(
     markers={
         "arrow": sim_utils.UsdFileCfg(
-            usd_path=f"/home/isaac_user/asv-sawasp-fousseyni/Usd/arrow.usd",
+            usd_path=f"/home/fousseyni/asv-sawasp-fousseyni/Usd/arrow.usd",
             scale=(0.5, 0.2, 0.2),
             visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.237, 0.232, 0.208)),
         )
@@ -159,7 +159,7 @@ BEIGE_ARROW_X_MARKER_CFG = VisualizationMarkersCfg(
 ORANGE_ARROW_X_MARKER_CFG = VisualizationMarkersCfg(
     markers={
         "arrow": sim_utils.UsdFileCfg(
-            usd_path=f"/home/isaac_user/asv-sawasp-fousseyni/Usd/arrow.usd",
+            usd_path=f"/home/fousseyni/asv-sawasp-fousseyni/Usd/arrow.usd",
             scale=(0.5, 0.2, 0.2),
             visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.232, 0.097, 0.)),
         )
@@ -169,7 +169,7 @@ ORANGE_ARROW_X_MARKER_CFG = VisualizationMarkersCfg(
 GREEN_ARROW_X_MARKER_CFG = VisualizationMarkersCfg(
     markers={
         "arrow": sim_utils.UsdFileCfg(
-            usd_path=f"/home/isaac_user/asv-sawasp-fousseyni/Usd/arrow.usd",
+            usd_path=f"/home/fousseyni/asv-sawasp-fousseyni/Usd/arrow.usd",
             scale=(0.5, 0.2, 0.2),
             visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 1.0, 0.0)),
         )
@@ -179,7 +179,7 @@ GREEN_ARROW_X_MARKER_CFG = VisualizationMarkersCfg(
 YELLOW_ARROW_X_MARKER_CFG = VisualizationMarkersCfg(
     markers={
         "arrow": sim_utils.UsdFileCfg(
-            usd_path=f"/home/isaac_user/asv-sawasp-fousseyni/Usd/arrow.usd",
+            usd_path=f"/home/fousseyni/asv-sawasp-fousseyni/Usd/arrow.usd",
             scale=(0.5, 0.2, 0.2),
             visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.8, 0.0)),
         )

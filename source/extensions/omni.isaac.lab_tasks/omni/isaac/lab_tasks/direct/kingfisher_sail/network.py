@@ -233,7 +233,7 @@ if __name__=="__main__":
     plt.legend()
 
 
-    plt.savefig("/home/isaac_user/asv-sawasp-fousseyni/IsaacLab_kingfisher/loss.png")
+    plt.savefig("/home/fousseyni/asv-sawasp-fousseyni/IsaacLab_kingfisher/loss.png")
 
     
     """max_energy = 2
