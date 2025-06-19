@@ -147,6 +147,58 @@ class TackManager:
         return torch.atan2(torch.sin(self.desired_bearing), torch.cos(self.desired_bearing))  # wrap to [-π, π]
 
 
+def generate_tacking_waypoints(start_pos:torch.Tensor, goal_pos:torch.Tensor, wind_direction:torch.Tensor,
+                                     min_upwind_angle:float, tack_leg_length:torch.Tensor, max_num_waypoints=10):
+    
+    device = start_pos.device
+    num_envs = start_pos.shape[0]
+
+    waypoints = torch.zeros((num_envs, max_num_waypoints, 2), device=device)
+    valid_mask = torch.zeros((num_envs, max_num_waypoints), dtype=torch.bool, device=device)
+    waypoints[:, 0, :] = start_pos
+    current_pos = start_pos.clone()
+    tack_side = torch.ones(num_envs, device=device)
+    goal_vec = goal_pos - start_pos
+    goal_dist = torch.norm(goal_vec, dim=1)
+    finished = torch.zeros(num_envs, dtype=torch.bool, device=device)
+
+    for step in range(1, max_num_waypoints):
+        tack_angle = wind_direction + tack_side * min_upwind_angle + torch.pi
+        tack_dir = torch.stack((torch.cos(tack_angle), torch.sin(tack_angle)), dim=1)
+        
+        next_pos = current_pos + tack_leg_length.reshape(num_envs, -1) * tack_dir
+
+        waypoints[:, step, :] = next_pos
+        valid_mask[:, step] = ~finished
+        #print(f"wpts: {waypoints} \tmask: {valid_mask}")
+        to_goal_vec = goal_pos - current_pos
+        to_next_vec = next_pos - current_pos
+
+        goal_dir = to_goal_vec / (to_goal_vec.norm(dim=-1, keepdim=True) + 1e-6)
+        tack_dir = to_next_vec / (to_next_vec.norm(dim=-1, keepdim=True) + 1e-6)
+
+        goal_proj = torch.sum(goal_dir * tack_dir, dim=1)
+
+        sail_away = goal_proj < 0.1
+        #print(f"cos: {goal_proj} \tsailaway: {sail_away}")
+        near_goal = torch.norm(goal_pos - next_pos, dim=1) < tack_leg_length
+
+        done_now = (~finished) & (sail_away | near_goal)
+        next_pos[done_now] = goal_pos[done_now]
+        finished |= done_now
+
+        current_pos = next_pos
+        tack_side = -tack_side
+
+        if finished.all():
+            waypoints[:, step+1, :] = goal_pos
+            break
+
+    return waypoints, valid_mask
+
+#def get_desired_heading_wpts
+
+
 def get_desired_bearing(bearing: torch.Tensor, wind_direction: torch.Tensor, min_upwind_angle:float, 
                         max_downwind_angle:float, cross_track:torch.Tensor, max_cross_track:float, sail_mode:torch.Tensor, 
                         in_tack_mode:torch.Tensor, tack_side:torch.Tensor):

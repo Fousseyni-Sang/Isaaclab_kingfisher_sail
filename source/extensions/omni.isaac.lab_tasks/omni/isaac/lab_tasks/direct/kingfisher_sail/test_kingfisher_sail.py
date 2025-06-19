@@ -42,8 +42,6 @@ from omni.isaac.lab.sim import SimulationContext
 
 
 
-
-
 ##
 # Pre-defined configs
 ##
