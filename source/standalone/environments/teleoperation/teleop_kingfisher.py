@@ -198,16 +198,15 @@ def main():
             rew_backward = env.unwrapped.reward_backward
             loss = env.unwrapped.loss_discrim_energy
             loss_disc = torch.tensor([loss.item()], device=rew_backward.device) if loss is not None else torch.zeros_like(rew_energy)
-            
-
-
+            tack_wpts = env.unwrapped.tack_waypoints
 
             if reset_env:
                 env.reset()
 
             ros_node.publish(obs, actions, rew, aero_force, thruster_force, lin_speed, aoa, app_angle, sail, 
                              head_w, head_wrt_wind, ld_ratio, robot_pos, goal_pos, energy, episode_energy, lift, 
-                             drag, lift_coeff, drag_coeff, sum_angle, desired_pos, rew_progress, rew_bearing, rew_energy, rew_backward, loss_disc)
+                             drag, lift_coeff, drag_coeff, sum_angle, desired_pos, rew_progress, rew_bearing, rew_energy, 
+                             rew_backward, loss_disc, tack_wpts)
             
     # Cleanup
     ros_node.destroy_node()

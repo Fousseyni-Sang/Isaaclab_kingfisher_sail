@@ -537,7 +537,7 @@ class KingfisherSailEnv(DirectRLEnv):
         self.joint_pos_target = torch.zeros(self.num_envs, device=self.device)
         self.sail_angle = torch.zeros(self.num_envs, device=self.device)
         self.joint_angle_mapped_pi = torch.zeros(self.num_envs, device=self.device)
-
+        
         self.previous_robot_pos = torch.zeros((self.num_envs, 3), device=self.device)
         self.initial_robot_pos = torch.zeros((self.num_envs, 3), device=self.device)
 
@@ -585,6 +585,11 @@ class KingfisherSailEnv(DirectRLEnv):
         self.tack_side = torch.ones(self.num_envs, device=self.device)
         self.in_tack_mode = torch.ones(self.num_envs, device=self.device)
 
+        self.tack_length = torch.ones(self.num_envs, device=self.device)  # Default tack leg length
+        self.num_tack_waypoints = 10  # Default number of waypoints for tacking
+        self.tack_waypoints = torch.zeros((self.num_envs, self.num_tack_waypoints, 2), device=self.device)  # 10 waypoints
+        self.tack_valid_mask = torch.zeros((self.num_envs, self.num_tack_waypoints), dtype=torch.bool, device=self.device)  # Valid mask for waypoints
+
         # ============================================================================================#
         # ======================== Markers for the wind visualization ================================#
         # ============================================================================================#
@@ -605,8 +610,6 @@ class KingfisherSailEnv(DirectRLEnv):
         # ============================================================================================#
         # ============================================================================================#
 
-
-        
 
     def _setup_scene(self):
         self._robot = Articulation(self.cfg.robot)
@@ -760,15 +763,16 @@ class KingfisherSailEnv(DirectRLEnv):
             """lft_thruster_force[random_mask_left] = 0.0
             rgt_thruster_force[random_mask_right] = 0.0"""
 
-        """if lft_thruster_force.any():
+        if lft_thruster_force.any():
             self._robot.set_external_force_and_torque(
                 lft_thruster_force, self._no_torque, body_ids=self._left_thruster_id
-            )"""
-        """if rgt_thruster_force.any():
+            )
+        if rgt_thruster_force.any():
             self._robot.set_external_force_and_torque(
                 rgt_thruster_force, self._no_torque, body_ids=self._left_thruster_id
             )
-        if rgt_thruster_force.any():
+        
+        """if rgt_thruster_force.any():
             self._robot.set_external_force_and_torque(
                 rgt_thruster_force, self._no_torque, body_ids=self._right_thruster_id
             )"""
@@ -1225,6 +1229,7 @@ class KingfisherSailEnv(DirectRLEnv):
             self.thruster_left_randn[env_ids] = torch.zeros_like(self.thruster_left_randn[env_ids]).uniform_(0, 1)
             self.thruster_right_randn[env_ids] = torch.zeros_like(self.thruster_right_randn[env_ids]).uniform_(0, 1)
 
+        
         self.tack_side[env_ids] = torch.ones_like(self.tack_side[env_ids])
         self.in_tack_mode = torch.zeros_like(self.in_tack_mode[env_ids])
         self.episode_number[env_ids]  = self.episode_number[env_ids] + 1 
@@ -1241,6 +1246,16 @@ class KingfisherSailEnv(DirectRLEnv):
 
         self.previous_robot_pos[env_ids] = self._robot.data.root_link_pos_w[env_ids]
         self.initial_robot_pos[env_ids] = self._robot.data.root_link_pos_w[env_ids]
+
+        self.tack_waypoints = generate_tacking_waypoints(
+                    start_pos=self.initial_robot_pos[env_ids, :2], 
+                    goal_pos=self._desired_pos_w[env_ids, :2], 
+                    wind_direction=self._aerodynamics.Uw[env_ids],
+                    min_upwind_angle=self._aerodynamics.cfg.min_upwind_angle, 
+                    tack_leg_length=self.tack_length,
+                    max_num_waypoints=self.num_tack_waypoints
+                )
+
 
     def _set_debug_vis_impl(self, debug_vis: bool):
         # create markers if necessary for the_robot_mass first tome
