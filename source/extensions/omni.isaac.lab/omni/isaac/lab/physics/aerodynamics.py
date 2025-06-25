@@ -215,6 +215,7 @@ class Aerodynamics:
         Returns:
         - Angles of attack as a tensor of shape (num_envs,).
         """
+        
         aoa =  sail_angle.reshape(-1,) - apparent_wind_angle.reshape(-1,)
         #(apparent_wind_angle.reshape(-1,) - sail_angle.reshape(-1,) + torch.pi)%(2*torch.pi) - torch.pi
         return torch.atan2(torch.sin(aoa), torch.cos(aoa))
@@ -515,7 +516,7 @@ class Aerodynamics:
 
         return"""
     
-    def reset_wind_condition(self, env_ids, 
+    def reset_wind_condition(self, env_ids = None, 
                          upwind: torch.Tensor | bool = False,
                          downwind: torch.Tensor | bool = False,
                          beam: torch.Tensor | bool = False,
@@ -536,7 +537,8 @@ class Aerodynamics:
         - randomize_direction: randomize direction uniformly
         - randomize_speed: randomize speed from cfg.wind_speed to cfg.wind_speed + 3
         """
-
+        if env_ids is None:
+            env_ids = torch.arange(self.num_envs, device=self.device)
         num_envs = len(env_ids)
 
         # Initialize with random direction if requested

@@ -164,11 +164,12 @@ def main():
             #print(f"delta: {delta_pose} \twind: {wind_speed} \twind_direc: {wind_direction}\n")
             #wind_direction += 
             actions = pre_process_actions(delta_pose)
-            #print(actions)
+
+            #print(actions.shape, actions)
             # apply actions
             teleop_interface.add_callback("L", env.reset)
             # env stepping
-            obs, rew, dones, _, _ = env.step(actions)
+            obs, rew, dones, _, _ = env.step(actions[:, -1:])
             obs = obs['policy']
 
             env.unwrapped.desired_speed_b[:] = desired_speed

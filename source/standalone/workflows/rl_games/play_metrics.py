@@ -65,7 +65,7 @@ import omni.isaac.lab_tasks  # noqa: F401
 from omni.isaac.lab_tasks.utils import get_checkpoint_path, load_cfg_from_registry, parse_env_cfg
 from omni.isaac.lab_tasks.utils.wrappers.rl_games import RlGamesGpuEnv, RlGamesVecEnvWrapper
 
-
+import numpy as np
 # Create Publisher Node
 import rclpy
 from ros2_Node import RlAgentPublisher, RewardWeightSubscriber
@@ -172,26 +172,20 @@ def main():
     #   attempt to have complete control over environment stepping. However, this removes other
     #   operations such as masking that is used for multi-agent learning by RL-Games.
 
+    done = [False]*args_cli.num_envs
+    episode_data = [{'rewards': [], 'energies': [], 'speeds': [], 'positions': [], 
+                     'headings': [], 'wind_dirs': []} for _ in range(args_cli.num_envs)]
+    
+    num_episodes = 10
+    # storage for metrics
+    results = {i: [] for i in range(args_cli.num_envs)}  # each env stores per-episode data
+    
+    #while simulation_app.is_running():
+    rclpy.spin_once(slider_node, timeout_sec=0.0)
+    
+    # run everything in inference mode
+    for eps in range(num_episodes):
 
-    while simulation_app.is_running():
-        rclpy.spin_once(slider_node, timeout_sec=0.0)
-        
-        time_context = slider_node.reward_weights["time"]
-        energy_context = slider_node.reward_weights["energy"]
-        reset_env = energy_context > 1.5 or time_context > 1.5
-        desired_speed = slider_node.reward_weights["desired_speed"]
-        wind_direc = slider_node.reward_weights["wind_direct"]*(torch.pi/180)
-        wind_speed = slider_node.reward_weights["wind_speed"] if slider_node.reward_weights["wind_speed"] else 1e-6
-        goal_pos = slider_node.reward_weights["goal"]
-        env.unwrapped.cfg.min_target_distance *= goal_pos
-        wind_modulo = (wind_direc + torch.pi)%(2*torch.pi) - torch.pi
-        env.unwrapped._aerodynamics.update_wind(wind_direction=wind_modulo)
-        env.unwrapped.energy_context[:] = energy_context
-        env.unwrapped.time_context[:] = time_context
-        #env.unwrapped.desired_speed_b[:] = desired_speed
-        env.unwrapped.corridor_width[:] = desired_speed
-        env.unwrapped._aerodynamics.update_wind(wind_speed=wind_speed)
-        # run everything in inference mode
         with torch.inference_mode():
             # convert obs to agent format
             #print(f"\nenergy: {env.unwrapped.energy_context} \ntime: {env.unwrapped.time_context} \nwind: {env.unwrapped._aerodynamics.Beta_w}\n")
@@ -219,7 +213,7 @@ def main():
             lift_coeff = env.unwrapped._aerodynamics.lift_coeff
             drag_coeff = env.unwrapped._aerodynamics.drag_coeff
             sum_angle = sail + app_angle + aoa
-            desired_pos = env.unwrapped.desired_pos_b
+            desired_pos = env.unwrapped._desired_pos_w
             rew_progress = env.unwrapped.reward_progress
             rew_bearing = env.unwrapped.reward_bearing
             rew_energy = env.unwrapped.reward_energy
@@ -229,15 +223,35 @@ def main():
             loss_disc = torch.tensor([loss.item()], device=rew_backward.device) if loss is not None else torch.zeros_like(rew_energy)
             tack_wpts = env.unwrapped.tack_waypoints
 
-            if reset_env:
-                env.reset()
+            
+            # gather per-step data
+            for i in range(args_cli.num_envs):
+                if not done[i]:
+                    episode_data[i]['rewards'].append(rew[i].item())
+                    episode_data[i]['energies'].append(episode_energy[i].item())
+                    episode_data[i]['speeds'].append(lin_speed[i].norm().item())
+                    episode_data[i]['positions'].append(robot_pos[i].cpu().numpy())
+                    episode_data[i]['headings'].append(head_w[i].item())
+                    episode_data[i]['wind_dirs'].append(env.unwrapped._aerodynamics.Beta_w[i].item())
 
-            ros_node.publish(obs, actions, rew, aero_force, thruster_force, lin_speed, aoa, app_angle, sail, 
-                            head_w, head_wrt_wind, ld_ratio, robot_pos, goal_pos, energy, episode_energy, lift, drag, 
-                            lift_coeff, drag_coeff, sum_angle, desired_pos, rew_progress, rew_bearing, rew_energy, 
-                            rew_backward, loss_disc, tack_wpts)
-
-
+                if dones[i] and not done[i]:
+                    done[i] = True
+                    # compute final metrics
+                    final_pos = episode_data[i]['positions'][-1]
+                    goal_pos = episode_data[i]['positions_goal'][-1]
+                    dist = torch.norm(final_pos-goal_pos)
+                    heading = episode_data[i]['headings'][-1]
+                    success = dist < env.unwrapped.cfg.success_distance
+                    results[i].append({
+                        'success': success,
+                        'final_distance': dist,
+                        'final_heading': heading,
+                        'avg_energy': np.mean(episode_data[i]['energies']),
+                        'avg_speed': np.mean(episode_data[i]['speeds']),
+                        'total_reward': np.sum(episode_data[i]['rewards']),
+                        'trajectory': np.array(episode_data[i]['positions']),
+                        'wind_dirs': np.array(episode_data[i]['wind_dirs'])
+                    })
             # perform operations for terminated episodes
             if len(dones) > 0:
                 # reset rnn state for terminated episodes
@@ -250,20 +264,25 @@ def main():
             if timestep == args_cli.video_length:
                 break
 
-    
-    # Cleanup
-    ros_node.destroy_node()
-    slider_node.destroy_node()
+        all_eps = [eps for env_e in results.values() for eps in env_e]
+        succ_rate = np.mean([ep['success'] for ep in all_eps])
+        avg_final_dist = np.mean([ep['final_distance'] for ep in all_eps])
+        avg_heading = np.mean([ep['final_heading'] for ep in all_eps])
+        avg_energy = np.mean([ep['avg_energy'] for ep in all_eps])
+        avg_speed = np.mean([ep['avg_speed'] for ep in all_eps])
+        avg_reward = np.mean([ep['total_reward'] for ep in all_eps])
 
-    rclpy.shutdown()
-
-    # close the simulator
+    """# close the simulator
     env.close()
 
+    # close sim app
+    simulation_app.close()"""
+
+    
+    
 
 if __name__ == "__main__":
     # run the main function
     main()
+
     
-    # close sim app
-    simulation_app.close()
