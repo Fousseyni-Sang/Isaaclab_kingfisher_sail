@@ -280,12 +280,12 @@ def step_motor(current_angle, desired_angle, resolution=torch.pi/100, max_speed=
 @configclass
 class KingfisherSailEnvCfg(DirectRLEnvCfg):
     # env
-    episode_length_s = 30.0 #50
+    episode_length_s = 150 #50
     physics_dt = 1 / 60.0  # 60 Hz
     decimation = 3
     step_dt = physics_dt * decimation  # 20 Hz
     action_space = 1
-    observation_space = 3
+    observation_space = 4
     state_space = 0
     debug_vis = True
 
@@ -567,6 +567,7 @@ class KingfisherSailEnv(DirectRLEnv):
 
         self.episode_number = torch.ones(self.num_envs, device=self.device)
         self.global_step = 0
+        self.global_physics_step = 0
 
         # Discriminator repplay buffer memory
         #self.disc_memory = ReplayBuffer(self.num_envs, 1000, 2, device=self.device)
@@ -722,7 +723,7 @@ class KingfisherSailEnv(DirectRLEnv):
         self._robot.set_joint_position_target(target=self.joint_pos_target.reshape(self.num_envs,-1), 
              joint_ids=self._wing_joint_dof_id
             )
-        
+        self.global_physics_step += 1
     def _get_observations(self) -> dict:
 
         # Observations
@@ -748,13 +749,17 @@ class KingfisherSailEnv(DirectRLEnv):
             downwind = random > 0.8
             self._aerodynamics.reset_wind_condition(randomize_direction=True, randomize_speed=True, upwind=upwind, downwind=downwind)
 
-        
+        current_joint_pos = self._robot.data.joint_pos[:, self._wing_joint_dof_id].clone()
+        current_joint_pos = torch.atan2(torch.sin(current_joint_pos), torch.cos(current_joint_pos))
+
         obs = torch.cat(
             [
                
                 torch.cos(self._aerodynamics.apparent_wind_angle).reshape(self.num_envs, -1), # 1
                 torch.sin(self._aerodynamics.apparent_wind_angle).reshape(self.num_envs, -1), # 1
                 torch.norm(self._aerodynamics.apparent_wind_speed_b, dim=-1).reshape(self.num_envs, -1), # 1
+                current_joint_pos.reshape(self.num_envs, -1) #1
+                
                 
             ],
             dim=1,
@@ -820,7 +825,9 @@ class KingfisherSailEnv(DirectRLEnv):
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
         time_out = self.episode_length_buf >= self.max_episode_length - 1
 
-        
+        """if time_out.any():
+            print(f"global_step: {self.global_step}\tphysics_step: {self.global_physics_step} \tepisode_length: {self.episode_length_buf}")
+        """
         return time_out, time_out
 
     def _reset_idx(self, env_ids: torch.Tensor | None):
