@@ -36,7 +36,7 @@ if args_cli.video:
 
 # launch omniverse app
 app_launcher = AppLauncher(args_cli)
-simulation_app = app_launcher.app
+#simulation_app = app_launcher.app
 
 """Rest everything follows."""
 
@@ -69,7 +69,9 @@ import numpy as np
 # Create Publisher Node
 import rclpy
 from ros2_Node import RlAgentPublisher, RewardWeightSubscriber
-
+import matplotlib.pyplot as plt
+import sys
+import gc
 
 def main():
     """Play with RL-Games agent."""
@@ -173,24 +175,26 @@ def main():
     #   operations such as masking that is used for multi-agent learning by RL-Games.
 
     # ---- Evaluation Loop ----
-    i = 0
-    while simulation_app.is_running():
-        rclpy.spin_once(slider_node, timeout_sec=0.0)
-        
-        time_context = slider_node.reward_weights["time"]
-        energy_context = slider_node.reward_weights["energy"]
-        reset_env = energy_context > 1.5 or time_context > 1.5
-        desired_speed = slider_node.reward_weights["desired_speed"]
-        wind_direc = slider_node.reward_weights["wind_direct"]*(torch.pi/180)
-        wind_speed = slider_node.reward_weights["wind_speed"] if slider_node.reward_weights["wind_speed"] else 1e-6
-        goal_pos = slider_node.reward_weights["goal"]
-        env.unwrapped.cfg.min_target_distance *= goal_pos
+    episode_cntr = 0
+    # For each environment, store list of [x, y] positions
+    max_episod_length = env.unwrapped.max_episode_length
+    trajectories = torch.zeros(args_cli.num_envs, max_episod_length, 2) #[[] for _ in range(env.num_envs)]
+    lift_coeff_logs = torch.zeros(args_cli.num_envs, max_episod_length) #[[] for _ in range(env.num_envs)]
+    drag_coeff_logs = torch.zeros(args_cli.num_envs, max_episod_length) #[[] for _ in range(env.num_envs)]
+    goal_positions = torch.zeros(args_cli.num_envs, 2) #[None] * env.num_envs  # One goal per env
+
+    # store metrics per finished episode
+    all_metrics = []
+    dones = torch.zeros(args_cli.num_envs)
+    #try:
+    #while simulation_app.is_running():
+    
+    while not torch.all(dones):   
+        wind_direc = (torch.pi/180)
+        wind_speed = 5
+        #print("hello")
         wind_modulo = (wind_direc + torch.pi)%(2*torch.pi) - torch.pi
         env.unwrapped._aerodynamics.update_wind(wind_direction=wind_modulo)
-        env.unwrapped.energy_context[:] = energy_context
-        env.unwrapped.time_context[:] = time_context
-        #env.unwrapped.desired_speed_b[:] = desired_speed
-        env.unwrapped.corridor_width[:] = desired_speed
         env.unwrapped._aerodynamics.update_wind(wind_speed=wind_speed)
         # run everything in inference mode
         with torch.inference_mode():
@@ -202,6 +206,7 @@ def main():
             
             # env stepping
             obs, rew, dones, _ = env.step(actions)
+
             aero_force = env.unwrapped._aerodynamic_force_b.squeeze(0)
             thruster_force = env.unwrapped._thruster_forces.squeeze(0)
             lin_speed = env.unwrapped._robot.data.root_lin_vel_b
@@ -230,39 +235,99 @@ def main():
             loss_disc = torch.tensor([loss.item()], device=rew_backward.device) if loss is not None else torch.zeros_like(rew_energy)
             tack_wpts = env.unwrapped.tack_waypoints
 
-            if reset_env:
-                env.reset()
+            alive_envs = (~dones).nonzero(as_tuple=True)[0].to(device=trajectories.device)
+            step = env.unwrapped.episode_length_buf
+            #print(f"traj: {trajectories.device} alive_envs: {alive_envs.device} step: {step.device} robot_pos: {robot_pos.device}")
+            trajectories[alive_envs, step[alive_envs], :] = robot_pos[alive_envs]
+            #lift_coeff_logs[alive_envs, step] = lift_coeff[alive_envs].float()
+            for i in alive_envs:
+                lift_coeff_logs[i, step[i]] = lift_coeff[i].float()
+                drag_coeff_logs[i, step[i]] = drag_coeff[i].float()
+            goal_positions[alive_envs] = goal_pos[alive_envs]
+            
 
-            # perform operations for terminated episodes
-            if len(dones) > 0:
-                print(f"dones: {dones}")
-                # reset rnn state for terminated episodes
-                if agent.is_rnn and agent.states is not None:
-                    for s in agent.states:
-                        s[:, dones, :] = 0.0
-                        print(f"s: {s}")
-        if args_cli.video:
-            timestep += 1
-            # Exit the play loop after recording one video
-            if timestep == args_cli.video_length:
-                break
+            # Reset finished environments
+            if torch.any(dones):
+                # Only store essential metrics (not full objects)
+                episode_metrics = env.unwrapped.extras["log"]
+                if isinstance(episode_metrics, dict):
+                    all_metrics.append(episode_metrics.copy())  # Store a copy, not reference
 
-    
-    # Cleanup
-    ros_node.destroy_node()
-    slider_node.destroy_node()
 
-    rclpy.shutdown()
+        
+    """finally:
 
-    # close the simulator
-    env.close()
+        # Cleanup
+        env.close()
+        del env, obs, actions, rew, dones
+        gc.collect()
+        simulation_app.close()"""
 
-    
-    
-
+    return all_metrics, trajectories, lift_coeff_logs, drag_coeff_logs, env
+   
 if __name__ == "__main__":
-    # run the main function
-    main()
-    simulation_app.close()
+    metrics_list, trajectories, lift_coeff_logs, drag_coeff_logs, env = main()
+
+    print(f"Collected metrics: {len(metrics_list)} episodes")
+
+    # Extract metrics for plotting
+    final_distances = [m["Metrics/final_distance_to_goal"] for m in metrics_list]
+    consumed_energy = [m["Metrics/consumed_energy"] for m in metrics_list]
+    disc_pred_mean = [m["Contexts/disc_prediction_mean"] for m in metrics_list]
+    #print(metrics_list)
+
+    # Plotting
+    plt.figure(figsize=(12, 4))
+
+    plt.subplot(3, 3, 1)
+    plt.plot(final_distances)
+    plt.title("Final Distance to Goal")
+    plt.xlabel("Episode")
+    plt.ylabel("Distance")
+
+    plt.subplot(3, 3, 2)
+    plt.plot(consumed_energy)
+    plt.title("Consumed Energy")
+    plt.xlabel("Episode")
+    plt.ylabel("Energy")
+
+    plt.subplot(3, 3, 3)
+    plt.plot(disc_pred_mean)
+    plt.title("Discriminator Prediction Mean")
+    plt.xlabel("Episode")
+    plt.ylabel("Mean Value")
+
+    for env_idx in range(env.unwrapped.num_envs):
+        x, y = zip(*trajectories[env_idx])
+        plt.subplot(3, 3, 4)
+        plt.plot(x, y)
+        plt.title("trajectories")
+        plt.xlabel("x")
+        plt.ylabel("y")
+
+        plt.subplot(3, 3, 5)
+        plt.plot(lift_coeff_logs[env_idx])
+        plt.title("lift coefficient")
+        plt.xlabel("Episode")
+        plt.ylabel("lift coeff Values")
+
+        plt.subplot(3, 3, 6)
+        plt.plot(drag_coeff_logs[env_idx])
+        plt.title("drag coefficient value")
+        plt.xlabel("Episode")
+        plt.ylabel("drag coeff values")
+
+    """plt.subplot(3, 3, 7)
+    plt.plot(disc_pred_mean)
+    plt.title("Discriminator Prediction Mean")
+    plt.xlabel("Episode")
+    plt.ylabel("Mean Value")"""
+
+    plt.tight_layout()
+    #plt.show()
+    plt.savefig("metrics.png")
+
+    #simulation_app.close()
+    
 
     

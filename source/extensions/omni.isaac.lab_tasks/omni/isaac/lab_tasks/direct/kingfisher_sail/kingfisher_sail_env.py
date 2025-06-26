@@ -607,7 +607,7 @@ class KingfisherSailEnv(DirectRLEnv):
         self.num_tack_waypoints = 10  # Default number of waypoints for tacking
         self.tack_waypoints = torch.zeros((self.num_envs, self.num_tack_waypoints, 3), device=self.device)  # 10 waypoints
         self.tack_valid_mask = torch.zeros((self.num_envs, self.num_tack_waypoints), dtype=torch.bool, device=self.device)  # Valid mask for waypoints
-
+        self.success_rate = torch.zeros(self.num_envs, device=self.device)
         # ============================================================================================#
         # ======================== Markers for the wind visualization ================================#
         # ============================================================================================#
@@ -840,6 +840,7 @@ class KingfisherSailEnv(DirectRLEnv):
         final_energy =  self.energy[env_ids].mean()
         consumed_energy = (self.episode_energy[env_ids]/(self.episode_length_buf[env_ids])).mean() # /self.max_available_episode_energy[env_ids]
         extras = dict()
+        
         for key in self._episode_sums.keys():
             episodic_sum_avg = torch.mean(self._episode_sums[key][env_ids])
             extras["Episode_Reward/" + key] = episodic_sum_avg
@@ -854,6 +855,7 @@ class KingfisherSailEnv(DirectRLEnv):
         extras["Metrics/final_distance_to_goal"] = final_distance_to_goal.item()
         extras["Metrics/final_bearing_to_goal"] = final_bearing_to_goal.item()
         extras["Metrics/final_energy"] = final_energy.item()
+        #extras["Metrics/success_rate"] = self.success_rate
         extras["Metrics/consumed_energy"] = consumed_energy.item()
         extras["Metrics/average_speed"] = (self.episode_avg_speed[env_ids]/(self.episode_length_buf[env_ids])).mean().item()
         self.extras["log"].update(extras)
@@ -869,7 +871,7 @@ class KingfisherSailEnv(DirectRLEnv):
         extras["Contexts/loss_discrim_time"] = self.loss_discrim_time.item() if self.loss_discrim_time is not None else 0
         self.extras["log"].update(extras)
 
-        
+        #print(final_distance_to_goal)
         self._robot.reset(env_ids)
         super()._reset_idx(env_ids)
         if self.num_envs > 1 and len(env_ids) == self.num_envs:
