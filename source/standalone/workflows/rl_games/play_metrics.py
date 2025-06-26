@@ -178,18 +178,23 @@ def main():
     episode_cntr = 0
     # For each environment, store list of [x, y] positions
     max_episod_length = env.unwrapped.max_episode_length
-    trajectories = torch.zeros(args_cli.num_envs, max_episod_length, 2) #[[] for _ in range(env.num_envs)]
-    lift_coeff_logs = torch.zeros(args_cli.num_envs, max_episod_length) #[[] for _ in range(env.num_envs)]
-    drag_coeff_logs = torch.zeros(args_cli.num_envs, max_episod_length) #[[] for _ in range(env.num_envs)]
+    trajectories = torch.zeros(max_episod_length, args_cli.num_envs, 2) #[[] for _ in range(env.num_envs)]
+    lift_coeff_logs = torch.zeros(max_episod_length, args_cli.num_envs) #[[] for _ in range(env.num_envs)]
+    drag_coeff_logs = torch.zeros(max_episod_length, args_cli.num_envs) #[[] for _ in range(env.num_envs)]
     goal_positions = torch.zeros(args_cli.num_envs, 2) #[None] * env.num_envs  # One goal per env
 
+    trajectories_list = []
+    lift_coeff_list = []
+    drag_coeff_list = []
+    goal_pos_list = []
+    print(f"\n====================== Max EPISODE: {max_episod_length} ==================================\n")
     # store metrics per finished episode
     all_metrics = []
     dones = torch.zeros(args_cli.num_envs)
     #try:
     #while simulation_app.is_running():
     
-    while not torch.all(dones):   
+    while episode_cntr<5:   
         wind_direc = (torch.pi/180)
         wind_speed = 5
         #print("hello")
@@ -235,23 +240,34 @@ def main():
             loss_disc = torch.tensor([loss.item()], device=rew_backward.device) if loss is not None else torch.zeros_like(rew_energy)
             tack_wpts = env.unwrapped.tack_waypoints
 
+            dones = dones.to(device=trajectories.device)
             alive_envs = (~dones).nonzero(as_tuple=True)[0].to(device=trajectories.device)
             step = env.unwrapped.episode_length_buf
             #print(f"traj: {trajectories.device} alive_envs: {alive_envs.device} step: {step.device} robot_pos: {robot_pos.device}")
-            trajectories[alive_envs, step[alive_envs], :] = robot_pos[alive_envs]
+            trajectories[step] = torch.where(~dones.unsqueeze(0), robot_pos, trajectories[step])
             #lift_coeff_logs[alive_envs, step] = lift_coeff[alive_envs].float()
-            for i in alive_envs:
-                lift_coeff_logs[i, step[i]] = lift_coeff[i].float()
-                drag_coeff_logs[i, step[i]] = drag_coeff[i].float()
-            goal_positions[alive_envs] = goal_pos[alive_envs]
+            
+            lift_coeff_logs[step] = lift_coeff.float()
+            drag_coeff_logs[step] = drag_coeff.float()
             
 
             # Reset finished environments
             if torch.any(dones):
                 # Only store essential metrics (not full objects)
                 episode_metrics = env.unwrapped.extras["log"]
+                print(f"episode: {episode_cntr}")
+                episode_cntr += 1
                 if isinstance(episode_metrics, dict):
                     all_metrics.append(episode_metrics.copy())  # Store a copy, not reference
+                
+                trajectories_list.append(trajectories)
+                lift_coeff_list.append(lift_coeff_logs)
+                drag_coeff_list.append(drag_coeff_logs)
+                goal_pos_list.append(goal_pos)
+
+                obs = env.reset()
+                if isinstance(obs, dict):
+                    obs = obs["obs"]
 
 
         
@@ -263,10 +279,10 @@ def main():
         gc.collect()
         simulation_app.close()"""
 
-    return all_metrics, trajectories, lift_coeff_logs, drag_coeff_logs, env
+    return all_metrics, trajectories_list, lift_coeff_list, drag_coeff_list, goal_pos_list, env
    
 if __name__ == "__main__":
-    metrics_list, trajectories, lift_coeff_logs, drag_coeff_logs, env = main()
+    metrics_list, trajectories_list, lift_coeff_list, drag_coeff_list, goal_pos_list, env = main()
 
     print(f"Collected metrics: {len(metrics_list)} episodes")
 
@@ -296,37 +312,41 @@ if __name__ == "__main__":
     plt.title("Discriminator Prediction Mean")
     plt.xlabel("Episode")
     plt.ylabel("Mean Value")
+    
+    for ep in range(len(trajectories_list)):
+        for env_idx in range(env.unwrapped.num_envs):
+            x, y = trajectories_list[ep][:, env_idx, 0], trajectories_list[ep][:, env_idx, 1]
+            plt.subplot(3, 3, 4)
+            plt.plot(x, y)
+            plt.scatter(goal_pos_list[ep][:, 0], goal_pos_list[ep][:, 1], label="goal")
+            plt.title("trajectories")
+            plt.xlabel("x")
+            plt.ylabel("y")
+            plt.legend()
 
-    for env_idx in range(env.unwrapped.num_envs):
-        x, y = zip(*trajectories[env_idx])
-        plt.subplot(3, 3, 4)
-        plt.plot(x, y)
-        plt.title("trajectories")
-        plt.xlabel("x")
-        plt.ylabel("y")
+            plt.subplot(3, 3, 5)
+            plt.plot(lift_coeff_list[ep][:, env_idx])
+            plt.title("lift coefficient")
+            plt.xlabel("Episode")
+            plt.ylabel("lift coeff Values")
 
-        plt.subplot(3, 3, 5)
-        plt.plot(lift_coeff_logs[env_idx])
-        plt.title("lift coefficient")
+            plt.subplot(3, 3, 6)
+            plt.plot(drag_coeff_list[ep][:, env_idx])
+            plt.title("drag coefficient value")
+            plt.xlabel("Episode")
+            plt.ylabel("drag coeff values")
+
+        """plt.subplot(3, 3, 7)
+        plt.plot(disc_pred_mean)
+        plt.title("Discriminator Prediction Mean")
         plt.xlabel("Episode")
-        plt.ylabel("lift coeff Values")
-
-        plt.subplot(3, 3, 6)
-        plt.plot(drag_coeff_logs[env_idx])
-        plt.title("drag coefficient value")
-        plt.xlabel("Episode")
-        plt.ylabel("drag coeff values")
-
-    """plt.subplot(3, 3, 7)
-    plt.plot(disc_pred_mean)
-    plt.title("Discriminator Prediction Mean")
-    plt.xlabel("Episode")
-    plt.ylabel("Mean Value")"""
+        plt.ylabel("Mean Value")"""
 
     plt.tight_layout()
+    
     #plt.show()
     plt.savefig("metrics.png")
-
+    print("========================== END ! ================================")
     #simulation_app.close()
     
 
