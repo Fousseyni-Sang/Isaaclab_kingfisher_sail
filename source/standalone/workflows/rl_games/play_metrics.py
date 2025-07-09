@@ -178,37 +178,46 @@ def main():
     episode_cntr = 0
     # For each environment, store list of [x, y] positions
     max_episod_length = env.unwrapped.max_episode_length
+    num_episodes = 10
     trajectories = torch.zeros(max_episod_length, args_cli.num_envs, 2) #[[] for _ in range(env.num_envs)]
     lift_coeff_logs = torch.zeros(max_episod_length, args_cli.num_envs) #[[] for _ in range(env.num_envs)]
     drag_coeff_logs = torch.zeros(max_episod_length, args_cli.num_envs) #[[] for _ in range(env.num_envs)]
     goal_positions = torch.zeros(args_cli.num_envs, 2) #[None] * env.num_envs  # One goal per env
-
+    
     trajectories_list = []
     lift_coeff_list = []
     drag_coeff_list = []
     goal_pos_list = []
+    episode_lengths_list = []
+
     print(f"\n====================== Max EPISODE: {max_episod_length} ==================================\n")
     # store metrics per finished episode
     all_metrics = []
     dones = torch.zeros(args_cli.num_envs)
     #try:
     #while simulation_app.is_running():
-    
-    while episode_cntr<5:   
-        wind_direc = (torch.pi/180)
-        wind_speed = 5
+    current_step = 0
+    wind_direc = (90*torch.pi/180)
+    wind_speed = 5
+    while episode_cntr<num_episodes:   
+        
         #print("hello")
         wind_modulo = (wind_direc + torch.pi)%(2*torch.pi) - torch.pi
         env.unwrapped._aerodynamics.update_wind(wind_direction=wind_modulo)
         env.unwrapped._aerodynamics.update_wind(wind_speed=wind_speed)
         # run everything in inference mode
         with torch.inference_mode():
+            current_step += 1
+            goal_pos =  env.unwrapped._desired_pos_w[:, :2]
             # convert obs to agent format
             #print(f"\nenergy: {env.unwrapped.energy_context} \ntime: {env.unwrapped.time_context} \nwind: {env.unwrapped._aerodynamics.Beta_w}\n")
             obs = agent.obs_to_torch(obs)
             # agent stepping
             actions = agent.get_action(obs, is_deterministic=agent.is_deterministic)
-            
+
+            if not any(torch.equal(goal_pos, x) for x in goal_pos_list):
+                goal_pos_list.append(goal_pos.clone())
+
             # env stepping
             obs, rew, dones, _ = env.step(actions)
 
@@ -224,7 +233,7 @@ def main():
             drag = env.unwrapped._aerodynamics.wind_drag_b
             ld_ratio = torch.norm(lift, dim=-1)/torch.norm(drag, dim=-1) #torch.abs(aero_force[:, 0]/(aero_force[:, 1]+1e-6))
             robot_pos = env.unwrapped._robot.data.root_link_pos_w[:, :2]
-            goal_pos =  env.unwrapped._desired_pos_w[:, :2]
+            
             energy = env.unwrapped.energy
             episode_energy = env.unwrapped.episode_energy
             lift_coeff = env.unwrapped._aerodynamics.lift_coeff
@@ -241,33 +250,39 @@ def main():
             tack_wpts = env.unwrapped.tack_waypoints
 
             dones = dones.to(device=trajectories.device)
-            alive_envs = (~dones).nonzero(as_tuple=True)[0].to(device=trajectories.device)
             step = env.unwrapped.episode_length_buf
-            #print(f"traj: {trajectories.device} alive_envs: {alive_envs.device} step: {step.device} robot_pos: {robot_pos.device}")
-            trajectories[step] = torch.where(~dones.unsqueeze(0), robot_pos, trajectories[step])
-            #lift_coeff_logs[alive_envs, step] = lift_coeff[alive_envs].float()
-            
-            lift_coeff_logs[step] = lift_coeff.float()
-            drag_coeff_logs[step] = drag_coeff.float()
-            
-
-            # Reset finished environments
+            episode_length = step.max().item() + 1
+            #print(step, current_step)
             if torch.any(dones):
-                # Only store essential metrics (not full objects)
+                episode_lengths_list.append(current_step)
                 episode_metrics = env.unwrapped.extras["log"]
-                print(f"episode: {episode_cntr}")
+                print(f"episode: {episode_cntr} curr: {current_step} real_step: {step} dones: {dones}")
                 episode_cntr += 1
+                current_step = 0
                 if isinstance(episode_metrics, dict):
-                    all_metrics.append(episode_metrics.copy())  # Store a copy, not reference
+                    all_metrics.append(episode_metrics.copy())
                 
-                trajectories_list.append(trajectories)
-                lift_coeff_list.append(lift_coeff_logs)
-                drag_coeff_list.append(drag_coeff_logs)
-                goal_pos_list.append(goal_pos)
+                trajectories_list.append(trajectories[:-1].clone())
+                lift_coeff_list.append(lift_coeff_logs[:-1].clone())
+                drag_coeff_list.append(drag_coeff_logs[:-1].clone())
+
+                # Reset buffers for next episode
+                trajectories.zero_()
+                lift_coeff_logs.zero_()
+                drag_coeff_logs.zero_()
 
                 obs = env.reset()
                 if isinstance(obs, dict):
                     obs = obs["obs"]
+
+            alive_envs = (~dones).nonzero(as_tuple=True)[0].to(device=trajectories.device)
+            #print(f"traj: {trajectories.device} alive_envs: {alive_envs.device} step: {step.device} robot_pos: {robot_pos.device}")
+            trajectories[step] = torch.where(~dones.unsqueeze(0), robot_pos.clone(), trajectories[step].clone())
+            #lift_coeff_logs[alive_envs, step] = lift_coeff[alive_envs].float()
+            
+            lift_coeff_logs[step] = lift_coeff.clone().float()
+            drag_coeff_logs[step] = drag_coeff.clone().float()
+
 
 
         
@@ -279,12 +294,86 @@ def main():
         gc.collect()
         simulation_app.close()"""
 
-    return all_metrics, trajectories_list, lift_coeff_list, drag_coeff_list, goal_pos_list, env
+    return all_metrics, trajectories_list, lift_coeff_list, drag_coeff_list, goal_pos_list, env, episode_lengths_list
    
 if __name__ == "__main__":
-    metrics_list, trajectories_list, lift_coeff_list, drag_coeff_list, goal_pos_list, env = main()
+    metrics_list, trajectories_list, lift_coeff_list, drag_coeff_list, goal_pos_list, env, episode_lengths_list = main()
 
-    print(f"Collected metrics: {len(metrics_list)} episodes")
+    import pandas as pd
+    import os
+    from datetime import datetime
+
+    # Create timestamped subfolder
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_dir = os.path.join("eval_logs", timestamp)
+    os.makedirs(output_dir, exist_ok=True)
+
+    print(f"Saving logs to: {output_dir}")
+
+    # --- Save Trajectories ---
+    traj_records = []
+    for ep_idx, traj in enumerate(trajectories_list):  # (T, N, 2)
+        for t in range(traj.shape[0]):
+            for env_id in range(traj.shape[1]):
+                traj_records.append({
+                    "episode": ep_idx,
+                    "time_step": t,
+                    "env_id": env_id,
+                    "x": traj[t, env_id, 0].item(),
+                    "y": traj[t, env_id, 1].item()
+                })
+    pd.DataFrame(traj_records).to_csv(os.path.join(output_dir, "trajectories.csv"), index=False)
+
+    # --- Save Aero Coefficients ---
+    aero_records = []
+    for ep_idx, (lift, drag) in enumerate(zip(lift_coeff_list, drag_coeff_list)):
+        for t in range(lift.shape[0]):
+            for env_id in range(lift.shape[1]):
+                aero_records.append({
+                    "episode": ep_idx,
+                    "time_step": t,
+                    "env_id": env_id,
+                    "lift_coeff": lift[t, env_id].item(),
+                    "drag_coeff": drag[t, env_id].item()
+                })
+    pd.DataFrame(aero_records).to_csv(os.path.join(output_dir, "aero_coeffs.csv"), index=False)
+
+    # --- Save episode length ---
+    episode_length_records = []
+    for ep_idx, length in enumerate(episode_lengths_list):
+
+        episode_length_records.append({
+            "episode":ep_idx, 
+            "ep_length": length
+        })
+    pd.DataFrame(episode_length_records).to_csv(os.path.join(output_dir, "ep_length.csv"), index=False)
+
+    # --- Save Goals ---
+    goal_records = []
+    for ep_idx, goals in enumerate(goal_pos_list):  # (N, 2)
+        for env_id in range(goals.shape[0]):
+            goal_records.append({
+                "episode": ep_idx,
+                "env_id": env_id,
+                "goal_x": goals[env_id, 0].item(),
+                "goal_y": goals[env_id, 1].item()
+            })
+    pd.DataFrame(goal_records).to_csv(os.path.join(output_dir, "goals.csv"), index=False)
+
+    # --- Save Metrics ---
+    metric_records = []
+    for ep_idx, m in enumerate(metrics_list):
+        metric_records.append({
+            "episode": ep_idx,
+            "final_distance_to_goal": m["Metrics/final_distance_to_goal"],
+            "consumed_energy": m["Metrics/consumed_energy"],
+            "disc_prediction_mean": m["Contexts/disc_prediction_mean"]
+        })
+    pd.DataFrame(metric_records).to_csv(os.path.join(output_dir, "metrics.csv"), index=False)
+
+
+    
+    """print(f"Collected metrics: {len(metrics_list)} episodes")
 
     # Extract metrics for plotting
     final_distances = [m["Metrics/final_distance_to_goal"] for m in metrics_list]
@@ -322,7 +411,7 @@ if __name__ == "__main__":
             plt.title("trajectories")
             plt.xlabel("x")
             plt.ylabel("y")
-            plt.legend()
+            #plt.legend()
 
             plt.subplot(3, 3, 5)
             plt.plot(lift_coeff_list[ep][:, env_idx])
@@ -335,17 +424,15 @@ if __name__ == "__main__":
             plt.title("drag coefficient value")
             plt.xlabel("Episode")
             plt.ylabel("drag coeff values")
+            
 
-        """plt.subplot(3, 3, 7)
-        plt.plot(disc_pred_mean)
-        plt.title("Discriminator Prediction Mean")
-        plt.xlabel("Episode")
-        plt.ylabel("Mean Value")"""
+            print(lift_coeff_list[ep][:50])
+
 
     plt.tight_layout()
     
     #plt.show()
-    plt.savefig("metrics.png")
+    plt.savefig("metrics.png")"""
     print("========================== END ! ================================")
     #simulation_app.close()
     

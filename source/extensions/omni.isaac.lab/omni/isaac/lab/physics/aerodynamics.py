@@ -236,7 +236,8 @@ class Aerodynamics:
         - Tuple of tensors: (lift_L, drag_D), each of shape (num_envs, 2) in the apparent body frame (in which app_wind is expressed).
         """
         wind_Vapp_ampl = torch.sqrt(wind_Vapp[:, 0].square() + wind_Vapp[:, 1].square())
-
+        wind_Vapp_ampl = torch.clamp(wind_Vapp_ampl, min=1e-6)
+        
         #print(wind_Vapp.shape, wind_Vapp_ampl.shape)
         wind_V_app_unit = torch.zeros_like(wind_Vapp)
         wind_V_app_unit[:, 0] = wind_Vapp[:, 0]/wind_Vapp_ampl
@@ -443,11 +444,11 @@ class Aerodynamics:
         AR = 5
         CL_to_90, CD_to_90 = self.generate_viterna_coeff((np.pi/180)*alpha_to_90, AR, Cl_stall, Cd_stall, (np.pi/180)*alpha_stall)
         mask = alpha_to_90<20
-        CL_to_90[~mask] = 0.1*Cl_stall*torch.rand_like(CL_to_90[~mask])
+        #CL_to_90[~mask] = 0.1*Cl_stall*torch.rand_like(CL_to_90[~mask])
         #print(CL_to_90)
         CL_below_min_90, CD_below_min_90 = self.generate_viterna_coeff((np.pi/180)*alpha_below_min_90, AR, Cl_min, Cd_stall, (np.pi/180)*alpha_min)
         mask = torch.abs(alpha_below_min_90)<20
-        CL_below_min_90[~mask] = 0.1*Cl_stall*torch.rand_like(CL_below_min_90[~mask])
+        #CL_below_min_90[~mask] = 0.1*Cl_stall*torch.rand_like(CL_below_min_90[~mask])
         CL_90_to_0 = torch.concatenate((CL_below_min_90, cl_clean[idx_min:idx_zero]))
         CD_90_to_0 = torch.concatenate((CD_below_min_90, cd_clean[idx_min:idx_zero]))
         #CD_90_to_0[::-1]
@@ -496,26 +497,7 @@ class Aerodynamics:
         #print(f"sail: {angle*(180/torch.pi)} \tapp_ang: {apparent_wind_angle*(180/torch.pi)} \t aoa: {angle_of_attack*(180/torch.pi)}")
         return angle
     
-    """def reset_wind_condition(self, env_ids, upwind: torch.Tensor | bool=False, downwind: torch.Tensor | bool=False, 
-                             randomize_direction=False, randomize_speed=False):
-        randomize wind direction between 0 and 2*pi if params randomize=True 
-            upwind: a tensor of boolean or simply a boolean indicating which environments should be upwind
-            downwind: a tensor of boolean or simply a boolean indicating which environments should be downwind
-        
-        if randomize_direction:
-            self.Beta_w [env_ids] = torch.pi*torch.zeros_like(self.Beta_w[env_ids]).uniform_(-1, 1)
-            
-            up_wind_mask = torch.abs(self.Beta_w [env_ids]) > (145/180)*torch.pi
-            self.Beta_w [env_ids][~up_wind_mask & upwind] = - torch.pi
-            
-            down_wind_mask = torch.abs(self.Beta_w [env_ids]) < (35/180)*torch.pi
-            self.Beta_w [env_ids][~down_wind_mask & downwind] = 0
-                
-        if randomize_speed:
-            self.Uw[env_ids] = torch.pi*torch.zeros_like(self.Beta_w[env_ids]).uniform_(self.cfg.wind_speed, self.cfg.wind_speed + 3)
-
-        return"""
-    
+    """
     def reset_wind_condition(self, env_ids = None, 
                          upwind: torch.Tensor | bool = False,
                          downwind: torch.Tensor | bool = False,
@@ -524,7 +506,7 @@ class Aerodynamics:
                          broad: torch.Tensor | bool = False,
                          randomize_direction=False, 
                          randomize_speed=False):
-        """
+        
         Randomize wind direction and/or speed for selected environments.
         
         Parameters:
@@ -536,7 +518,7 @@ class Aerodynamics:
         - broad: wind from ±135°
         - randomize_direction: randomize direction uniformly
         - randomize_speed: randomize speed from cfg.wind_speed to cfg.wind_speed + 3
-        """
+        
         if env_ids is None:
             env_ids = torch.arange(self.num_envs, device=self.device)
         num_envs = len(env_ids)
@@ -576,7 +558,86 @@ class Aerodynamics:
             self.Uw[env_ids] = torch.empty_like(self.Uw[env_ids]).uniform_(
                 self.cfg.wind_speed, self.cfg.wind_speed + 5)
 
-        return
+        return"""
+    
+    def reset_wind_condition(
+        self,
+        env_ids=None,
+        upwind=False,
+        downwind=False,
+        beam=False,
+        close=False,
+        broad=False,
+        randomize_direction=False,
+        randomize_speed=False,
+    ):
+        if env_ids is None:
+            env_ids = torch.arange(self.num_envs, device=self.device)
+        num_envs = len(env_ids)
+
+        # Optionally randomize speed
+        if randomize_speed:
+            self.Uw[env_ids] = torch.empty(num_envs, device=self.device).uniform_(
+                self.cfg.wind_speed, self.cfg.wind_speed + 5
+            )
+
+        # Define available categories
+        choices = []
+
+        if randomize_direction:
+            choices.append("random")
+        if upwind:
+            choices.append("upwind")
+        if downwind:
+            choices.append("downwind")
+        if beam:
+            choices.append("beam")
+        if close:
+            choices.append("close")
+        if broad:
+            choices.append("broad")
+        if not choices:
+            choices.append("no_wind")
+
+        indices = torch.randint(len(choices), (num_envs,), device=self.device)
+        beta = torch.empty(num_envs, device=self.device)
+
+        for i, name in enumerate(choices):
+            mask = (indices == i)
+            if not mask.any():
+                continue
+
+            n = mask.sum()
+
+            if name == "random":
+                beta[mask] = torch.pi * torch.empty(n, device=self.device).uniform_(-1, 1)
+
+            elif name == "upwind":
+                # ±135° (wind coming toward agent from near front)
+                beta[mask] = torch.deg2rad(torch.empty(n, device=self.device).uniform_(-135, 135))
+
+            elif name == "downwind":
+                # ±30° (wind from behind)
+                beta[mask] = torch.deg2rad(torch.empty(n, device=self.device).uniform_(-30, 30))
+
+            elif name == "beam":
+                # ±90° (wind from sides)
+                beta[mask] = torch.deg2rad(torch.empty(n, device=self.device).uniform_(-100, 100))
+
+            elif name == "close":
+                # ±45° (close haul)
+                beta[mask] = torch.deg2rad(torch.empty(n, device=self.device).uniform_(-60, 60))
+
+            elif name == "broad":
+                # ±135° (broad reach)
+                beta[mask] = torch.deg2rad(torch.empty(n, device=self.device).uniform_(-150, 150))
+
+            elif name == "no_wind":
+                beta[mask] = 0.0
+                self.Uw[env_ids][mask] = 0.0
+
+        self.Beta_w[env_ids] = beta
+
 
 
     def update_wind(self, wind_direction:float | None = None, wind_speed:float | None = None, env_ids: torch.Tensor | None = None):
