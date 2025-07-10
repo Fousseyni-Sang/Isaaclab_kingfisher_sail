@@ -21,7 +21,7 @@ from omni.isaac.lab.utils.interpolation import LinearInterpolation
 import pandas as pd
 
 # File path to the Naca profile downloaded from xfoil
-filepath = "/home/fousseyni/asv-sawasp-fousseyni/Usd/naca0018.csv"
+filepath = "/mnt/gpu_storage/zrr/fsangare/asv-sawasp-fousseyni/Usd/naca0018.csv"
 df = pd.read_csv(filepath, skiprows=8, nrows=201)
 #print(df.head)
 
