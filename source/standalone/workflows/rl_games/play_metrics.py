@@ -190,17 +190,20 @@ def main():
     reward_progress_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.unwrapped.device)
     reward_energy_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.unwrapped.device)
     reward_backward_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.unwrapped.device)  
-    
+    total_reward_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.unwrapped.device) 
+
     trajectories_list = []
     lift_coeff_list = []
     drag_coeff_list = []
     goal_pos_list = []
     episode_lengths_list = []
 
+
     energy_list = []
     reward_progress_list = []
     reward_energy_list = []
     reward_backward_list = []
+    total_reward_list = []
 
     print(f"\n====================== Max EPISODE: {max_episod_length} ==================================\n")
     # store metrics per finished episode
@@ -283,6 +286,7 @@ def main():
                 reward_progress_list.append(reward_progress_logs[:-1].clone())
                 reward_energy_list.append(reward_energy_logs[:-1].clone())
                 reward_backward_list.append(reward_backward_logs[:-1].clone())
+                total_reward_list.append(total_reward_logs[:-1].clone())
 
                 # Reset buffers for next episode
                 trajectories.zero_()
@@ -304,6 +308,7 @@ def main():
             reward_progress_logs[step] = rew_progress.clone().float()
             reward_energy_logs[step] = rew_energy.clone().float()
             reward_backward_logs[step] = rew_backward.clone().float()
+            total_reward_logs[step] = rew.clone().float()
 
 
 
@@ -317,11 +322,11 @@ def main():
         simulation_app.close()"""
 
     return all_metrics, trajectories_list, lift_coeff_list, drag_coeff_list, goal_pos_list, env, episode_lengths_list, \
-                energy_list, reward_progress_list, reward_energy_list, reward_backward_list
+                energy_list, reward_progress_list, reward_energy_list, reward_backward_list, total_reward_list
    
 if __name__ == "__main__":
     metrics_list, trajectories_list, lift_coeff_list, drag_coeff_list, goal_pos_list, env, \
-    episode_lengths_list, energy_list, reward_progress_list, reward_energy_list, reward_backward_list = main()
+    episode_lengths_list, energy_list, reward_progress_list, reward_energy_list, reward_backward_list, total_reward_list = main()
 
     import pandas as pd
     import os
@@ -407,7 +412,8 @@ if __name__ == "__main__":
                     "energy": energy_list[ep_idx][t, env_id].item(),
                     "reward_progress": reward_progress_list[ep_idx][t, env_id].item(),
                     "reward_energy": reward_energy_list[ep_idx][t, env_id].item(),
-                    "reward_backward": reward_backward_list[ep_idx][t, env_id].item()
+                    "reward_backward": reward_backward_list[ep_idx][t, env_id].item(),
+                    "total_reward": total_reward_list[ep_idx][t, env_id].item()
                 })
     pd.DataFrame(other_metrics_records).to_csv(os.path.join(output_dir, "other_metrics.csv"), index=False)
 
