@@ -26,6 +26,7 @@ parser.add_argument(
     action="store_true",
     help="When no checkpoint provided, use the last saved model. Otherwise use the best saved model.",
 )
+parser.add_argument("--episode_length", type=int, default=None, help="length of the episode in second.")
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
@@ -159,6 +160,9 @@ def main():
 
     # reset environment
     env.unwrapped.is_Training = False
+    if args_cli.episode_length is not None:
+        env.unwrapped.cfg.episode_length_s = args_cli.episode_length
+    
     obs = env.reset()
     if isinstance(obs, dict):
         obs = obs["obs"]
@@ -176,8 +180,9 @@ def main():
     # ---- Evaluation Loop ----
     episode_cntr = 0
     # For each environment, store list of [x, y] positions
-    max_episod_length = env.unwrapped.max_episode_length
+    
     num_episodes = 10
+    max_episod_length = env.unwrapped.max_episode_length
     trajectories = torch.zeros((max_episod_length, args_cli.num_envs, 2), device=env.unwrapped.device) #[[] for _ in range(env.num_envs)]
     lift_coeff_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.unwrapped.device) #[[] for _ in range(env.num_envs)]
     drag_coeff_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.unwrapped.device) #[[] for _ in range(env.num_envs)]
