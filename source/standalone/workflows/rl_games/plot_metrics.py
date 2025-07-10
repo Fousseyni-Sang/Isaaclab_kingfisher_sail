@@ -62,7 +62,7 @@ wind_speed = 5  # Example wind speed
 # Plot wind vector
 wind_x = wind_speed * np.cos(wind_direc)
 wind_y = wind_speed * np.sin(wind_direc)
-plt.quiver(100, 10, wind_x, wind_y, angles='xy', scale_units='xy', scale=1, color='blue', label='Wind Vector')
+plt.quiver(110, 0, wind_x, wind_y, angles='xy', scale_units='xy', scale=0.5, color='blue', label='Wind Vector')
 plt.title("Trajectories with Goals")
 plt.xlabel("x")
 plt.ylabel("y")
