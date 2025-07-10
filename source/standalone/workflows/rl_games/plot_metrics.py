@@ -150,6 +150,7 @@ energy_all = []
 rew_progress_all = []
 rew_backward_all = []
 rew_energy_all = []
+total_reward_all = []
 
 # --- Aggregate Data ---
 for ep in df_other_metrics["episode"].unique()[:num_episodes]:
@@ -162,6 +163,7 @@ for ep in df_other_metrics["episode"].unique()[:num_episodes]:
         reward_progress = env_other_metrics["reward_progress"].values[:max_timestep]
         reward_backward = env_other_metrics["reward_backward"].values[:max_timestep]
         reward_energy = env_other_metrics["reward_energy"].values[:max_timestep]
+        total_reward = env_other_metrics["total_reward"].values[:max_timestep]
 
         """# Pad with NaNs if shorter than max_timestep
         if len(lift) < max_timestep:
@@ -173,6 +175,7 @@ for ep in df_other_metrics["episode"].unique()[:num_episodes]:
         rew_progress_all.append(reward_progress)
         rew_backward_all.append(reward_backward)
         rew_energy_all.append(reward_energy)
+        total_reward_all.append(total_reward)
 
         """lift_all.append(lift)
         drag_all.append(drag)"""
@@ -182,6 +185,7 @@ energy_all = np.stack(energy_all)
 rew_progress_all = np.stack(rew_progress_all)
 rew_backward_all = np.stack(rew_backward_all)
 rew_energy_all = np.stack(rew_energy_all)
+total_reward_all = np.stack(total_reward_all)
 
 # --- Compute stats for other metrics ---
 energy_mean = np.nanmean(energy_all, axis=0)
@@ -192,12 +196,14 @@ rew_backward_mean = np.nanmean(rew_backward_all, axis=0)
 rew_backward_std = np.nanstd(rew_backward_all, axis=0)
 rew_energy_mean = np.nanmean(rew_energy_all, axis=0)
 rew_energy_std = np.nanstd(rew_energy_all, axis=0)
+total_reward_mean = np.nanmean(total_reward_all, axis=0)
+total_reward_std = np.nanstd(total_reward_all, axis=0)
 
 # --- Plot Other Metrics ---
 plt.figure(figsize=(12, 4))
 timesteps = np.arange(max_timestep-1) 
 
-plt.subplot(2, 2, 1)
+plt.subplot(3, 2, 1)
 # Energy    
 plt.plot(np.arange(len(energy_mean)) , energy_mean, label="Energy Mean", color='green')
 plt.fill_between(np.arange(len(energy_mean)), energy_mean - energy_std, energy_mean + energy_std, alpha=0.3, color='green', label="Energy ±1 std")
@@ -207,7 +213,7 @@ plt.ylabel("Value")
 plt.legend()
 
 # Reward Progress
-plt.subplot(2, 2, 2)
+plt.subplot(3, 2, 2)
 plt.plot(np.arange(len(rew_progress_mean)), rew_progress_mean, label="Reward Progress Mean", color='orange')
 plt.fill_between(np.arange(len(rew_progress_mean)), rew_progress_mean - rew_progress_std, rew_progress_mean + rew_progress_std, alpha=0.3, color='orange', label="Reward Progress ±1 std")
 plt.title("Reward progress (Mean ± Std)")
@@ -216,7 +222,7 @@ plt.ylabel("Value")
 plt.legend()
 
 # Reward Backward
-plt.subplot(2, 2, 3)
+plt.subplot(3, 2, 3)
 plt.plot(np.arange(len(rew_backward_mean)), rew_backward_mean, label="Reward Backward Mean", color='purple')
 plt.fill_between(np.arange(len(rew_backward_mean)), rew_backward_mean - rew_backward_std, rew_backward_mean + rew_backward_std, alpha=0.3, color='purple', label="Reward Backward ±1 std")
 plt.title("Reward backward (Mean ± Std)")
@@ -225,7 +231,7 @@ plt.ylabel("Value")
 plt.legend()
 
 # Reward Energy
-plt.subplot(2, 2, 4)
+plt.subplot(3, 2, 4)
 plt.plot(np.arange(len(rew_energy_mean)), rew_energy_mean, label="Reward Energy Mean", color='brown')
 plt.fill_between(np.arange(len(rew_energy_mean)), rew_energy_mean - rew_energy_std, rew_energy_mean + rew_energy_std, alpha=0.3, color='brown', label="Reward Energy ±1 std")
 plt.title("Reward Energy (Mean ± Std)")
@@ -233,6 +239,15 @@ plt.xlabel("Timestep")
 plt.ylabel("Value")
 plt.legend()
 plt.tight_layout()
+
+plt.subplot(3, 2, 5)
+# Total Reward  
+plt.plot(np.arange(len(total_reward_mean)), total_reward_mean, label="Total Reward Mean", color='cyan')
+plt.fill_between(np.arange(len(total_reward_mean)), total_reward_mean - total_reward_std, total_reward_mean + total_reward_std, alpha=0.3, color='cyan', label="Total Reward ±1 std")
+plt.title("Total Reward (Mean ± Std)")
+plt.xlabel("Timestep")
+plt.ylabel("Value")
+plt.legend()    
 
 plt.savefig(os.path.join(latest_dir, "other_metrics_mean_std.png"))
 
