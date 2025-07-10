@@ -60,15 +60,15 @@ params:
     schedule_type: legacy
     kl_threshold: 0.016
     score_to_win: 20000000
-    max_epochs: 600
+    max_epochs: 300
     save_best_after: 25
     save_frequency: 50
     grad_norm: 1.0
     entropy_coef: 0.0
     truncate_grads: True
     e_clip: 0.2 #0.2
-    horizon_length: 96 #48  #96 #180 #48 
-    minibatch_size: 32768  #49152 #184320 #92160 #24576 
+    horizon_length: 512 #48  #96 #180 #48 
+    minibatch_size: 262144  #49152 #184320 #92160 #24576 
     mini_epochs: 5 
     critic_coef: 2
     clip_value: True

@@ -281,7 +281,7 @@ def step_motor(current_angle, desired_angle, resolution=torch.pi/100, max_speed=
 @configclass
 class KingfisherSailEnvCfg(DirectRLEnvCfg):
     # env
-    episode_length_s = 50.0 #30
+    episode_length_s = 150.0 #30
     physics_dt = 1 / 60.0  # 60 Hz
     decimation = 3
     step_dt = physics_dt * decimation  # 20 Hz
@@ -1089,8 +1089,9 @@ class KingfisherSailEnv(DirectRLEnv):
                 quat=self._robot.data.body_state_w[:, self._base_link, 3:7].reshape(self.num_envs, -1), pos=None)
         #print(f"inefficient_sailing: {penalty_inefficient_sailing} ")
         #print(f"{(self._desired_pos_w).shape}, {self.initial_robot_pos.shape} ,{aerodynamic_force_world[:, 0, :2].shape}")
-        force_dot_dist = 0.01*self.step_dt*torch.sum(aerodynamic_force_world[:, 0, :2]*(self._desired_pos_w-self.initial_robot_pos)[:, :2],
-                                     dim=-1)/torch.norm(self._desired_pos_w-self._robot.data.root_link_pos_w, dim=-1)
+        """force_dot_dist = 0.01*self.step_dt*torch.sum(aerodynamic_force_world[:, 0, :2]*(self._desired_pos_w-self.initial_robot_pos)[:, :2],
+                                     dim=-1)/torch.norm(self._desired_pos_w-self._robot.data.root_link_pos_w, dim=-1)"""
+        force_projection = 0.01*aerodynamic_force_b[:, 0, 0]*self.step_dt 
         #force_dot_dist = torch.where(force_dot_dist>0, force_dot_dist, (self.distance/self.initial_distance)*force_dot_dist)
         #print(f"force_dot_dist: {force_dot_dist} : \t{(self._desired_pos_w-self.initial_robot_pos)[:, :2]} \t{self._aerodynamic_force_b[:, 0, :2]}")
         #self.cross_track_error = cross.clone()
@@ -1105,7 +1106,7 @@ class KingfisherSailEnv(DirectRLEnv):
             "5_bearing_penalty": 0.*bearing_penalty,
             "6_time": time_reward,
             "7_tack_penalty": 0*tack_reward,
-            "8_lift_drag_ratio": 0*force_dot_dist,
+            "8_lift_drag_ratio": force_projection,
         }
         #print(f"rewards: {rewards} rew_lift_drag_ratio: {lift_drag_ratio}\n")
         # #"6_time": time_reward
@@ -1245,16 +1246,16 @@ class KingfisherSailEnv(DirectRLEnv):
             #upwind = torch.logical_and(random > 0.2, torch.logical_and(random <= 0.6, self.episode_number[env_ids] > 200))
             #upwind = torch.logical_and(random > 0.2, random <= 0.8)
             #downwind = torch.logical_and(random > 0.6,  self.episode_number[env_ids] > 200)
-        
+
             downwind = torch.any(torch.logical_and(self.episode_number[env_ids]>50, self.episode_number[env_ids]<99)) #random > 0.8
             beam = torch.any(torch.logical_and(self.episode_number[env_ids]>99, self.episode_number[env_ids]<199))
             broad = torch.any(torch.logical_and(self.episode_number[env_ids]>199, self.episode_number[env_ids]<249))
             close = torch.any(torch.logical_and(self.episode_number[env_ids]>249, self.episode_number[env_ids]<349))
-            upwind = torch.any(torch.logical_and(self.episode_number[env_ids]>349, self.episode_number[env_ids]<400))
-            random = torch.any(self.episode_number[env_ids]>400)
+            """upwind = torch.any(torch.logical_and(self.episode_number[env_ids]>349, self.episode_number[env_ids]<400))
+            random = torch.any(self.episode_number[env_ids]>400)"""
             
-            self._aerodynamics.reset_wind_condition(env_ids=env_ids, randomize_direction=random, randomize_speed=True, 
-                                                    upwind=upwind, downwind=downwind, beam=beam, close=close, broad=broad)
+            self._aerodynamics.reset_wind_condition(env_ids=env_ids, randomize_direction=False, randomize_speed=True, 
+                                                    upwind=True, downwind=False, beam=False, close=True, broad=False)
 
             self.thruster_left_randn[env_ids] = torch.zeros_like(self.thruster_left_randn[env_ids]).uniform_(0, 1)
             self.thruster_right_randn[env_ids] = torch.zeros_like(self.thruster_right_randn[env_ids]).uniform_(0, 1)

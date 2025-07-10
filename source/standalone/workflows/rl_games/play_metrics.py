@@ -70,8 +70,7 @@ import numpy as np
 import rclpy
 from ros2_Node import RlAgentPublisher, RewardWeightSubscriber
 import matplotlib.pyplot as plt
-import sys
-import gc
+
 
 def main():
     """Play with RL-Games agent."""
@@ -182,13 +181,21 @@ def main():
     trajectories = torch.zeros(max_episod_length, args_cli.num_envs, 2) #[[] for _ in range(env.num_envs)]
     lift_coeff_logs = torch.zeros(max_episod_length, args_cli.num_envs) #[[] for _ in range(env.num_envs)]
     drag_coeff_logs = torch.zeros(max_episod_length, args_cli.num_envs) #[[] for _ in range(env.num_envs)]
-    goal_positions = torch.zeros(args_cli.num_envs, 2) #[None] * env.num_envs  # One goal per env
+    energy_logs = torch.zeros(max_episod_length, args_cli.num_envs)
+    reward_progress_logs = torch.zeros(max_episod_length, args_cli.num_envs)
+    reward_energy_logs = torch.zeros(max_episod_length, args_cli.num_envs)
+    reward_backward_logs = torch.zeros(max_episod_length, args_cli.num_envs)    
     
     trajectories_list = []
     lift_coeff_list = []
     drag_coeff_list = []
     goal_pos_list = []
     episode_lengths_list = []
+
+    energy_list = []
+    reward_progress_list = []
+    reward_energy_list = []
+    reward_backward_list = []
 
     print(f"\n====================== Max EPISODE: {max_episod_length} ==================================\n")
     # store metrics per finished episode
@@ -197,7 +204,7 @@ def main():
     #try:
     #while simulation_app.is_running():
     current_step = 0
-    wind_direc = (90*torch.pi/180)
+    wind_direc = (125*torch.pi/180)
     wind_speed = 5
     while episode_cntr<num_episodes:   
         
@@ -266,6 +273,11 @@ def main():
                 lift_coeff_list.append(lift_coeff_logs[:-1].clone())
                 drag_coeff_list.append(drag_coeff_logs[:-1].clone())
 
+                energy_list.append(energy_logs[:-1].clone())
+                reward_progress_list.append(reward_progress_logs[:-1].clone())
+                reward_energy_list.append(reward_energy_logs[:-1].clone())
+                reward_backward_list.append(reward_backward_logs[:-1].clone())
+
                 # Reset buffers for next episode
                 trajectories.zero_()
                 lift_coeff_logs.zero_()
@@ -282,6 +294,10 @@ def main():
             
             lift_coeff_logs[step] = lift_coeff.clone().float()
             drag_coeff_logs[step] = drag_coeff.clone().float()
+            energy_logs[step] = energy.clone().float()
+            reward_progress_logs[step] = rew_progress.clone().float()
+            reward_energy_logs[step] = rew_energy.clone().float()
+            reward_backward_logs[step] = rew_backward.clone().float()
 
 
 
@@ -294,10 +310,12 @@ def main():
         gc.collect()
         simulation_app.close()"""
 
-    return all_metrics, trajectories_list, lift_coeff_list, drag_coeff_list, goal_pos_list, env, episode_lengths_list
+    return all_metrics, trajectories_list, lift_coeff_list, drag_coeff_list, goal_pos_list, env, episode_lengths_list, \
+                energy_list, reward_progress_list, reward_energy_list, reward_backward_list
    
 if __name__ == "__main__":
-    metrics_list, trajectories_list, lift_coeff_list, drag_coeff_list, goal_pos_list, env, episode_lengths_list = main()
+    metrics_list, trajectories_list, lift_coeff_list, drag_coeff_list, goal_pos_list, env, \
+    episode_lengths_list, energy_list, reward_progress_list, reward_energy_list, reward_backward_list = main()
 
     import pandas as pd
     import os
@@ -371,8 +389,22 @@ if __name__ == "__main__":
         })
     pd.DataFrame(metric_records).to_csv(os.path.join(output_dir, "metrics.csv"), index=False)
 
+    # --- Save other Metrics Logs ---
+    other_metrics_records = []
+    for ep_idx in range(len(energy_list)):
+        for t in range(energy_list[ep_idx].shape[0]):
+            for env_id in range(energy_list[ep_idx].shape[1]):
+                other_metrics_records.append({
+                    "episode": ep_idx,
+                    "time_step": t,
+                    "env_id": env_id,
+                    "energy": energy_list[ep_idx][t, env_id].item(),
+                    "reward_progress": reward_progress_list[ep_idx][t, env_id].item(),
+                    "reward_energy": reward_energy_list[ep_idx][t, env_id].item(),
+                    "reward_backward": reward_backward_list[ep_idx][t, env_id].item()
+                })
+    pd.DataFrame(other_metrics_records).to_csv(os.path.join(output_dir, "other_metrics.csv"), index=False)
 
-    
     """print(f"Collected metrics: {len(metrics_list)} episodes")
 
     # Extract metrics for plotting

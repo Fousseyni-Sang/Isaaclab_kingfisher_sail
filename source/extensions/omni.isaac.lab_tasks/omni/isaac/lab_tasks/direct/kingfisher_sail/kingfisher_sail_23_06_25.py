@@ -281,7 +281,7 @@ def step_motor(current_angle, desired_angle, resolution=torch.pi/100, max_speed=
 @configclass
 class KingfisherSailEnvCfg(DirectRLEnvCfg):
     # env
-    episode_length_s = 200 #50
+    episode_length_s = 300 #50
     physics_dt = 1 / 60.0  # 60 Hz
     decimation = 3
     step_dt = physics_dt * decimation  # 20 Hz

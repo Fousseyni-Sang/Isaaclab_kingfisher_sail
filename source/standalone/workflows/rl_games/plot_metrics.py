@@ -1,7 +1,7 @@
 import os
 import pandas as pd
 import matplotlib.pyplot as plt
-
+import numpy as np
 # --- Find the latest log directory ---
 eval_root = "eval_logs"
 subdirs = sorted(
@@ -18,6 +18,7 @@ df_aero = pd.read_csv(os.path.join(latest_dir, "aero_coeffs.csv"))
 df_goals = pd.read_csv(os.path.join(latest_dir, "goals.csv"))
 df_metrics = pd.read_csv(os.path.join(latest_dir, "metrics.csv"))
 df_ep_length = pd.read_csv(os.path.join(latest_dir, "ep_length.csv"))
+df_other_metrics = pd.read_csv(os.path.join(latest_dir, "other_metrics.csv"))
 
 #print(df_traj.head)
 # --- Plot Metrics ---
@@ -53,25 +54,34 @@ for ep in df_traj["episode"].unique()[:num_episodes]:  # Limit to first 3 episod
         env_traj = ep_traj[ep_traj["env_id"] == env_id]
         plt.plot(env_traj["x"][:ep_length], env_traj["y"][:ep_length], label=f"Ep{ep} Env{env_id}")
         goal = df_goals[(df_goals["episode"] == ep) & (df_goals["env_id"] == env_id)]
-        plt.scatter(goal["goal_x"], goal["goal_y"], color="red", marker="x")
-        print(env_traj["x"].shape, env_traj["y"].shape)
+        plt.scatter(goal["goal_x"], goal["goal_y"], marker="x")
+        #print(env_traj["x"].shape, env_traj["y"].shape)
+
+wind_direc = (125 * np.pi / 180)  # Example wind direction in radians
+wind_speed = 5  # Example wind speed
+# Plot wind vector
+wind_x = wind_speed * np.cos(wind_direc)
+wind_y = wind_speed * np.sin(wind_direc)
+plt.quiver(100, 10, wind_x, wind_y, angles='xy', scale_units='xy', scale=1, color='blue', label='Wind Vector')
 plt.title("Trajectories with Goals")
-plt.xlabel("x"); plt.ylabel("y")
+plt.xlabel("x")
+plt.ylabel("y")
 plt.legend()
 plt.tight_layout()
 plt.savefig(os.path.join(latest_dir, "trajectory_plot.png"))
 
 # --- Plot Aero Coefficients ---
-plt.figure(figsize=(12, 4))
+"""plt.figure(figsize=(12, 4))
 for ep in df_aero["episode"].unique()[:num_episodes]:
     ep_length = ep_length_list[ep]
     
     ep_aero = df_aero[df_aero["episode"] == ep]
     for env_id in ep_aero["env_id"].unique():
         env_aero = ep_aero[ep_aero["env_id"] == env_id]
-        plt.plot(env_aero["lift_coeff"][:ep_length], label=f"Lift Ep{ep} Env{env_id}")
-        plt.plot(env_aero["drag_coeff"][:ep_length], label=f"drag Ep{ep} Env{env_id}")
-        print(env_aero["lift_coeff"][:ep_length])
+        plt.plot(np.arange(ep_length), env_aero["lift_coeff"][:ep_length], label=f"Lift Ep{ep} Env{env_id}")
+        #print(env_aero["lift_coeff"][:ep_length].shape)
+        plt.plot(np.arange(ep_length), env_aero["drag_coeff"][:ep_length], label=f"drag Ep{ep} Env{env_id}")
+        print((env_aero["lift_coeff"][:ep_length]))
 
 plt.title("Lift Coefficients")
 plt.xlabel("Timestep")
@@ -79,5 +89,150 @@ plt.ylabel("Lift")
 plt.legend()
 
 plt.tight_layout()
-plt.savefig(os.path.join(latest_dir, "aero_coeffs.png"))
+plt.savefig(os.path.join(latest_dir, "aero_coeffs.png"))"""
 #plt.show()
+
+# --- Settings ---
+max_timestep = 3000  # truncate or pad to this length
+lift_all = []
+drag_all = []
+
+# --- Aggregate Data ---
+for ep in df_aero["episode"].unique()[:num_episodes]:
+    ep_aero = df_aero[df_aero["episode"] == ep]
+    for env_id in ep_aero["env_id"].unique():
+        env_aero = ep_aero[ep_aero["env_id"] == env_id]
+        
+        lift = env_aero["lift_coeff"].values[:max_timestep]
+        drag = env_aero["drag_coeff"].values[:max_timestep]
+
+        # Pad with NaNs if shorter than max_timestep
+        if len(lift) < max_timestep:
+            pad = max_timestep - len(lift)
+            lift = np.pad(lift, (0, pad), constant_values=np.nan)
+            drag = np.pad(drag, (0, pad), constant_values=np.nan)
+
+        lift_all.append(lift)
+        drag_all.append(drag)
+
+lift_all = np.stack(lift_all)  # shape: (num_trajs, max_timestep)
+drag_all = np.stack(drag_all)
+
+# --- Compute stats ---
+lift_mean = np.nanmean(lift_all, axis=0)
+lift_std = np.nanstd(lift_all, axis=0)
+drag_mean = np.nanmean(drag_all, axis=0)
+drag_std = np.nanstd(drag_all, axis=0)
+
+# --- Plot ---
+plt.figure(figsize=(12, 4))
+timesteps = np.arange(max_timestep)
+
+# Lift
+plt.plot(timesteps, lift_mean, label="Lift Mean", color='blue')
+plt.fill_between(timesteps, lift_mean - lift_std, lift_mean + lift_std, alpha=0.3, color='blue', label="Lift ±1 std")
+
+# Drag
+plt.plot(timesteps, drag_mean, label="Drag Mean", color='red')
+plt.fill_between(timesteps, drag_mean - drag_std, drag_mean + drag_std, alpha=0.3, color='red', label="Drag ±1 std")
+
+plt.title("Lift and Drag Coefficients (Mean ± Std)")
+plt.xlabel("Timestep")
+plt.ylabel("Coefficient")
+plt.legend()
+plt.tight_layout()
+plt.savefig(os.path.join(latest_dir, "aero_coeffs_mean_std.png"))
+
+
+# --- Other Metrics ---
+max_timestep = 3000  # truncate or pad to this length
+energy_all = []
+rew_progress_all = []
+rew_backward_all = []
+rew_energy_all = []
+
+# --- Aggregate Data ---
+for ep in df_other_metrics["episode"].unique()[:num_episodes]:
+    ep_other_metrics = df_other_metrics[df_other_metrics["episode"] == ep]
+    ep_length = ep_length_list[ep]
+    for env_id in ep_other_metrics["env_id"].unique():
+        env_other_metrics = ep_other_metrics[ep_other_metrics["env_id"] == env_id]
+        
+        energy = env_other_metrics["energy"].values[:max_timestep]
+        reward_progress = env_other_metrics["reward_progress"].values[:max_timestep]
+        reward_backward = env_other_metrics["reward_backward"].values[:max_timestep]
+        reward_energy = env_other_metrics["reward_energy"].values[:max_timestep]
+
+        """# Pad with NaNs if shorter than max_timestep
+        if len(lift) < max_timestep:
+            pad = max_timestep - len(lift)
+            lift = np.pad(lift, (0, pad), constant_values=np.nan)
+            drag = np.pad(drag, (0, pad), constant_values=np.nan)"""
+
+        energy_all.append(energy)
+        rew_progress_all.append(reward_progress)
+        rew_backward_all.append(reward_backward)
+        rew_energy_all.append(reward_energy)
+
+        """lift_all.append(lift)
+        drag_all.append(drag)"""
+
+
+energy_all = np.stack(energy_all)
+rew_progress_all = np.stack(rew_progress_all)
+rew_backward_all = np.stack(rew_backward_all)
+rew_energy_all = np.stack(rew_energy_all)
+
+# --- Compute stats for other metrics ---
+energy_mean = np.nanmean(energy_all, axis=0)
+energy_std = np.nanstd(energy_all, axis=0)
+rew_progress_mean = np.nanmean(rew_progress_all, axis=0)
+rew_progress_std = np.nanstd(rew_progress_all, axis=0)      
+rew_backward_mean = np.nanmean(rew_backward_all, axis=0)
+rew_backward_std = np.nanstd(rew_backward_all, axis=0)
+rew_energy_mean = np.nanmean(rew_energy_all, axis=0)
+rew_energy_std = np.nanstd(rew_energy_all, axis=0)
+
+# --- Plot Other Metrics ---
+plt.figure(figsize=(12, 4))
+timesteps = np.arange(max_timestep-1) 
+
+plt.subplot(2, 2, 1)
+# Energy    
+plt.plot(np.arange(len(energy_mean)) , energy_mean, label="Energy Mean", color='green')
+plt.fill_between(np.arange(len(energy_mean)), energy_mean - energy_std, energy_mean + energy_std, alpha=0.3, color='green', label="Energy ±1 std")
+plt.title("Energy consumption (Mean ± Std)")
+plt.xlabel("Timestep")
+plt.ylabel("Value")
+plt.legend()
+
+# Reward Progress
+plt.subplot(2, 2, 2)
+plt.plot(np.arange(len(rew_progress_mean)), rew_progress_mean, label="Reward Progress Mean", color='orange')
+plt.fill_between(np.arange(len(rew_progress_mean)), rew_progress_mean - rew_progress_std, rew_progress_mean + rew_progress_std, alpha=0.3, color='orange', label="Reward Progress ±1 std")
+plt.title("Reward progress (Mean ± Std)")
+plt.xlabel("Timestep")
+plt.ylabel("Value")
+plt.legend()
+
+# Reward Backward
+plt.subplot(2, 2, 3)
+plt.plot(np.arange(len(rew_backward_mean)), rew_backward_mean, label="Reward Backward Mean", color='purple')
+plt.fill_between(np.arange(len(rew_backward_mean)), rew_backward_mean - rew_backward_std, rew_backward_mean + rew_backward_std, alpha=0.3, color='purple', label="Reward Backward ±1 std")
+plt.title("Reward backward (Mean ± Std)")
+plt.xlabel("Timestep")
+plt.ylabel("Value")
+plt.legend()
+
+# Reward Energy
+plt.subplot(2, 2, 4)
+plt.plot(np.arange(len(rew_energy_mean)), rew_energy_mean, label="Reward Energy Mean", color='brown')
+plt.fill_between(np.arange(len(rew_energy_mean)), rew_energy_mean - rew_energy_std, rew_energy_mean + rew_energy_std, alpha=0.3, color='brown', label="Reward Energy ±1 std")
+plt.title("Reward Energy (Mean ± Std)")
+plt.xlabel("Timestep")
+plt.ylabel("Value")
+plt.legend()
+plt.tight_layout()
+
+plt.savefig(os.path.join(latest_dir, "other_metrics_mean_std.png"))
+
