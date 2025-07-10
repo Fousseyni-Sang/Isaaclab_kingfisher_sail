@@ -178,13 +178,13 @@ def main():
     # For each environment, store list of [x, y] positions
     max_episod_length = env.unwrapped.max_episode_length
     num_episodes = 10
-    trajectories = torch.zeros(max_episod_length, args_cli.num_envs, 2) #[[] for _ in range(env.num_envs)]
-    lift_coeff_logs = torch.zeros(max_episod_length, args_cli.num_envs) #[[] for _ in range(env.num_envs)]
-    drag_coeff_logs = torch.zeros(max_episod_length, args_cli.num_envs) #[[] for _ in range(env.num_envs)]
-    energy_logs = torch.zeros(max_episod_length, args_cli.num_envs)
-    reward_progress_logs = torch.zeros(max_episod_length, args_cli.num_envs)
-    reward_energy_logs = torch.zeros(max_episod_length, args_cli.num_envs)
-    reward_backward_logs = torch.zeros(max_episod_length, args_cli.num_envs)    
+    trajectories = torch.zeros((max_episod_length, args_cli.num_envs, 2), device=env.unwrapped.device) #[[] for _ in range(env.num_envs)]
+    lift_coeff_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.unwrapped.device) #[[] for _ in range(env.num_envs)]
+    drag_coeff_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.unwrapped.device) #[[] for _ in range(env.num_envs)]
+    energy_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.unwrapped.device)
+    reward_progress_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.unwrapped.device)
+    reward_energy_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.unwrapped.device)
+    reward_backward_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.unwrapped.device)  
     
     trajectories_list = []
     lift_coeff_list = []
@@ -204,7 +204,7 @@ def main():
     #try:
     #while simulation_app.is_running():
     current_step = 0
-    wind_direc = (125*torch.pi/180)
+    wind_direc = (100*torch.pi/180)
     wind_speed = 5
     while episode_cntr<num_episodes:   
         
