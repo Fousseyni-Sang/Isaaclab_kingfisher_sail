@@ -204,7 +204,7 @@ def main():
     #try:
     #while simulation_app.is_running():
     current_step = 0
-    wind_direc = (125*torch.pi/180)
+    wind_direc = (150*torch.pi/180)
     wind_speed = 5
     while episode_cntr<num_episodes:   
         
