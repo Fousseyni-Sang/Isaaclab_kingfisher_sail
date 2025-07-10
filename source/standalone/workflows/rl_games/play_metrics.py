@@ -67,8 +67,8 @@ from omni.isaac.lab_tasks.utils.wrappers.rl_games import RlGamesGpuEnv, RlGamesV
 
 import numpy as np
 # Create Publisher Node
-import rclpy
-from ros2_Node import RlAgentPublisher, RewardWeightSubscriber
+"""import rclpy
+from ros2_Node import RlAgentPublisher, RewardWeightSubscriber"""
 import matplotlib.pyplot as plt
 
 
@@ -76,10 +76,10 @@ def main():
     """Play with RL-Games agent."""
         
     # ---- Initialize ROS2 ----
-    rclpy.init()
+    """rclpy.init()
     ros_node = RlAgentPublisher(args_cli.num_envs)
     slider_names = ['time', 'energy', 'goal', 'wind_direct', 'desired_speed', 'wind_speed']  # Must match the names you use in the publisher
-    slider_node = RewardWeightSubscriber(slider_names)
+    slider_node = RewardWeightSubscriber(slider_names)"""
     #rclpy.spin(slider_node)
 
     # parse env configuration
