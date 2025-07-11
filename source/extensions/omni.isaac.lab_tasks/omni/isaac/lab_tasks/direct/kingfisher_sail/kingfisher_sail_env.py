@@ -286,7 +286,7 @@ class KingfisherSailEnvCfg(DirectRLEnvCfg):
     decimation = 3
     step_dt = physics_dt * decimation  # 20 Hz
     action_space = 3
-    observation_space = 18
+    observation_space = 19
     state_space = 0
     debug_vis = True
 
@@ -896,6 +896,7 @@ class KingfisherSailEnv(DirectRLEnv):
                 torch.cos(self.bearing).unsqueeze(1),  # 1
                 torch.sin(self.bearing).unsqueeze(1),  # 1
                 (self.distance).unsqueeze(1),  # 1
+                (self.distance/self.initial_distance).unsqueeze(1),  # 1
                 torch.cos(self._aerodynamics.angle_of_attack.reshape(self.num_envs, -1)), # 1
                 torch.sin(self._aerodynamics.angle_of_attack.reshape(self.num_envs, -1)), # 1
                 torch.cos(self._aerodynamics.apparent_wind_angle).reshape(self.num_envs, -1), # 1
@@ -1073,6 +1074,8 @@ class KingfisherSailEnv(DirectRLEnv):
         eps = 1e-6
         #safe_time_error = torch.clamp(predic_error_time, min=eps)
         
+        distance_reward = (- torch.tanh((self.distance/self.initial_distance)/1.6)) * self.step_dt
+
         #print(f"ks: {(180/torch.pi)*ks}")
         #safe_energy_error = torch.clamp(predic_error_energy, min=eps)
         #print(f"predic_error_energy: {predic_error_energy} \tenergy_context: {self.energy_context} \tprediction: {predicted_energy_context}")
@@ -1105,7 +1108,7 @@ class KingfisherSailEnv(DirectRLEnv):
             "4_backwards": backwards_penalty,
             "5_bearing_penalty": 0.*bearing_penalty,
             "6_time": time_reward,
-            "7_tack_penalty": 0*tack_reward,
+            "7_tack_penalty": distance_reward,
             "8_lift_drag_ratio": force_projection,
         }
         #print(f"rewards: {rewards} rew_lift_drag_ratio: {lift_drag_ratio}\n")
@@ -1290,15 +1293,15 @@ class KingfisherSailEnv(DirectRLEnv):
         self.previous_robot_pos[env_ids] = self._robot.data.root_link_pos_w[env_ids]
         self.initial_robot_pos[env_ids] = self._robot.data.root_link_pos_w[env_ids]
 
-        """self.tack_waypoints[env_ids, :, :2], _ = generate_tacking_waypoints(
+        self.tack_waypoints[env_ids, :, :2], _ = generate_tacking_waypoints(
                     start_pos=self.initial_robot_pos[env_ids, :2], 
                     goal_pos=self._desired_pos_w[env_ids, :2], 
                     wind_direction=self._aerodynamics.Uw[env_ids],
                     min_upwind_angle=self._aerodynamics.cfg.min_upwind_angle, 
                     tack_leg_length=5*self.tack_length,
                     max_num_waypoints=self.num_tack_waypoints
-                )"""
-
+                )
+        print(f"tack_waypoints: {self.tack_waypoints[env_ids, :, :2]}")
 
     def _set_debug_vis_impl(self, debug_vis: bool):
         # create markers if necessary for the_robot_mass first tome
