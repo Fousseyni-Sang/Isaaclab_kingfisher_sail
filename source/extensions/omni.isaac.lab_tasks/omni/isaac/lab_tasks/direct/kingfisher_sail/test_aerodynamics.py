@@ -8,14 +8,14 @@ from __future__ import annotations
 from omni.isaac.lab.physics.aerodynamics import AerodynamicsCfg, Aerodynamics
 import torch
 import matplotlib.pyplot as plt
-
+import numpy as np
 
 # Aerodynamics
 aerodynamics_cfg: AerodynamicsCfg = AerodynamicsCfg()
 aerodynamics_cfg.air_density = 1.225
 aerodynamics_cfg.wing_span = 1
 aerodynamics_cfg.wing_chord = 0.2
-aerodynamics_cfg.wind_direction = -90*torch.pi/180
+aerodynamics_cfg.wind_direction = 170*torch.pi/180
 aerodynamics_cfg.wind_speed = 5
 aerodynamics_cfg.angle_of_attack = 20*torch.pi/180
 aerodynamics_cfg.min_upwind_angle = 45*torch.pi/180
@@ -70,15 +70,18 @@ def generate_tacking_waypoints(start_pos:torch.Tensor, goal_pos:torch.Tensor, wi
     
     finished = torch.zeros(num_envs, dtype=torch.bool, device=device)
 
-    for step in range(1, max_num_waypoints):
+    for step in range(1, max_num_waypoints-1):
         tack_angle = wind_direction + tack_side * min_upwind_angle + torch.pi
+        tack_angle = torch.atan2(torch.sin(tack_angle), torch.cos(tack_angle))
+        print(f"tack_angle: {(180/torch.pi)*tack_angle}; wind_angle: {(180/torch.pi)*wind_direction}; min_angle: {(180/torch.pi)*min_upwind_angle}")
+        
         tack_dir = torch.stack((torch.cos(tack_angle), torch.sin(tack_angle)), dim=1)
         
         next_pos = current_pos + tack_leg_length.reshape(num_envs, -1) * tack_dir
 
         waypoints[:, step, :] = next_pos
         valid_mask[:, step] = ~finished
-        #print(f"wpts: {waypoints} \tmask: {valid_mask}")
+        print(f"step: {step} \tcurrent_pos: {current_pos} \tnext_pos: {next_pos} \tgoal_pos: {goal_pos}")
         to_goal_vec = goal_pos - current_pos
         to_next_vec = next_pos - current_pos
 
@@ -86,15 +89,15 @@ def generate_tacking_waypoints(start_pos:torch.Tensor, goal_pos:torch.Tensor, wi
         tack_dir = to_next_vec / (to_next_vec.norm(dim=-1, keepdim=True) + 1e-6)
 
         goal_proj = torch.sum(goal_dir * tack_dir, dim=1)
-
+        print(f"goal_dir: {goal_dir} \ttack_dir: {tack_dir} \tgoal_proj: {goal_proj}")
         sail_away = goal_proj < 0.1
         #print(f"cos: {goal_proj} \tsailaway: {sail_away}")
         near_goal = torch.norm(goal_pos - next_pos, dim=1) < tack_leg_length
-
+        print(f"sail_away: {sail_away} \tnear_goal: {near_goal}")
         done_now = (~finished) & (sail_away | near_goal)
         next_pos[done_now] = goal_pos[done_now]
         finished |= done_now
-
+        print(f"done_now: {done_now} \tfinished: {finished}")
         current_pos = next_pos
         tack_side = -tack_side
 
@@ -144,11 +147,11 @@ def get_desired_bearing(bearing: torch.Tensor, wind_direction: torch.Tensor, min
 
 #=====================================================================================================================#
 
-
+print(aerodynamics.Uw[:])
 tack_waypoints[0, :, :2], _ = generate_tacking_waypoints(
-                    start_pos=initial_robot_pos[0, :2], 
-                    goal_pos=_desired_pos_w[0, :2], 
-                    wind_direction=aerodynamics.Uw[0],
+                    start_pos=initial_robot_pos[:, :2], 
+                    goal_pos=_desired_pos_w[:, :2], 
+                    wind_direction=aerodynamics.Beta_w[:],
                     min_upwind_angle=aerodynamics.cfg.min_upwind_angle, 
                     tack_leg_length=5*tack_length,
                     max_num_waypoints=num_tack_waypoints)
@@ -156,8 +159,8 @@ tack_waypoints[0, :, :2], _ = generate_tacking_waypoints(
 
 waypoints = tack_waypoints[0, :, :2].cpu().numpy()
 plt.plot(waypoints[:, 0], waypoints[:, 1], marker='o')
-#plt.arrow(start[0], start[1], 10*np.cos(wind_dir), 10*np.sin(wind_dir), color='skyblue', width=0.5)
-#plt.text(goal[0], goal[1], "Goal", fontsize=12)
+plt.arrow(_desired_pos_w[0, 0].item(), _desired_pos_w[0, 1].item()-10, 10*np.cos(aerodynamics.Beta_w[0].item()), 10*np.sin(aerodynamics.Beta_w[0].item()), color='skyblue', width=0.5)
+plt.text(_desired_pos_w[0, 0].item(), _desired_pos_w[0, 1].item(), "Goal", fontsize=12)
 plt.grid(True)
 plt.axis('equal')
 plt.title("Tacking Waypoint Planner")

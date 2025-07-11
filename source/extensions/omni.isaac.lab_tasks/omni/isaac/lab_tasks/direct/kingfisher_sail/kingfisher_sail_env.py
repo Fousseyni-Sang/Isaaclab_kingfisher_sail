@@ -147,7 +147,7 @@ class TackManager:
         return torch.atan2(torch.sin(self.desired_bearing), torch.cos(self.desired_bearing))  # wrap to [-π, π]
 
 
-def generate_tacking_waypoints(start_pos:torch.Tensor, goal_pos:torch.Tensor, wind_direction:torch.Tensor,
+"""def generate_tacking_waypoints(start_pos:torch.Tensor, goal_pos:torch.Tensor, wind_direction:torch.Tensor,
                                      min_upwind_angle:float, tack_leg_length:torch.Tensor, max_num_waypoints=10):
     
     device = start_pos.device
@@ -165,9 +165,9 @@ def generate_tacking_waypoints(start_pos:torch.Tensor, goal_pos:torch.Tensor, wi
     for step in range(1, max_num_waypoints):
         tack_angle = wind_direction + tack_side * min_upwind_angle + torch.pi
         tack_dir = torch.stack((torch.cos(tack_angle), torch.sin(tack_angle)), dim=1)
-        
+        #print(tack_leg_length.shape, tack_dir.shape, current_pos.shape)
         next_pos = current_pos + tack_leg_length.reshape(num_envs, -1) * tack_dir
-
+        
         waypoints[:, step, :] = next_pos
         valid_mask[:, step] = ~finished
         #print(f"wpts: {waypoints} \tmask: {valid_mask}")
@@ -187,6 +187,57 @@ def generate_tacking_waypoints(start_pos:torch.Tensor, goal_pos:torch.Tensor, wi
         next_pos[done_now] = goal_pos[done_now]
         finished |= done_now
 
+        current_pos = next_pos
+        tack_side = -tack_side
+
+        if finished.all():
+            waypoints[:, step+1, :] = goal_pos
+            break
+
+    return waypoints, valid_mask"""
+
+def generate_tacking_waypoints(start_pos:torch.Tensor, goal_pos:torch.Tensor, wind_direction:torch.Tensor,
+                                     min_upwind_angle:float, tack_leg_length:torch.Tensor, max_num_waypoints=10):
+    
+    device = start_pos.device
+    num_envs = start_pos.shape[0]
+
+    waypoints = torch.zeros((num_envs, max_num_waypoints, 2), device=device)
+    valid_mask = torch.zeros((num_envs, max_num_waypoints), dtype=torch.bool, device=device)
+    waypoints[:, 0, :] = start_pos
+    current_pos = start_pos.clone()
+    tack_side = torch.ones(num_envs, device=device)
+    
+    finished = torch.zeros(num_envs, dtype=torch.bool, device=device)
+
+    for step in range(1, max_num_waypoints-1):
+        tack_angle = wind_direction + tack_side * min_upwind_angle + torch.pi
+        tack_angle = torch.atan2(torch.sin(tack_angle), torch.cos(tack_angle))
+        #print(f"tack_angle: {(180/torch.pi)*tack_angle}; wind_angle: {(180/torch.pi)*wind_direction}; min_angle: {(180/torch.pi)*min_upwind_angle}")
+        
+        tack_dir = torch.stack((torch.cos(tack_angle), torch.sin(tack_angle)), dim=1)
+        
+        next_pos = current_pos + tack_leg_length.reshape(num_envs, -1) * tack_dir
+
+        waypoints[:, step, :] = next_pos
+        valid_mask[:, step] = ~finished
+        #print(f"step: {step} \tcurrent_pos: {current_pos} \tnext_pos: {next_pos} \tgoal_pos: {goal_pos}")
+        to_goal_vec = goal_pos - current_pos
+        to_next_vec = next_pos - current_pos
+
+        goal_dir = to_goal_vec / (to_goal_vec.norm(dim=-1, keepdim=True) + 1e-6)
+        tack_dir = to_next_vec / (to_next_vec.norm(dim=-1, keepdim=True) + 1e-6)
+
+        goal_proj = torch.sum(goal_dir * tack_dir, dim=1)
+        #print(f"goal_dir: {goal_dir} \ttack_dir: {tack_dir} \tgoal_proj: {goal_proj}")
+        sail_away = goal_proj < 0.1
+        #print(f"cos: {goal_proj} \tsailaway: {sail_away}")
+        near_goal = torch.norm(goal_pos - next_pos, dim=1) < tack_leg_length
+        #print(f"sail_away: {sail_away} \tnear_goal: {near_goal}")
+        done_now = (~finished) & (sail_away | near_goal)
+        next_pos[done_now] = goal_pos[done_now]
+        finished |= done_now
+        #print(f"done_now: {done_now} \tfinished: {finished}")
         current_pos = next_pos
         tack_side = -tack_side
 
@@ -1074,7 +1125,7 @@ class KingfisherSailEnv(DirectRLEnv):
         eps = 1e-6
         #safe_time_error = torch.clamp(predic_error_time, min=eps)
         
-        distance_reward = (- torch.tanh((self.distance/self.initial_distance)/1.6)) * self.step_dt
+        distance_reward = 0.6*(- torch.tanh((self.distance/self.initial_distance)/1.6)) * self.step_dt
 
         #print(f"ks: {(180/torch.pi)*ks}")
         #safe_energy_error = torch.clamp(predic_error_energy, min=eps)
@@ -1292,16 +1343,18 @@ class KingfisherSailEnv(DirectRLEnv):
 
         self.previous_robot_pos[env_ids] = self._robot.data.root_link_pos_w[env_ids]
         self.initial_robot_pos[env_ids] = self._robot.data.root_link_pos_w[env_ids]
-
+        
+        self.tack_length[env_ids] = self.initial_distance[env_ids] // 3
+        print(f"tack_length: {self.tack_length[env_ids]}")
         self.tack_waypoints[env_ids, :, :2], _ = generate_tacking_waypoints(
                     start_pos=self.initial_robot_pos[env_ids, :2], 
                     goal_pos=self._desired_pos_w[env_ids, :2], 
-                    wind_direction=self._aerodynamics.Uw[env_ids],
+                    wind_direction=self._aerodynamics.Beta_w[env_ids],
                     min_upwind_angle=self._aerodynamics.cfg.min_upwind_angle, 
-                    tack_leg_length=5*self.tack_length,
+                    tack_leg_length=self.tack_length[env_ids],
                     max_num_waypoints=self.num_tack_waypoints
                 )
-        print(f"tack_waypoints: {self.tack_waypoints[env_ids, :, :2]}")
+        #print(f"tack_waypoints: {self.tack_waypoints[env_ids, :, :2]}")
 
     def _set_debug_vis_impl(self, debug_vis: bool):
         # create markers if necessary for the_robot_mass first tome
