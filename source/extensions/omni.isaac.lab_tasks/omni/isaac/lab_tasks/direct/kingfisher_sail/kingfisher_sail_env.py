@@ -1055,7 +1055,7 @@ class KingfisherSailEnv(DirectRLEnv):
         #print((torch.abs(self.previous_distance - self.distance)/torch.norm(self._robot.data.root_lin_vel_b, dim=-1)) * self.cfg.time_penalty_scale * self.step_dt * self.time_context)
         # Penalize bearing errors
         root_vel_w = self._robot.data.root_lin_vel_w.clone()
-        bearing_penalty = torch.exp(self.cfg.beargin_penalty_coef * torch.abs(self.bearing)) - 1
+        bearing_penalty = self.cfg.bearing_penalty_scale*(torch.exp(self.cfg.beargin_penalty_coef * torch.abs(self.bearing)) - 1)
         #bearing_penalty = torch.sum(root_vel_w*(grad_direction), dim=-1)/(torch.norm(grad_direction, dim=-1)*torch.norm(root_vel_w, dim=-1))
         #bearing_penalty = 0.1*bearing_penalty*self.step_dt
         #bearing_penalty[condition] = 0.01*bearing_penalty[condition]
@@ -1164,7 +1164,7 @@ class KingfisherSailEnv(DirectRLEnv):
         )
         self.desired_pos_b[:, :2] = self.desired_pos_b_3d[:, :2]
         self.distance = torch.linalg.norm(self.desired_pos_b, dim=1)
-        self.bearing = torch.atan2(self.desired_pos_b[:, 1], self.desired_pos_b[:, 0])
+        #self.bearing = torch.atan2(self.desired_pos_b[:, 1], self.desired_pos_b[:, 0])
 
         goal_passed = torch.sum((self._desired_pos_w[:, :2] - self.initial_robot_pos[:, :2])*(self._robot.data.root_link_pos_w[:, :2] \
         - self.initial_robot_pos[:, :2]), dim=-1)>torch.square(torch.norm(self._desired_pos_w[:, :2] - self.initial_robot_pos[:, :2], dim=-1))+3
