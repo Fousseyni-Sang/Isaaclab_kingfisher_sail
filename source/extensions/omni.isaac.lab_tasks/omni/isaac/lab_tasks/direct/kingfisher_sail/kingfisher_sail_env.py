@@ -158,19 +158,21 @@ def generate_tacking_waypoints(start_pos:torch.Tensor, goal_pos:torch.Tensor, wi
     waypoints[:, 0, :] = start_pos
     current_pos = start_pos.clone()
     tack_side = torch.ones(num_envs, device=device)
-    goal_vec = goal_pos - start_pos
-    goal_dist = torch.norm(goal_vec, dim=1)
+    
     finished = torch.zeros(num_envs, dtype=torch.bool, device=device)
 
-    for step in range(1, max_num_waypoints):
+    for step in range(1, max_num_waypoints-1):
         tack_angle = wind_direction + tack_side * min_upwind_angle + torch.pi
+        tack_angle = torch.atan2(torch.sin(tack_angle), torch.cos(tack_angle))
+        #print(f"tack_angle: {(180/torch.pi)*tack_angle}; wind_angle: {(180/torch.pi)*wind_direction}; min_angle: {(180/torch.pi)*min_upwind_angle}")
+        
         tack_dir = torch.stack((torch.cos(tack_angle), torch.sin(tack_angle)), dim=1)
         
         next_pos = current_pos + tack_leg_length.reshape(num_envs, -1) * tack_dir
 
         waypoints[:, step, :] = next_pos
         valid_mask[:, step] = ~finished
-        #print(f"wpts: {waypoints} \tmask: {valid_mask}")
+        #print(f"step: {step} \tcurrent_pos: {current_pos} \tnext_pos: {next_pos} \tgoal_pos: {goal_pos}")
         to_goal_vec = goal_pos - current_pos
         to_next_vec = next_pos - current_pos
 
@@ -178,15 +180,15 @@ def generate_tacking_waypoints(start_pos:torch.Tensor, goal_pos:torch.Tensor, wi
         tack_dir = to_next_vec / (to_next_vec.norm(dim=-1, keepdim=True) + 1e-6)
 
         goal_proj = torch.sum(goal_dir * tack_dir, dim=1)
-
+        #print(f"goal_dir: {goal_dir} \ttack_dir: {tack_dir} \tgoal_proj: {goal_proj}")
         sail_away = goal_proj < 0.1
         #print(f"cos: {goal_proj} \tsailaway: {sail_away}")
         near_goal = torch.norm(goal_pos - next_pos, dim=1) < tack_leg_length
-
+        #print(f"sail_away: {sail_away} \tnear_goal: {near_goal}")
         done_now = (~finished) & (sail_away | near_goal)
         next_pos[done_now] = goal_pos[done_now]
         finished |= done_now
-
+        #print(f"done_now: {done_now} \tfinished: {finished}")
         current_pos = next_pos
         tack_side = -tack_side
 
@@ -196,7 +198,34 @@ def generate_tacking_waypoints(start_pos:torch.Tensor, goal_pos:torch.Tensor, wi
 
     return waypoints, valid_mask
 
-#def get_desired_heading_wpts
+def get_desired_bearing_wpts(bearing: torch.Tensor, next_wpt_idx:torch.Tensor, tack_waypts:torch.Tensor ,robot:Articulation, sail_mode:torch.Tensor):
+    """ Calculate the desired bearing based on the next waypoint and the robot's orientation."""
+
+    next_wpt = tack_waypts[torch.arange(tack_waypts.shape[0]), next_wpt_idx]
+    desired_pos_b_3d, _ = subtract_frame_transforms(
+            robot.data.root_link_state_w[:, :3], robot.data.root_link_state_w[:, 3:7], next_wpt
+        )
+    desired_pos_b = torch.zeros_like(desired_pos_b_3d)
+    desired_pos_b[:, :2] = desired_pos_b_3d[:, :2]
+    
+    upwind_mask = sail_mode[:, 0] == 1
+    bearing[upwind_mask] = torch.atan2(desired_pos_b[:, 1], desired_pos_b[:, 0])[upwind_mask]
+
+    distance = torch.linalg.norm(desired_pos_b, dim=1)
+    bearing = torch.atan2(desired_pos_b[:, 1], desired_pos_b[:, 0])
+
+    previous_wpt = tack_waypts[torch.arange(tack_waypts.shape[0]), torch.clamp(next_wpt_idx-1, min=0)]
+
+    wpt_passed = torch.sum((next_wpt[:, :2] - previous_wpt[:, :2])*(robot.data.root_link_pos_w[:, :2] \
+    - previous_wpt[:, :2]), dim=-1)>torch.square(torch.norm(next_wpt[:, :2] - next_wpt[:, :2], dim=-1))
+
+    wpt_reached = distance < 0.5
+
+    next_wpt_idx = torch.where(wpt_passed | wpt_reached, torch.clamp(next_wpt_idx+1, max=tack_waypts.shape[1]-1), next_wpt_idx)
+    
+
+    return bearing, next_wpt_idx
+
 
 
 def get_desired_bearing(bearing: torch.Tensor, wind_direction: torch.Tensor, min_upwind_angle:float, 
@@ -443,13 +472,13 @@ class KingfisherSailEnvCfg(DirectRLEnvCfg):
 
     # reward scales
     distance_reward_scale = 0.0
-    distance_progress_reward_scale = 1 #35 #5 # 6 too much
+    distance_progress_reward_scale =  35 #5 # 6 too much
     bearing_progress_reward_scale = 0.0
 
     goal_reached_threshold = 0.1
     goal_reached_scale = 100.0 # 150
 
-    energy_penalty_scale = -1 #-0.08  #-0.001
+    energy_penalty_scale = -0.08  #-0.001
     backwards_penalty_scale = -0.05
     time_penalty_scale = -1 #-0.008 #
     penalty_inefficient_sailing_scale = -0.1
@@ -608,6 +637,7 @@ class KingfisherSailEnv(DirectRLEnv):
         self.tack_waypoints = torch.zeros((self.num_envs, self.num_tack_waypoints, 3), device=self.device)  # 10 waypoints
         self.tack_valid_mask = torch.zeros((self.num_envs, self.num_tack_waypoints), dtype=torch.bool, device=self.device)  # Valid mask for waypoints
 
+        self.next_tack_wpt_idx = torch.zeros(self.num_envs, dtype=torch.int32, device=self.device)  # Index of the next waypoint to reach
         # ============================================================================================#
         # ======================== Markers for the wind visualization ================================#
         # ============================================================================================#
@@ -844,12 +874,15 @@ class KingfisherSailEnv(DirectRLEnv):
         sailing_mode[~upwind_mask & ~downwind_mask, 2] = 1.0
         RAD2DEG = 180.0 / torch.pi
         self.in_tack_mode = torch.where(sailing_mode[:, 2] == 0, 1.0, 0)
-        self.bearing, self.in_tack_mode, self.tack_side = get_desired_bearing(self.bearing, self._aerodynamics.Beta_w, self._aerodynamics.cfg.min_upwind_angle, 
+        """self.bearing, self.in_tack_mode, self.tack_side = get_desired_bearing(self.bearing, self._aerodynamics.Beta_w, self._aerodynamics.cfg.min_upwind_angle, 
                 self._aerodynamics.cfg.max_downwind_angle, self.cross_track_error, self.cfg.max_cross_track, sailing_mode,
-                self.in_tack_mode, self.tack_side)
+                self.in_tack_mode, self.tack_side)"""
         
         """print(f"\nbearing: {RAD2DEG*self.bearing} \tks: {RAD2DEG*ks} \tsailing_mode: {sailing_mode}")
         print(f"cross_track_error: {self.cross_track_error} \ttack_side: {self.tack_side} \tin_tack_mode: {self.in_tack_mode}\n")"""
+        
+        self.bearing, self.next_tack_wpt_idx = get_desired_bearing_wpts(bearing=self.bearing, next_wpt_idx=self.next_tack_wpt_idx,
+                        tack_waypts=self.tack_waypoints, robot=self._robot, sail_mode=sailing_mode)
         
         sampling_rate = 400
         left_thruster_enabled = torch.ones_like(self.thruster_left_randn)
@@ -957,8 +990,8 @@ class KingfisherSailEnv(DirectRLEnv):
         root_vel_w = self._robot.data.root_lin_vel_w.clone()
         
         # Distance progress
-        self.distance_progress = torch.sum(root_vel_w*grad_direction, dim=-1)/torch.norm(grad_direction, dim=-1)
-        #self.distance_progress = torch.sum(self.position_progress*grad_direction, dim=-1)/torch.norm(grad_direction, dim=-1) 
+        #self.distance_progress = torch.sum(root_vel_w*grad_direction, dim=-1)/torch.norm(grad_direction, dim=-1)
+        self.distance_progress = self.previous_distance - self.distance #torch.sum(self.position_progress*grad_direction, dim=-1)/torch.norm(grad_direction, dim=-1) 
         #self.previous_distance - self.distance #
         #torch.sum((current_robot_pos - self.previous_robot_pos)*(grad_direction), dim=-1)/torch.norm(grad_direction, dim=-1) #
         distance_progress_norm =  (self.distance_progress / self.initial_distance) #(1 - self.distance/self.initial_distance)*self.step_dt
@@ -1022,7 +1055,7 @@ class KingfisherSailEnv(DirectRLEnv):
         #print((torch.abs(self.previous_distance - self.distance)/torch.norm(self._robot.data.root_lin_vel_b, dim=-1)) * self.cfg.time_penalty_scale * self.step_dt * self.time_context)
         # Penalize bearing errors
         root_vel_w = self._robot.data.root_lin_vel_w.clone()
-        bearing_penalty = torch.exp(self.cfg.beargin_penalty_coef * torch.abs(self.bearing)) - 1
+        bearing_penalty = self.cfg.bearing_penalty_scale*(torch.exp(self.cfg.beargin_penalty_coef * torch.abs(self.bearing)) - 1)
         #bearing_penalty = torch.sum(root_vel_w*(grad_direction), dim=-1)/(torch.norm(grad_direction, dim=-1)*torch.norm(root_vel_w, dim=-1))
         #bearing_penalty = 0.1*bearing_penalty*self.step_dt
         #bearing_penalty[condition] = 0.01*bearing_penalty[condition]
@@ -1074,7 +1107,7 @@ class KingfisherSailEnv(DirectRLEnv):
         eps = 1e-6
         #safe_time_error = torch.clamp(predic_error_time, min=eps)
         
-        distance_reward = (- torch.tanh((self.distance/self.initial_distance)/1.6)) * self.step_dt
+        distance_reward = 0.6*(- torch.tanh((self.distance/self.initial_distance)/1.6)) * self.step_dt
 
         #print(f"ks: {(180/torch.pi)*ks}")
         #safe_energy_error = torch.clamp(predic_error_energy, min=eps)
@@ -1106,10 +1139,10 @@ class KingfisherSailEnv(DirectRLEnv):
             "2_goal_reached": goal_reward,
             "3_energy": energy_reward,
             "4_backwards": backwards_penalty,
-            "5_bearing_penalty": 0.*bearing_penalty,
+            "5_bearing_penalty": bearing_penalty,
             "6_time": time_reward,
-            "7_tack_penalty": distance_reward,
-            "8_lift_drag_ratio": force_projection,
+            "7_tack_penalty": 0*distance_reward,
+            "8_lift_drag_ratio": 0*force_projection,
         }
         #print(f"rewards: {rewards} rew_lift_drag_ratio: {lift_drag_ratio}\n")
         # #"6_time": time_reward
@@ -1131,7 +1164,7 @@ class KingfisherSailEnv(DirectRLEnv):
         )
         self.desired_pos_b[:, :2] = self.desired_pos_b_3d[:, :2]
         self.distance = torch.linalg.norm(self.desired_pos_b, dim=1)
-        self.bearing = torch.atan2(self.desired_pos_b[:, 1], self.desired_pos_b[:, 0])
+        #self.bearing = torch.atan2(self.desired_pos_b[:, 1], self.desired_pos_b[:, 0])
 
         goal_passed = torch.sum((self._desired_pos_w[:, :2] - self.initial_robot_pos[:, :2])*(self._robot.data.root_link_pos_w[:, :2] \
         - self.initial_robot_pos[:, :2]), dim=-1)>torch.square(torch.norm(self._desired_pos_w[:, :2] - self.initial_robot_pos[:, :2], dim=-1))+3
@@ -1292,16 +1325,18 @@ class KingfisherSailEnv(DirectRLEnv):
 
         self.previous_robot_pos[env_ids] = self._robot.data.root_link_pos_w[env_ids]
         self.initial_robot_pos[env_ids] = self._robot.data.root_link_pos_w[env_ids]
-
+        
+        self.tack_length[env_ids] = self.initial_distance[env_ids] // 3
+        #print(f"tack_length: {self.tack_length[env_ids]}")
         self.tack_waypoints[env_ids, :, :2], _ = generate_tacking_waypoints(
                     start_pos=self.initial_robot_pos[env_ids, :2], 
                     goal_pos=self._desired_pos_w[env_ids, :2], 
-                    wind_direction=self._aerodynamics.Uw[env_ids],
+                    wind_direction=self._aerodynamics.Beta_w[env_ids],
                     min_upwind_angle=self._aerodynamics.cfg.min_upwind_angle, 
-                    tack_leg_length=5*self.tack_length,
+                    tack_leg_length=self.tack_length[env_ids],
                     max_num_waypoints=self.num_tack_waypoints
                 )
-        print(f"tack_waypoints: {self.tack_waypoints[env_ids, :, :2]}")
+        #print(f"tack_waypoints: {self.tack_waypoints[env_ids, :, :2]}")
 
     def _set_debug_vis_impl(self, debug_vis: bool):
         # create markers if necessary for the_robot_mass first tome
