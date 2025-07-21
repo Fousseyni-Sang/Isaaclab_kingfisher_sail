@@ -27,6 +27,7 @@ parser.add_argument(
     help="When no checkpoint provided, use the last saved model. Otherwise use the best saved model.",
 )
 parser.add_argument("--episode_length", type=int, default=None, help="length of the episode in second.")
+parser.add_argument("--wind_direction", type=float, default=180, help="direction of the true wind in degree.")
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
@@ -216,7 +217,7 @@ def main():
     #try:
     #while simulation_app.is_running():
     current_step = 0
-    wind_direc = (180*torch.pi/180)
+    wind_direc = (args_cli.wind_direction*torch.pi/180)
     wind_speed = 5
     while episode_cntr<num_episodes:   
         
