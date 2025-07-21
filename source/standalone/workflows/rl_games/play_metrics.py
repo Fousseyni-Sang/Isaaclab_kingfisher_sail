@@ -271,13 +271,14 @@ def main():
             #print(loss, rew_backward)
             loss_disc = torch.tensor([loss.item()], device=rew_backward.device) if loss is not None else torch.zeros_like(rew_energy)
             tack_wpts = env.unwrapped.tack_waypoints
-
+            #print(f"way_pts: {env.unwrapped.sailing_mode}, bearing: {(180/torch.pi)*env.unwrapped.bearing}")
             dones = dones.to(device=trajectories.device)
             step = env.unwrapped.episode_length_buf
             episode_length = step.max().item() + 1
             #print(step, current_step)
             if torch.any(dones):
                 print(f"tack_wpts: {tack_wpts}")
+                
                 episode_lengths_list.append(current_step)
                 episode_metrics = env.unwrapped.extras["log"]
                 print(f"episode: {episode_cntr} curr: {current_step} real_step: {step} dones: {dones}")
