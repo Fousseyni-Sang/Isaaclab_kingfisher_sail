@@ -29,17 +29,20 @@ max_target_bearing = 5*torch.pi/180 #torch.pi / 2
 max_cross_track = 8.0
 num_envs = 1  # Number of environments
 
-in_tack_mode = torch.ones(num_envs, device=device)
-
-tack_length = torch.ones(num_envs, device=device)  # Default tack leg length
-num_tack_waypoints = 10  # Default number of waypoints for tacking
-tack_waypoints = torch.zeros((num_envs, num_tack_waypoints, 3), device=device)  # 10 waypoints
-tack_valid_mask = torch.zeros((num_envs, num_tack_waypoints), dtype=torch.bool, device=device)
-
 _desired_pos_w = torch.zeros(num_envs, 3, device=device)
+in_tack_mode = torch.ones(num_envs, device=device)
 initial_distance = torch.zeros_like(_desired_pos_w[0, 0]).uniform_(
             min_target_distance, max_target_distance
         )
+tack_length = torch.ones(num_envs, device=device)  # Default tack leg length
+tack_length = initial_distance // 2
+num_tack_waypoints =   int(tack_length.item()) # Default number of waypoints for tacking
+tack_waypoints = torch.zeros((num_envs, num_tack_waypoints, 3), device=device)  # 10 waypoints
+tack_valid_mask = torch.zeros((num_envs, num_tack_waypoints), dtype=torch.bool, device=device)
+
+
+
+
 
 initial_robot_pos = torch.zeros((num_envs, 3), device=device)  # Initial robot position
 initial_bearing = torch.zeros_like(_desired_pos_w[0, 0]).uniform_(
@@ -147,17 +150,25 @@ def get_desired_bearing(bearing: torch.Tensor, wind_direction: torch.Tensor, min
 
 #=====================================================================================================================#
 
+
 print(aerodynamics.Uw[:])
 tack_waypoints[0, :, :2], _ = generate_tacking_waypoints(
                     start_pos=initial_robot_pos[:, :2], 
                     goal_pos=_desired_pos_w[:, :2], 
                     wind_direction=aerodynamics.Beta_w[:],
                     min_upwind_angle=aerodynamics.cfg.min_upwind_angle, 
-                    tack_leg_length=5*tack_length,
+                    tack_leg_length=tack_length,
                     max_num_waypoints=num_tack_waypoints)
 
+waypoints = tack_waypoints[0, :, :2]
 
-waypoints = tack_waypoints[0, :, :2].cpu().numpy()
+# Compute how many valid (non-zero) rows from the start
+nonzero_mask = torch.norm(waypoints, dim=1) != 0
+nonzero_indices = nonzero_mask.nonzero(as_tuple=False).squeeze()
+
+# Keep from the start to the last non-zero row (inclusive)
+last_valid_idx = nonzero_indices[-1].item()
+waypoints = waypoints[:last_valid_idx + 1].cpu()
 plt.plot(waypoints[:, 0], waypoints[:, 1], marker='o')
 plt.arrow(_desired_pos_w[0, 0].item(), _desired_pos_w[0, 1].item()-10, 10*np.cos(aerodynamics.Beta_w[0].item()), 10*np.sin(aerodynamics.Beta_w[0].item()), color='skyblue', width=0.5)
 plt.text(_desired_pos_w[0, 0].item(), _desired_pos_w[0, 1].item(), "Goal", fontsize=12)
