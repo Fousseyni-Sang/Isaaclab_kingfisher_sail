@@ -269,7 +269,7 @@ plt.subplot(2, 1, 1)
 for ep_idx in range(len(bearing_all)):
     
     # Bearing
-    plt.plot(np.arange(len(bearing_all[ep_idx])), bearing_all[ep_idx], label="Bearing")
+    plt.plot(np.arange(len(bearing_all[ep_idx])), np.rad2deg(bearing_all[ep_idx]), label=f"Bearing {ep_idx}")
     #plt.fill_between(np.arange(len(bearing_mean)), bearing_mean - bearing_std, bearing_mean + bearing_std, alpha=0.3, color='magenta', label="Bearing ±1 std")
     plt.title("Bearing")
     plt.xlabel("Timestep")
@@ -279,7 +279,7 @@ for ep_idx in range(len(bearing_all)):
 plt.subplot(2, 1, 2)
 for ep_idx in range(len(distance_all)):
     # Distance
-    plt.plot(np.arange(len(distance_all[ep_idx])), distance_all[ep_idx], label="Distance Mean")
+    plt.plot(np.arange(len(distance_all[ep_idx])), distance_all[ep_idx], label=f"Distance {ep_idx}")
     plt.title("Distance")
     plt.xlabel("Timestep")
     plt.ylabel("Value")
