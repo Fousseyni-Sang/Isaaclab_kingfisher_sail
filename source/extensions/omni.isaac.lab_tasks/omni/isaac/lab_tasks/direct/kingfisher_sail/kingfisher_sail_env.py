@@ -210,14 +210,14 @@ def get_desired_bearing_wpts(bearing: torch.Tensor, next_wpt_idx:torch.Tensor, t
     
     upwind_mask = sail_mode[:, 0] == 1
     bearing[upwind_mask] = torch.atan2(desired_pos_b[:, 1], desired_pos_b[:, 0])[upwind_mask]
-
+    
     distance = torch.linalg.norm(desired_pos_b, dim=1)
     bearing = torch.atan2(desired_pos_b[:, 1], desired_pos_b[:, 0])
 
     previous_wpt = tack_waypts[torch.arange(tack_waypts.shape[0]), torch.clamp(next_wpt_idx-1, min=0)]
 
     wpt_passed = torch.sum((next_wpt[:, :2] - previous_wpt[:, :2])*(robot.data.root_link_pos_w[:, :2] \
-    - previous_wpt[:, :2]), dim=-1)>torch.square(torch.norm(next_wpt[:, :2] - next_wpt[:, :2], dim=-1))
+    - previous_wpt[:, :2]), dim=-1)>torch.square(torch.norm(next_wpt[:, :2] - previous_wpt[:, :2], dim=-1))
 
     wpt_reached = distance < 0.5
 
@@ -867,7 +867,7 @@ class KingfisherSailEnv(DirectRLEnv):
         #desired_bearing = # In your control loop:
         #self.desired_bearing = self.tack_manager.get_desired_bearing(self.bearing, self._aerodynamics.Beta_w, self.cross_track_error)
         
-        
+        self.sailing_mode = torch.zeros((self.num_envs, 3), device=self.device)
         upwind_mask = (torch.abs(ks) < self._aerodynamics.cfg.min_upwind_angle) 
         downwind_mask = (torch.abs(ks) > self._aerodynamics.cfg.max_downwind_angle) 
         self.sailing_mode[upwind_mask, 0] = 1.0
