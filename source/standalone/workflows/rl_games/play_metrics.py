@@ -191,6 +191,8 @@ def main():
     reward_energy_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.unwrapped.device)
     reward_backward_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.unwrapped.device)  
     total_reward_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.unwrapped.device) 
+    bearing_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.unwrapped.device)
+    distance_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.unwrapped.device)
 
     trajectories_list = []
     lift_coeff_list = []
@@ -204,6 +206,8 @@ def main():
     reward_energy_list = []
     reward_backward_list = []
     total_reward_list = []
+    bearing_list = []
+    distance_list = []
 
     print(f"\n====================== Max EPISODE: {max_episod_length} ==================================\n")
     # store metrics per finished episode
@@ -260,6 +264,9 @@ def main():
             rew_energy = env.unwrapped.reward_energy
             rew_backward = env.unwrapped.reward_backward
             loss = env.unwrapped.loss_discrim_energy
+
+            distance  = env.unwrapped.distance
+            bearing = env.unwrapped.bearing
             #print(loss, rew_backward)
             loss_disc = torch.tensor([loss.item()], device=rew_backward.device) if loss is not None else torch.zeros_like(rew_energy)
             tack_wpts = env.unwrapped.tack_waypoints
@@ -287,6 +294,8 @@ def main():
                 reward_energy_list.append(reward_energy_logs[:-1].clone())
                 reward_backward_list.append(reward_backward_logs[:-1].clone())
                 total_reward_list.append(total_reward_logs[:-1].clone())
+                bearing_list.append(bearing_logs[:-1].clone())
+                distance_list.append(distance_logs[:-1].clone())
 
                 # Reset buffers for next episode
                 trajectories.zero_()
@@ -309,6 +318,8 @@ def main():
             reward_energy_logs[step] = rew_energy.clone().float()
             reward_backward_logs[step] = rew_backward.clone().float()
             total_reward_logs[step] = rew.clone().float()
+            bearing_logs[step] = bearing.clone().float()
+            distance_logs[step] = distance.clone().float()
 
 
 
@@ -322,11 +333,11 @@ def main():
         simulation_app.close()"""
 
     return all_metrics, trajectories_list, lift_coeff_list, drag_coeff_list, goal_pos_list, env, episode_lengths_list, \
-                energy_list, reward_progress_list, reward_energy_list, reward_backward_list, total_reward_list
+                energy_list, reward_progress_list, reward_energy_list, reward_backward_list, total_reward_list, bearing_list, distance_list
    
 if __name__ == "__main__":
-    metrics_list, trajectories_list, lift_coeff_list, drag_coeff_list, goal_pos_list, env, \
-    episode_lengths_list, energy_list, reward_progress_list, reward_energy_list, reward_backward_list, total_reward_list = main()
+    metrics_list, trajectories_list, lift_coeff_list, drag_coeff_list, goal_pos_list, env, episode_lengths_list, energy_list, \
+    reward_progress_list, reward_energy_list, reward_backward_list, total_reward_list, bearing_list, distance_list = main()
 
     import pandas as pd
     import os
@@ -394,7 +405,7 @@ if __name__ == "__main__":
     for ep_idx, m in enumerate(metrics_list):
         metric_records.append({
             "episode": ep_idx,
-            "final_distance_to_goal": m["Metrics/final_distance_to_goal"],
+            "final_distance": m["Metrics/final_distance"],
             "consumed_energy": m["Metrics/consumed_energy"],
             "disc_prediction_mean": m["Contexts/disc_prediction_mean"]
         })
@@ -413,14 +424,16 @@ if __name__ == "__main__":
                     "reward_progress": reward_progress_list[ep_idx][t, env_id].item(),
                     "reward_energy": reward_energy_list[ep_idx][t, env_id].item(),
                     "reward_backward": reward_backward_list[ep_idx][t, env_id].item(),
-                    "total_reward": total_reward_list[ep_idx][t, env_id].item()
+                    "total_reward": total_reward_list[ep_idx][t, env_id].item(),
+                    "bearing": bearing_list[ep_idx][t, env_id].item(),
+                    "distance": distance_list[ep_idx][t, env_id].item()
                 })
     pd.DataFrame(other_metrics_records).to_csv(os.path.join(output_dir, "other_metrics.csv"), index=False)
 
     """print(f"Collected metrics: {len(metrics_list)} episodes")
 
     # Extract metrics for plotting
-    final_distances = [m["Metrics/final_distance_to_goal"] for m in metrics_list]
+    final_distances = [m["Metrics/final_distance"] for m in metrics_list]
     consumed_energy = [m["Metrics/consumed_energy"] for m in metrics_list]
     disc_pred_mean = [m["Contexts/disc_prediction_mean"] for m in metrics_list]
     #print(metrics_list)

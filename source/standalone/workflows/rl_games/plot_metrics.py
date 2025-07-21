@@ -151,6 +151,8 @@ rew_progress_all = []
 rew_backward_all = []
 rew_energy_all = []
 total_reward_all = []
+distance_all = []
+bearing_all = []
 
 # --- Aggregate Data ---
 for ep in df_other_metrics["episode"].unique()[:num_episodes]:
@@ -164,6 +166,8 @@ for ep in df_other_metrics["episode"].unique()[:num_episodes]:
         reward_backward = env_other_metrics["reward_backward"].values[:max_timestep]
         reward_energy = env_other_metrics["reward_energy"].values[:max_timestep]
         total_reward = env_other_metrics["total_reward"].values[:max_timestep]
+        bearing = env_other_metrics["bearing"].values[:max_timestep]
+        distance = env_other_metrics["distance"].values[:max_timestep]
 
         """# Pad with NaNs if shorter than max_timestep
         if len(lift) < max_timestep:
@@ -176,6 +180,8 @@ for ep in df_other_metrics["episode"].unique()[:num_episodes]:
         rew_backward_all.append(reward_backward)
         rew_energy_all.append(reward_energy)
         total_reward_all.append(total_reward)
+        bearing_all.append(bearing)
+        distance_all.append(distance)
 
         """lift_all.append(lift)
         drag_all.append(drag)"""
@@ -186,6 +192,8 @@ rew_progress_all = np.stack(rew_progress_all)
 rew_backward_all = np.stack(rew_backward_all)
 rew_energy_all = np.stack(rew_energy_all)
 total_reward_all = np.stack(total_reward_all)
+bearing_all = np.stack(bearing_all)
+distance_all = np.stack(distance_all)
 
 # --- Compute stats for other metrics ---
 energy_mean = np.nanmean(energy_all, axis=0)
@@ -198,6 +206,10 @@ rew_energy_mean = np.nanmean(rew_energy_all, axis=0)
 rew_energy_std = np.nanstd(rew_energy_all, axis=0)
 total_reward_mean = np.nanmean(total_reward_all, axis=0)
 total_reward_std = np.nanstd(total_reward_all, axis=0)
+bearing_mean = np.nanmean(bearing_all, axis=0)
+bearing_std = np.nanstd(bearing_all, axis=0)
+distance_mean = np.nanmean(distance_all, axis=0)
+distance_std = np.nanstd(distance_all, axis=0)
 
 # --- Plot Other Metrics ---
 plt.figure(figsize=(12, 4))
@@ -250,5 +262,26 @@ plt.xlabel("Timestep")
 plt.ylabel("Value")
 plt.legend()    
 plt.savefig(os.path.join(latest_dir, "total_reward_std.png"))
+
+plt.figure()
+plt.subplot(2, 1, 1)
+# Bearing
+plt.plot(np.arange(len(bearing_mean)), bearing_mean, label="Bearing Mean", color='magenta')
+plt.fill_between(np.arange(len(bearing_mean)), bearing_mean - bearing_std, bearing_mean + bearing_std, alpha=0.3, color='magenta', label="Bearing ±1 std")
+plt.title("Bearing (Mean ± Std)")
+plt.xlabel("Timestep")
+plt.ylabel("Value")
+plt.legend()    
+
+plt.subplot(2, 1, 2)
+# Distance
+plt.plot(np.arange(len(distance_mean)), distance_mean, label="Distance Mean", color='teal')
+plt.fill_between(np.arange(len(distance_mean)), distance_mean - distance_std, distance_mean + distance_std, alpha=0.3, color='teal', label="Distance ±1 std")
+plt.title("Distance (Mean ± Std)")
+plt.xlabel("Timestep")
+plt.ylabel("Value")
+plt.legend()
+plt.tight_layout()
+plt.savefig(os.path.join(latest_dir, "bearing_distance_std.png"))   
 
 
