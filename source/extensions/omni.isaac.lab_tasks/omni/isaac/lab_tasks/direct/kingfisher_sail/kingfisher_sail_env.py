@@ -631,6 +631,7 @@ class KingfisherSailEnv(DirectRLEnv):
         self.tack_manager.reset(num_envs=self.num_envs, device=self.device)
         self.tack_side = torch.ones(self.num_envs, device=self.device)
         self.in_tack_mode = torch.ones(self.num_envs, device=self.device)
+        self.sailing_mode = torch.zeros((self.num_envs, 3), device=self.device)
 
         self.tack_length = torch.ones(self.num_envs, device=self.device)  # Default tack leg length
         self.num_tack_waypoints = 10  # Default number of waypoints for tacking
@@ -866,23 +867,23 @@ class KingfisherSailEnv(DirectRLEnv):
         #desired_bearing = # In your control loop:
         #self.desired_bearing = self.tack_manager.get_desired_bearing(self.bearing, self._aerodynamics.Beta_w, self.cross_track_error)
         
-        sailing_mode = torch.zeros((self.num_envs, 3), device=self.device)
+        
         upwind_mask = (torch.abs(ks) < self._aerodynamics.cfg.min_upwind_angle) 
         downwind_mask = (torch.abs(ks) > self._aerodynamics.cfg.max_downwind_angle) 
-        sailing_mode[upwind_mask, 0] = 1.0
-        sailing_mode[downwind_mask, 1] = 1.0
-        sailing_mode[~upwind_mask & ~downwind_mask, 2] = 1.0
+        self.sailing_mode[upwind_mask, 0] = 1.0
+        self.sailing_mode[downwind_mask, 1] = 1.0
+        self.sailing_mode[~upwind_mask & ~downwind_mask, 2] = 1.0
         RAD2DEG = 180.0 / torch.pi
-        self.in_tack_mode = torch.where(sailing_mode[:, 2] == 0, 1.0, 0)
+        self.in_tack_mode = torch.where(self.sailing_mode[:, 2] == 0, 1.0, 0)
         """self.bearing, self.in_tack_mode, self.tack_side = get_desired_bearing(self.bearing, self._aerodynamics.Beta_w, self._aerodynamics.cfg.min_upwind_angle, 
-                self._aerodynamics.cfg.max_downwind_angle, self.cross_track_error, self.cfg.max_cross_track, sailing_mode,
+                self._aerodynamics.cfg.max_downwind_angle, self.cross_track_error, self.cfg.max_cross_track, self.sailing_mode,
                 self.in_tack_mode, self.tack_side)"""
         
-        """print(f"\nbearing: {RAD2DEG*self.bearing} \tks: {RAD2DEG*ks} \tsailing_mode: {sailing_mode}")
+        """print(f"\nbearing: {RAD2DEG*self.bearing} \tks: {RAD2DEG*ks} \tself.sailing_mode: {self.sailing_mode}")
         print(f"cross_track_error: {self.cross_track_error} \ttack_side: {self.tack_side} \tin_tack_mode: {self.in_tack_mode}\n")"""
         
         self.bearing, self.next_tack_wpt_idx = get_desired_bearing_wpts(bearing=self.bearing, next_wpt_idx=self.next_tack_wpt_idx,
-                        tack_waypts=self.tack_waypoints, robot=self._robot, sail_mode=sailing_mode)
+                        tack_waypts=self.tack_waypoints, robot=self._robot, sail_mode=self.sailing_mode)
         
         sampling_rate = 400
         left_thruster_enabled = torch.ones_like(self.thruster_left_randn)
@@ -936,7 +937,7 @@ class KingfisherSailEnv(DirectRLEnv):
                 torch.sin(self._aerodynamics.apparent_wind_angle).reshape(self.num_envs, -1), # 1
                 torch.norm(self._aerodynamics.apparent_wind_speed_b, dim=-1).reshape(self.num_envs, -1), # 1
                 self.cross_track_error.reshape(self.num_envs, -1), #1
-                sailing_mode.reshape(self.num_envs, -1), #3
+                self.sailing_mode.reshape(self.num_envs, -1), #3
                 
             ],
             dim=1,
@@ -1265,7 +1266,7 @@ class KingfisherSailEnv(DirectRLEnv):
                     [self.env_pos[0]+d, self.env_pos[1]+d, 1.6], (n_markers, 3))  # Adjust bounds as needed
         self.red_marker_translations = np.random.uniform([-self.env_pos[0]-d/3, -self.env_pos[1]-d/3, 1], 
                     [self.env_pos[0]+d/2, self.env_pos[1]+d/2, 1.5], (n_markers//5, 3))
-
+        
         if self.is_Training:
             self.energy_context[env_ids] = torch.zeros_like(self.time_context[env_ids]).uniform_(0, 1)
             #torch.zeros_like(self.time_context[env_ids]).uniform_(0, 1)
