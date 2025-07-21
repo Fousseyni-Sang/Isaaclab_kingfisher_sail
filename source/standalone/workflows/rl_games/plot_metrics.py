@@ -263,7 +263,33 @@ plt.ylabel("Value")
 plt.legend()    
 plt.savefig(os.path.join(latest_dir, "total_reward_std.png"))
 
+
 plt.figure()
+plt.subplot(2, 1, 1)
+for ep_idx in len(bearing_all):
+    
+    # Bearing
+    plt.plot(np.arange(len(bearing_all[ep_idx])), bearing_all[ep_idx], label="Bearing")
+    #plt.fill_between(np.arange(len(bearing_mean)), bearing_mean - bearing_std, bearing_mean + bearing_std, alpha=0.3, color='magenta', label="Bearing ±1 std")
+    plt.title("Bearing")
+    plt.xlabel("Timestep")
+    plt.ylabel("Value")
+    plt.legend()    
+
+plt.subplot(2, 1, 2)
+for ep_idx in len(distance_all):
+    # Distance
+    plt.plot(np.arange(len(distance_all[ep_idx])), distance_all[ep_idx], label="Distance Mean")
+    plt.title("Distance")
+    plt.xlabel("Timestep")
+    plt.ylabel("Value")
+    plt.legend()
+    plt.tight_layout()
+
+plt.savefig(os.path.join(latest_dir, "bearing_distance.png")) 
+
+
+"""plt.figure()
 plt.subplot(2, 1, 1)
 # Bearing
 plt.plot(np.arange(len(bearing_mean)), bearing_mean, label="Bearing Mean", color='magenta')
@@ -282,6 +308,6 @@ plt.xlabel("Timestep")
 plt.ylabel("Value")
 plt.legend()
 plt.tight_layout()
-plt.savefig(os.path.join(latest_dir, "bearing_distance_std.png"))   
+plt.savefig(os.path.join(latest_dir, "bearing_distance_std.png"))  """ 
 
 
