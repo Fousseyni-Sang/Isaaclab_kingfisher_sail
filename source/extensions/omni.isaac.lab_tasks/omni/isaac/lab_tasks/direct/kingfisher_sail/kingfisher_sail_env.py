@@ -210,7 +210,7 @@ def get_desired_bearing_wpts(bearing: torch.Tensor, next_wpt_idx:torch.Tensor, t
     
     upwind_mask = sail_mode[:, 0] == 1
     bearing[upwind_mask] = torch.atan2(desired_pos_b[:, 1], desired_pos_b[:, 0])[upwind_mask]
-
+    
     distance = torch.linalg.norm(desired_pos_b, dim=1)
     bearing = torch.atan2(desired_pos_b[:, 1], desired_pos_b[:, 0])
 
