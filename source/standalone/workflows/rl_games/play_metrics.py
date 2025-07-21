@@ -405,7 +405,7 @@ if __name__ == "__main__":
     for ep_idx, m in enumerate(metrics_list):
         metric_records.append({
             "episode": ep_idx,
-            "final_distance": m["Metrics/final_distance"],
+            "final_distance_to_goal": m["Metrics/final_distance_to_goal"],
             "consumed_energy": m["Metrics/consumed_energy"],
             "disc_prediction_mean": m["Contexts/disc_prediction_mean"]
         })
