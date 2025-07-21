@@ -1250,7 +1250,7 @@ class KingfisherSailEnv(DirectRLEnv):
         self.initial_distance[env_ids] = torch.zeros_like(self._desired_pos_w[env_ids, 0]).uniform_(
             self.cfg.min_target_distance, self.cfg.max_target_distance
         )
-    
+        self.next_tack_wpt_idx[env_ids] = 0
         self.distance[env_ids] = self.initial_distance[env_ids]
         self.previous_distance[env_ids] = self.initial_distance[env_ids]
         self._desired_pos_w[env_ids, 0] = torch.cos(self.initial_bearing[env_ids]) * self.initial_distance[env_ids]
