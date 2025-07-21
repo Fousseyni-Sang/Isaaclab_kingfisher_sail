@@ -217,10 +217,12 @@ def get_desired_bearing_wpts(bearing: torch.Tensor, next_wpt_idx:torch.Tensor, t
     previous_wpt = tack_waypts[torch.arange(tack_waypts.shape[0]), torch.clamp(next_wpt_idx-1, min=0)]
 
     wpt_passed = torch.sum((next_wpt[:, :2] - previous_wpt[:, :2])*(robot.data.root_link_pos_w[:, :2] \
-    - previous_wpt[:, :2]), dim=-1)>torch.square(torch.norm(next_wpt[:, :2] - next_wpt[:, :2], dim=-1))
+    - previous_wpt[:, :2]), dim=-1)>torch.square(torch.norm(next_wpt[:, :2] - previous_wpt[:, :2], dim=-1))
 
     wpt_reached = distance < 0.5
-
+    """print(f"next_wpt: {next_wpt}, prev_wpt: {previous_wpt}, wpt_reached-wpt_passed: {wpt_reached, wpt_passed} distance: {distance}")
+    print(f"tack_pts: {tack_waypts}, next_wpt_idx: {next_wpt_idx}")
+    print(f"robot_pos: {robot.data.root_link_state_w[:, :3]}")"""
     next_wpt_idx = torch.where(wpt_passed | wpt_reached, torch.clamp(next_wpt_idx+1, max=tack_waypts.shape[1]-1), next_wpt_idx)
     
 
@@ -483,7 +485,7 @@ class KingfisherSailEnvCfg(DirectRLEnvCfg):
     time_penalty_scale = -1 #-0.008 #
     penalty_inefficient_sailing_scale = -0.1
     tack_penalty_scale = -10
-    bearing_penalty_scale = 0.1 #1.0
+    bearing_penalty_scale = 0.5 #1.0
     beargin_penalty_coef = -0.5 #-4
     lift_drag_ratio_scale = 0.1
     acord_reward_scale = 0.5
@@ -867,7 +869,7 @@ class KingfisherSailEnv(DirectRLEnv):
         #desired_bearing = # In your control loop:
         #self.desired_bearing = self.tack_manager.get_desired_bearing(self.bearing, self._aerodynamics.Beta_w, self.cross_track_error)
         
-        
+        self.sailing_mode = torch.zeros((self.num_envs, 3), device=self.device)
         upwind_mask = (torch.abs(ks) < self._aerodynamics.cfg.min_upwind_angle) 
         downwind_mask = (torch.abs(ks) > self._aerodynamics.cfg.max_downwind_angle) 
         self.sailing_mode[upwind_mask, 0] = 1.0
@@ -884,7 +886,7 @@ class KingfisherSailEnv(DirectRLEnv):
         
         self.bearing, self.next_tack_wpt_idx = get_desired_bearing_wpts(bearing=self.bearing, next_wpt_idx=self.next_tack_wpt_idx,
                         tack_waypts=self.tack_waypoints, robot=self._robot, sail_mode=self.sailing_mode)
-        
+        #print(f"outside: {self.next_tack_wpt_idx}")        
         sampling_rate = 400
         left_thruster_enabled = torch.ones_like(self.thruster_left_randn)
         right_thruster_enabled = torch.ones_like(self.thruster_left_randn)
