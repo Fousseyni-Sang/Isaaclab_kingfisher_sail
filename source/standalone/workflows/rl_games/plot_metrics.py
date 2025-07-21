@@ -265,7 +265,6 @@ plt.savefig(os.path.join(latest_dir, "total_reward_std.png"))
 
 
 plt.figure()
-plt.subplot(2, 1, 1)
 for ep_idx in range(len(bearing_all)):
     
     # Bearing
@@ -276,7 +275,9 @@ for ep_idx in range(len(bearing_all)):
     plt.ylabel("Value")
     plt.legend()    
 
-plt.subplot(2, 1, 2)
+plt.savefig(os.path.join(latest_dir, "bearing.png")) 
+
+plt.figure()
 for ep_idx in range(len(distance_all)):
     # Distance
     plt.plot(np.arange(len(distance_all[ep_idx])), distance_all[ep_idx], label=f"Distance {ep_idx}")
@@ -286,7 +287,7 @@ for ep_idx in range(len(distance_all)):
     plt.legend()
     plt.tight_layout()
 
-plt.savefig(os.path.join(latest_dir, "bearing_distance.png")) 
+plt.savefig(os.path.join(latest_dir, "distance.png")) 
 
 
 """plt.figure()
