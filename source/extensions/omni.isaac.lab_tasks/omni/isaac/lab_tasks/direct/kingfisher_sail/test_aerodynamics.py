@@ -40,10 +40,6 @@ num_tack_waypoints =   int(tack_length.item()) # Default number of waypoints for
 tack_waypoints = torch.zeros((num_envs, num_tack_waypoints, 3), device=device)  # 10 waypoints
 tack_valid_mask = torch.zeros((num_envs, num_tack_waypoints), dtype=torch.bool, device=device)
 
-
-
-
-
 initial_robot_pos = torch.zeros((num_envs, 3), device=device)  # Initial robot position
 initial_bearing = torch.zeros_like(_desired_pos_w[0, 0]).uniform_(
             min_target_bearing, max_target_bearing
