@@ -312,7 +312,7 @@ def step_motor(current_angle, desired_angle, resolution=torch.pi/100, max_speed=
 @configclass
 class KingfisherSailEnvCfg(DirectRLEnvCfg):
     # env
-    episode_length_s = 150.0 #30
+    episode_length_s = 250.0 #30
     physics_dt = 1 / 60.0  # 60 Hz
     decimation = 3
     step_dt = physics_dt * decimation  # 20 Hz
@@ -474,18 +474,18 @@ class KingfisherSailEnvCfg(DirectRLEnvCfg):
 
     # reward scales
     distance_reward_scale = 0.0
-    distance_progress_reward_scale =  35 #5 # 6 too much
+    distance_progress_reward_scale =  40 #5 # 6 too much
     bearing_progress_reward_scale = 0.0
 
     goal_reached_threshold = 0.1
     goal_reached_scale = 100.0 # 150
 
-    energy_penalty_scale = -0.08  #-0.001
+    energy_penalty_scale = -0.01  #-0.001
     backwards_penalty_scale = -0.05
     time_penalty_scale = -1 #-0.008 #
     penalty_inefficient_sailing_scale = -0.1
     tack_penalty_scale = -10
-    bearing_penalty_scale = 0.5 #1.0
+    bearing_penalty_scale = 1.0
     beargin_penalty_coef = -0.5 #-4
     lift_drag_ratio_scale = 0.1
     acord_reward_scale = 0.5
@@ -1294,7 +1294,7 @@ class KingfisherSailEnv(DirectRLEnv):
             random = torch.any(self.episode_number[env_ids]>400)"""
             
             self._aerodynamics.reset_wind_condition(env_ids=env_ids, randomize_direction=False, randomize_speed=True, 
-                                                    upwind=True, downwind=False, beam=False, close=True, broad=False)
+                                                    upwind=True, downwind=False, beam=False, close=False, broad=False)
 
             self.thruster_left_randn[env_ids] = torch.zeros_like(self.thruster_left_randn[env_ids]).uniform_(0, 1)
             self.thruster_right_randn[env_ids] = torch.zeros_like(self.thruster_right_randn[env_ids]).uniform_(0, 1)

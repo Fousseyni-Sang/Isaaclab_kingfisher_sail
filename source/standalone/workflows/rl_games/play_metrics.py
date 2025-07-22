@@ -240,7 +240,7 @@ def main():
 
             # env stepping
             obs, rew, dones, _ = env.step(actions)
-
+            
             aero_force = env.unwrapped._aerodynamic_force_b.squeeze(0)
             thruster_force = env.unwrapped._thruster_forces.squeeze(0)
             lin_speed = env.unwrapped._robot.data.root_lin_vel_b
@@ -275,7 +275,8 @@ def main():
             dones = dones.to(device=trajectories.device)
             step = env.unwrapped.episode_length_buf
             episode_length = step.max().item() + 1
-            #print(step, current_step)
+            if current_step%200==0:
+                print(f"bearing: {bearing} next_wpt: {env.unwrapped.next_tack_wpt_idx}")
             if torch.any(dones):
                 print(f"tack_wpts: {tack_wpts}")
                 
@@ -307,6 +308,8 @@ def main():
                 obs = env.reset()
                 if isinstance(obs, dict):
                     obs = obs["obs"]
+                wind_modulo = (wind_direc + torch.pi)%(2*torch.pi) - torch.pi
+                env.unwrapped._aerodynamics.update_wind(wind_direction=wind_modulo)
 
             alive_envs = (~dones).nonzero(as_tuple=True)[0].to(device=trajectories.device)
             #print(f"traj: {trajectories.device} alive_envs: {alive_envs.device} step: {step.device} robot_pos: {robot_pos.device}")
