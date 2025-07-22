@@ -474,18 +474,18 @@ class KingfisherSailEnvCfg(DirectRLEnvCfg):
 
     # reward scales
     distance_reward_scale = 0.0
-    distance_progress_reward_scale =  40 #5 # 6 too much
+    distance_progress_reward_scale =  30 #5 # 6 too much
     bearing_progress_reward_scale = 0.0
 
     goal_reached_threshold = 0.1
     goal_reached_scale = 100.0 # 150
 
-    energy_penalty_scale = -0.01  #-0.001
+    energy_penalty_scale = -0.08  #-0.001
     backwards_penalty_scale = -0.05
     time_penalty_scale = -1 #-0.008 #
     penalty_inefficient_sailing_scale = -0.1
     tack_penalty_scale = -10
-    bearing_penalty_scale = 0.2
+    bearing_penalty_scale = 0.8
     beargin_penalty_coef = -0.5 #-4
     lift_drag_ratio_scale = 0.1
     acord_reward_scale = 0.5
@@ -791,7 +791,7 @@ class KingfisherSailEnv(DirectRLEnv):
         sail_wing_force_b = self._aerodynamic_force_b.clone()
         # only apply thruster forces if they are not zero, otherwise it disables external previous forces.
         lft_thruster_force = self._thruster_forces[..., :3]
-        rgt_thruster_force = self._thruster_forces[..., 3:] #self._thruster_forces[..., 3:] #-
+        rgt_thruster_force = -self._thruster_forces[..., :3] #self._thruster_forces[..., 3:] 
         torque = torch.zeros_like(self._no_torque)
         torque[:, 0, 2] = lft_thruster_force[:, 0, 0] 
         combined = self._hydrostatic_force + self._hydrodynamic_force
