@@ -156,6 +156,7 @@ def generate_tacking_waypoints(start_pos:torch.Tensor, goal_pos:torch.Tensor, wi
     waypoints = torch.zeros((num_envs, max_num_waypoints, 2), device=device)
     valid_mask = torch.zeros((num_envs, max_num_waypoints), dtype=torch.bool, device=device)
     waypoints[:, 0, :] = start_pos
+    valid_mask[:, 0] = True
     current_pos = start_pos.clone()
     tack_side = torch.ones(num_envs, device=device)
     
@@ -184,14 +185,17 @@ def generate_tacking_waypoints(start_pos:torch.Tensor, goal_pos:torch.Tensor, wi
         sail_away = goal_proj < 0.1
         #print(f"cos: {goal_proj} \tsailaway: {sail_away}")
         near_goal = torch.norm(goal_pos - next_pos, dim=1) < tack_leg_length
-        #print(f"sail_away: {sail_away} \tnear_goal: {near_goal}")
+        #print(f"sail_away: {sail_away} \tnear_goal: {near_goal} goal_proj: {goal_proj}, tack_dir: {tack_dir}, goal_vec: \
+        #{goal_dir} tack_angle: {(180/torch.pi)*tack_angle}")
         done_now = (~finished) & (sail_away | near_goal)
-        next_pos[done_now] = goal_pos[done_now]
+        #next_pos[done_now] = goal_pos[done_now]
+        next_pos[near_goal] = goal_pos[near_goal]
+
         finished |= done_now
         #print(f"done_now: {done_now} \tfinished: {finished}")
         current_pos = next_pos
         tack_side = -tack_side
-
+        print(f"finished: {finished}, step: {step}, ")
         if finished.all():
             waypoints[:, step+1, :] = goal_pos
             break
@@ -317,7 +321,7 @@ class KingfisherSailEnvCfg(DirectRLEnvCfg):
     decimation = 3
     step_dt = physics_dt * decimation  # 20 Hz
     action_space = 3
-    observation_space = 19
+    observation_space = 18
     state_space = 0
     debug_vis = True
 
@@ -791,7 +795,7 @@ class KingfisherSailEnv(DirectRLEnv):
         sail_wing_force_b = self._aerodynamic_force_b.clone()
         # only apply thruster forces if they are not zero, otherwise it disables external previous forces.
         lft_thruster_force = self._thruster_forces[..., :3]
-        rgt_thruster_force = -self._thruster_forces[..., :3] #self._thruster_forces[..., 3:] 
+        rgt_thruster_force = self._thruster_forces[..., 3:] 
         torque = torch.zeros_like(self._no_torque)
         torque[:, 0, 2] = lft_thruster_force[:, 0, 0] 
         combined = self._hydrostatic_force + self._hydrodynamic_force
@@ -938,7 +942,6 @@ class KingfisherSailEnv(DirectRLEnv):
                 torch.cos(self._aerodynamics.apparent_wind_angle).reshape(self.num_envs, -1), # 1
                 torch.sin(self._aerodynamics.apparent_wind_angle).reshape(self.num_envs, -1), # 1
                 torch.norm(self._aerodynamics.apparent_wind_speed_b, dim=-1).reshape(self.num_envs, -1), # 1
-                self.cross_track_error.reshape(self.num_envs, -1), #1
                 self.sailing_mode.reshape(self.num_envs, -1), #3
                 
             ],
@@ -1130,7 +1133,7 @@ class KingfisherSailEnv(DirectRLEnv):
         #print(f"{(self._desired_pos_w).shape}, {self.initial_robot_pos.shape} ,{aerodynamic_force_world[:, 0, :2].shape}")
         """force_dot_dist = 0.01*self.step_dt*torch.sum(aerodynamic_force_world[:, 0, :2]*(self._desired_pos_w-self.initial_robot_pos)[:, :2],
                                      dim=-1)/torch.norm(self._desired_pos_w-self._robot.data.root_link_pos_w, dim=-1)"""
-        force_projection = 0.01*aerodynamic_force_b[:, 0, 0]*self.step_dt 
+        force_projection = 0.4*aerodynamic_force_b[:, 0, 0]*self.step_dt
         #force_dot_dist = torch.where(force_dot_dist>0, force_dot_dist, (self.distance/self.initial_distance)*force_dot_dist)
         #print(f"force_dot_dist: {force_dot_dist} : \t{(self._desired_pos_w-self.initial_robot_pos)[:, :2]} \t{self._aerodynamic_force_b[:, 0, :2]}")
         #self.cross_track_error = cross.clone()
@@ -1145,7 +1148,7 @@ class KingfisherSailEnv(DirectRLEnv):
             "5_bearing_penalty": bearing_penalty,
             "6_time": time_reward,
             "7_tack_penalty": 0*distance_reward,
-            "8_lift_drag_ratio": 0*force_projection,
+            "8_lift_drag_ratio": force_projection,
         }
         #print(f"rewards: {rewards} rew_lift_drag_ratio: {lift_drag_ratio}\n")
         # #"6_time": time_reward

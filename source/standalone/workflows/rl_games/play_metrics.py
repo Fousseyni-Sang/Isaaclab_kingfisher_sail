@@ -164,6 +164,12 @@ def main():
     if args_cli.episode_length is not None:
         env.unwrapped.cfg.episode_length_s = args_cli.episode_length
     
+    wind_direc = (args_cli.wind_direction*torch.pi/180)
+    wind_speed = 5
+    wind_modulo = (wind_direc + torch.pi)%(2*torch.pi) - torch.pi
+    env.unwrapped._aerodynamics.update_wind(wind_direction=wind_modulo)
+    env.unwrapped._aerodynamics.update_wind(wind_speed=wind_speed)
+        
     obs = env.reset()
     if isinstance(obs, dict):
         obs = obs["obs"]
@@ -217,14 +223,9 @@ def main():
     #try:
     #while simulation_app.is_running():
     current_step = 0
-    wind_direc = (args_cli.wind_direction*torch.pi/180)
-    wind_speed = 5
+    
     while episode_cntr<num_episodes:   
         
-        #print("hello")
-        wind_modulo = (wind_direc + torch.pi)%(2*torch.pi) - torch.pi
-        env.unwrapped._aerodynamics.update_wind(wind_direction=wind_modulo)
-        env.unwrapped._aerodynamics.update_wind(wind_speed=wind_speed)
         # run everything in inference mode
         with torch.inference_mode():
             current_step += 1
@@ -276,7 +277,9 @@ def main():
             step = env.unwrapped.episode_length_buf
             episode_length = step.max().item() + 1
             if current_step%200==0:
-                print(f"bearing: {bearing} next_wpt: {env.unwrapped.next_tack_wpt_idx}")
+                print(f"bearing: {bearing} next_wpt: {env.unwrapped.next_tack_wpt_idx}, goal: {goal_pos}, distance: {env.unwrapped.distance}")
+                #print(f"tack_wpts: {tack_wpts}, num_wpt: {env.unwrapped.tack_length}")
+                #print(f"wind_direction: {(180/torch.pi)*env.unwrapped._aerodynamics.Beta_w}, sail_mode: {env.unwrapped.sailing_mode}")
             if torch.any(dones):
                 print(f"tack_wpts: {tack_wpts}")
                 
