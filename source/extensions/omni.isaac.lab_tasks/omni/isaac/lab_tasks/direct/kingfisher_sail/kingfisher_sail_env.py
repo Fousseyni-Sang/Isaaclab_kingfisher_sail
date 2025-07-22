@@ -212,7 +212,7 @@ def get_desired_bearing_wpts(bearing: torch.Tensor, next_wpt_idx:torch.Tensor, t
     bearing[upwind_mask] = torch.atan2(desired_pos_b[:, 1], desired_pos_b[:, 0])[upwind_mask]
     
     distance = torch.linalg.norm(desired_pos_b, dim=1)
-    bearing = torch.atan2(desired_pos_b[:, 1], desired_pos_b[:, 0])
+    #bearing = torch.atan2(desired_pos_b[:, 1], desired_pos_b[:, 0])
 
     previous_wpt = tack_waypts[torch.arange(tack_waypts.shape[0]), torch.clamp(next_wpt_idx-1, min=0)]
 
