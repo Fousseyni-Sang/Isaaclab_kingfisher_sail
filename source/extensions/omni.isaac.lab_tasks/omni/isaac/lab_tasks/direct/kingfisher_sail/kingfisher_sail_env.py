@@ -485,7 +485,7 @@ class KingfisherSailEnvCfg(DirectRLEnvCfg):
     time_penalty_scale = -1 #-0.008 #
     penalty_inefficient_sailing_scale = -0.1
     tack_penalty_scale = -10
-    bearing_penalty_scale = 1.0
+    bearing_penalty_scale = 0.2
     beargin_penalty_coef = -0.5 #-4
     lift_drag_ratio_scale = 0.1
     acord_reward_scale = 0.5
