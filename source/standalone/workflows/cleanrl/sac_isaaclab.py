@@ -17,7 +17,9 @@ parser.add_argument("--task", type=str, required=True)
 parser.add_argument("--num_envs", type=int, default=64)
 parser.add_argument("--total_timesteps", type=int, default=1_000_000)
 parser.add_argument("--seed", type=int, default=42)
-
+parser.add_argument(
+    "--disable_fabric", action="store_true", default=False, help="Disable fabric and use USD I/O operations."
+)
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
 args = parser.parse_args()
