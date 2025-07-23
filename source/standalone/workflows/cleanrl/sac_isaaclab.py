@@ -200,5 +200,11 @@ def main():
             writer.add_scalar("loss/alpha", alpha_loss.item(), global_step)
 
     env.close()
-    simulation_app.close()
     writer.close()
+
+
+if __name__ == "__main__":
+    # run the main function
+    main()
+    # close sim app
+    simulation_app.close()
