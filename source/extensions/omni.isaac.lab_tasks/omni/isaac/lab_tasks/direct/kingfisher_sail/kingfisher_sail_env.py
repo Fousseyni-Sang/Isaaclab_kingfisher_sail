@@ -195,7 +195,7 @@ def generate_tacking_waypoints(start_pos:torch.Tensor, goal_pos:torch.Tensor, wi
         #print(f"done_now: {done_now} \tfinished: {finished}")
         current_pos = next_pos
         tack_side = -tack_side
-        print(f"finished: {finished}, step: {step}, ")
+        #print(f"finished: {finished}, step: {step}, ")
         if finished.all():
             waypoints[:, step+1, :] = goal_pos
             break
@@ -703,7 +703,7 @@ class KingfisherSailEnv(DirectRLEnv):
             self.xfoil.n_crit = 9
             self._aerodynamics.xfoil = self.xfoil
             self.airfoil_set=True"""
-
+        #print(f"actions in pre_physics: {self._actions[:, :2], self._actions.shape}")
         self._actions = actions.clone().clamp(-1.0, 1.0)
         # Override the actions for debugging
         # self._actions[:,0] = 0.6
@@ -711,6 +711,7 @@ class KingfisherSailEnv(DirectRLEnv):
 
         # Compute the thruster forces based on the actions.
         # thrust_cmds = torch.tensor([0.0, 1.0], dtype=torch.float32, device=self.device)
+        #print(f"actions in pre_physics: {self._actions[:, :2], self._actions.shape}")
         self._thruster_dynamics.set_target_cmd(self._actions[:, :2])
         self._thruster_forces[:, 0, :] = self._thruster_dynamics.update_forces()
 

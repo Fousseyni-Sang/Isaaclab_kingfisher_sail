@@ -17,9 +17,16 @@ parser.add_argument("--task", type=str, required=True)
 parser.add_argument("--num_envs", type=int, default=64)
 parser.add_argument("--total_timesteps", type=int, default=1_000_000)
 parser.add_argument("--seed", type=int, default=42)
+parser.add_argument("--buffer_size", type=int, default=1e6)
+parser.add_argument("--batch_size", type=int, default=256)
+parser.add_argument("--policy_frequency", type=int, default=2, help="the frequency of training policy (delayed)")
+parser.add_argument("--target_network_frequency", type=int, default=1, help="the frequency of updates for the target nerworks")
+parser.add_argument("--alpha", type=float, default=0.2, help="Entropy regularization coefficient")
+parser.add_argument("--autotune", type=bool, default=True, help="automatic tuning of the entropy coefficient")
 parser.add_argument(
     "--disable_fabric", action="store_true", default=False, help="Disable fabric and use USD I/O operations."
 )
+
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
 args = parser.parse_args()
@@ -44,6 +51,7 @@ from omni.isaac.lab.app import AppLauncher
 from omni.isaac.lab_tasks.utils import parse_env_cfg
 import omni.isaac.lab_tasks  # noqa
 import gymnasium as gym
+from buffers import ReplayBuffer
 
 # SAC Networks
 class SoftQNetwork(nn.Module):
@@ -59,7 +67,12 @@ class SoftQNetwork(nn.Module):
 
     def forward(self, obs, act):
         return self.net(torch.cat([obs, act], dim=-1))
-
+        
+def to_tensor_batch(batch_column):
+    return torch.stack([
+        item["policy"] if isinstance(item, dict) else item
+        for item in batch_column
+    ])
 
 class Actor(nn.Module):
     def __init__(self, obs_dim, act_dim, action_scale):
@@ -88,7 +101,7 @@ class Actor(nn.Module):
         z = normal.rsample()
         action = torch.tanh(z)
         log_prob = normal.log_prob(z) - torch.log(self.action_scale * (1 - action.pow(2)) + 1e-6)
-        return action * self.action_scale, log_prob.sum(dim=-1, keepdim=True)
+        return torch.clamp(action * self.action_scale, -1.0, 1.0), log_prob.sum(dim=-1, keepdim=True)
 
 
 def main():
@@ -102,8 +115,9 @@ def main():
 
     obs_dim = obs_space.shape[0]
     act_dim = act_space.shape[0]
-    action_scale = torch.tensor((act_space.high - act_space.low) / 2.0, device=args.device)
-
+    action_scale = 1 #torch.tensor((act_space.high - act_space.low) / 2.0, device=args.device)
+    
+    #print(f"action scale: {action_scale}")
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     random.seed(args.seed)
@@ -121,12 +135,24 @@ def main():
     actor_optimizer = optim.Adam(actor.parameters(), lr=3e-4)
 
     # Alpha tuning
-    log_alpha = torch.zeros(1, requires_grad=True, device=args.device)
-    alpha_optimizer = optim.Adam([log_alpha], lr=1e-3)
-    target_entropy = -act_dim
+    if args.autotune:
+       log_alpha = torch.zeros(1, requires_grad=True, device=args.device)
+       alpha_optimizer = optim.Adam([log_alpha], lr=1e-3)
+       target_entropy = -act_dim
+    else:
+       alpha = args.alpha
 
     # Replay Buffer (simple list for brevity, use CleanRL’s ReplayBuffer for prod)
-    buffer = []
+    #buffer = []
+    
+    rb = ReplayBuffer(
+        args.buffer_size,
+        obs_space,
+        act_space,
+        device,
+        n_envs=args.num_envs,
+        handle_timeout_termination=False,
+    )
 
     # Logging
     run_name = f"{args.task}__sac__{int(time.time())}"
@@ -137,54 +163,85 @@ def main():
     obs = torch.tensor(obs, dtype=torch.float32, device=args.device)"""
     obs = env.reset()
     if isinstance(obs, dict):
-        obs = obs["obs"]
+        obs = obs["policy"]
     global_step = 0
 
     while simulation_app.is_running() and global_step < args.total_timesteps:
         with torch.inference_mode():
             if global_step < 5000:
-                action = torch.tensor(act_space.sample(), device=args.device).unsqueeze(0).repeat(args.num_envs, 1)
+                #print(act_space.sample(), torch.tensor(act_space.sample(), device=args.device).shape)
+                action = torch.tensor(act_space.sample(), device=args.device) #.unsqueeze(0)#.repeat(args.num_envs, 1)
             else:
                 action, _, _ = actor.get_action(obs)
-
+        
+        
         next_obs, reward, done, trunc, info = env.step(action)
+        #print(f"next_obs: {next_obs}")
+        if isinstance(next_obs, dict):
+           next_obs = next_obs["policy"]
         next_obs = torch.tensor(next_obs, dtype=torch.float32, device=args.device)
         reward = torch.tensor(reward, dtype=torch.float32, device=args.device)
         done = torch.tensor(done, dtype=torch.float32, device=args.device)
-
-        buffer.append((obs, action, reward, next_obs, done))
+        # Ensure obs, next_obs are tensors
+        if isinstance(obs, tuple):
+           obs = obs[0]
+        if isinstance(next_obs, tuple):
+           next_obs = next_obs[0]
+        if isinstance(reward, tuple):
+           reward = reward[0]
+        if isinstance(done, tuple):
+           done = done[0]
+        
+        """buffer.append((obs, action, reward, next_obs, done))
         if len(buffer) > 1_000_000:
-            buffer.pop(0)
+            buffer.pop(0)"""
+            
+        rb.add(obs, next_obs, actions, rewards, done)
 
         obs = next_obs
         global_step += args.num_envs
 
         if global_step >= 5000:
             # Sample minibatch
-            idx = np.random.randint(0, len(buffer), size=256)
-            batch = [buffer[i] for i in idx]
-            b_obs, b_action, b_reward, b_next_obs, b_done = map(lambda x: torch.stack(x), zip(*batch))
+            if isinstance(next_obs, dict):
+               next_obs = next_obs["policy"]
+               
+            if isinstance(obs, dict):
+               obs = obs["policy"]
+               
+            data = rb.sample(args.batch_size)
+            #idx = np.random.randint(0, len(buffer), size=256)
+            #batch = [buffer[i] for i in idx]
+            #print(f"obs: {obs}\n, action: {action}\n, rew: {reward}\n, next_obs: {next_obs}\n, done: {done}")
+            
+            #b_obs, b_action, b_reward, b_next_obs, b_done = map(to_tensor_batch, zip(*batch))
 
             with torch.no_grad():
-                next_action, next_log_prob = actor.get_action(b_next_obs)
-                qf1_target_val = qf1_target(b_next_obs, next_action)
-                qf2_target_val = qf2_target(b_next_obs, next_action)
+                next_action, next_log_prob = actor.get_action(data.next_observations)
+                  
+                qf1_target_val = qf1_target(data.next_observations, next_action)
+                qf2_target_val = qf2_target(data.next_observations, next_action)
                 q_target = torch.min(qf1_target_val, qf2_target_val) - log_alpha.exp() * next_log_prob
-                target = b_reward + 0.99 * (1 - b_done) * q_target.view(-1)
+                target = data.rewards + 0.99 * (1 - data.dones.flatten()) * q_target.view(-1)
 
-            qf1_loss = F.mse_loss(qf1(b_obs, b_action).view(-1), target)
-            qf2_loss = F.mse_loss(qf2(b_obs, b_action).view(-1), target)
+            qf1_loss = F.mse_loss(qf1(data.observations, data.actions).view(-1), target)
+            qf2_loss = F.mse_loss(qf2(data.observations, data.actions).view(-1), target)
             q_optimizer.zero_grad()
             (qf1_loss + qf2_loss).backward()
             q_optimizer.step()
 
             # Policy update
-            pi, log_pi = actor.get_action(b_obs)
-            min_qf_pi = torch.min(qf1(b_obs, pi), qf2(b_obs, pi))
-            actor_loss = (log_alpha.exp() * log_pi - min_qf_pi).mean()
-            actor_optimizer.zero_grad()
-            actor_loss.backward()
-            actor_optimizer.step()
+            if global_step % args.policy_frequency == 0:  # TD 3 Delayed update support
+                for _ in range(
+                    args.policy_frequency
+                ):  # compensate for the delay by doing 'actor_update_interval' instead of 1
+                    
+		    pi, log_pi = actor.get_action(b_obs) 
+		    min_qf_pi = torch.min(qf1(b_obs, pi), qf2(b_obs, pi))
+		    actor_loss = (log_alpha.exp() * log_pi - min_qf_pi).mean()
+		    actor_optimizer.zero_grad()
+		    actor_loss.backward()
+		    actor_optimizer.step()
 
             # Alpha update
             alpha_loss = -(log_alpha * (log_pi + target_entropy).detach()).mean()

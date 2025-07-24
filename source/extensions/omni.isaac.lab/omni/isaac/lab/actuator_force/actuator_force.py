@@ -109,6 +109,7 @@ class PropellerActuator:
             torch.Tensor: The updated thruster forces.
         """
         # update the current command based on the target command and maximum delta
+        
         delta = torch.clamp(self._target_cmds - self._current_cmds, -self._max_cmd_delta, self._max_cmd_delta)
         self._current_cmds += delta
 
