@@ -157,6 +157,11 @@ def main():
     # Logging
     run_name = f"{args.task}__sac__{int(time.time())}"
     writer = SummaryWriter(f"runs/{run_name}")
+    
+    writer.add_text(
+        "hyperparameters",
+        "|param|value|\n|-|-|\n%s" % ("\n".join([f"|{key}|{value}|" for key, value in vars(args).items()])),
+    )
 
     # Start loop
     """obs, _ = env.reset(seed=args.seed)
@@ -176,7 +181,7 @@ def main():
         
         
         next_obs, reward, done, trunc, info = env.step(action)
-        #print(f"next_obs: {next_obs}")
+        #print(f"next_obs: {next_obs}, reward: {reward}, done: {done}, info: {info}")
         if isinstance(next_obs, dict):
            next_obs = next_obs["policy"]
         next_obs = torch.tensor(next_obs, dtype=torch.float32, device=args.device)
@@ -265,11 +270,19 @@ def main():
                for param, target_param in zip(qf2.parameters(), qf2_target.parameters()):
                    target_param.data.copy_(tau * param.data + (1 - tau) * target_param.data)
 	    
-            if global_step % 100 ==0:
+            if global_step % 1000 ==0:
+               print(f"================= Global STep: {global_step} ========================")
+               print(f"rew: {reward}, info: {env.unwrapped.extras}")
                writer.add_scalar("loss/qf1", qf1_loss.item(), global_step)
                writer.add_scalar("loss/qf2", qf2_loss.item(), global_step)
                writer.add_scalar("loss/actor", actor_loss.item(), global_step)
                writer.add_scalar("loss/alpha", alpha_loss.item(), global_step)
+               
+               for key, value in info["log"].items():
+	          # Handle tensor or float
+                  if isinstance(value, torch.Tensor):
+                     value = value.item()
+                  writer.add_scalar(f"env/{key}", value, int(global_step))
 
     env.close()
     writer.close()
