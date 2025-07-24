@@ -171,7 +171,7 @@ class DiscriminatorNetwork(nn.Module):
         self.optimizer.zero_grad()
         loss = (F.mse_loss(predictions, context)) #*100 + (1 / torch.abs(torch.min(dist1.loc) - torch.max(dist1.loc))) * 0.1
         #print(f"loss: {loss}\n")
-        loss.requires_grad = True
+        #loss.requires_grad = True
         #print(f"required: {loss.requires_grad}")
         loss.backward()
         self.optimizer.step()

@@ -69,7 +69,7 @@ def get_action_dim(action_space: spaces.Space) -> int:
     :return:
     """
     if isinstance(action_space, spaces.Box):
-        return int(np.prod(action_space.shape))
+        return action_space.shape[1] #int(np.prod(action_space.shape))
     elif isinstance(action_space, spaces.Discrete):
         # Action is an int
         return 1
@@ -96,7 +96,7 @@ def get_obs_shape(
     :return:
     """
     if isinstance(observation_space, spaces.Box):
-        return observation_space.shape
+        return [observation_space.shape[1]]
     elif isinstance(observation_space, spaces.Discrete):
         # Observation is an int
         return (1,)

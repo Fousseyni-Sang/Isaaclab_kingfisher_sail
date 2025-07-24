@@ -17,7 +17,7 @@ parser.add_argument("--task", type=str, required=True)
 parser.add_argument("--num_envs", type=int, default=64)
 parser.add_argument("--total_timesteps", type=int, default=1_000_000)
 parser.add_argument("--seed", type=int, default=42)
-parser.add_argument("--buffer_size", type=int, default=1e6)
+parser.add_argument("--buffer_size", type=int, default=1_000_000)
 parser.add_argument("--batch_size", type=int, default=256)
 parser.add_argument("--policy_frequency", type=int, default=2, help="the frequency of training policy (delayed)")
 parser.add_argument("--target_network_frequency", type=int, default=1, help="the frequency of updates for the target nerworks")
@@ -112,9 +112,9 @@ def main():
     env = gym.make(args.task, cfg=env_cfg)
     obs_space = env.observation_space
     act_space = env.action_space
-
-    obs_dim = obs_space.shape[0]
-    act_dim = act_space.shape[0]
+    #print(f"================== obs_space: {obs_space.shape}, act_space: {act_space.shape}")
+    obs_dim = obs_space.shape[1]
+    act_dim = act_space.shape[1]
     action_scale = 1 #torch.tensor((act_space.high - act_space.low) / 2.0, device=args.device)
     
     #print(f"action scale: {action_scale}")
@@ -144,12 +144,12 @@ def main():
 
     # Replay Buffer (simple list for brevity, use CleanRL’s ReplayBuffer for prod)
     #buffer = []
-    
+    #print(f"================== obs_space: {obs_space}, act_space: {act_space}")
     rb = ReplayBuffer(
         args.buffer_size,
         obs_space,
         act_space,
-        device,
+        args.device,
         n_envs=args.num_envs,
         handle_timeout_termination=False,
     )
@@ -172,7 +172,7 @@ def main():
                 #print(act_space.sample(), torch.tensor(act_space.sample(), device=args.device).shape)
                 action = torch.tensor(act_space.sample(), device=args.device) #.unsqueeze(0)#.repeat(args.num_envs, 1)
             else:
-                action, _, _ = actor.get_action(obs)
+                action, _ = actor.get_action(obs)
         
         
         next_obs, reward, done, trunc, info = env.step(action)
@@ -195,8 +195,9 @@ def main():
         """buffer.append((obs, action, reward, next_obs, done))
         if len(buffer) > 1_000_000:
             buffer.pop(0)"""
-            
-        rb.add(obs, next_obs, actions, rewards, done)
+        if isinstance(obs, dict):
+           obs = obs["policy"]
+        rb.add(obs.cpu(), next_obs.cpu(), action.cpu(), reward.cpu(), done.cpu(), info)
 
         obs = next_obs
         global_step += args.num_envs
@@ -222,10 +223,12 @@ def main():
                 qf1_target_val = qf1_target(data.next_observations, next_action)
                 qf2_target_val = qf2_target(data.next_observations, next_action)
                 q_target = torch.min(qf1_target_val, qf2_target_val) - log_alpha.exp() * next_log_prob
-                target = data.rewards + 0.99 * (1 - data.dones.flatten()) * q_target.view(-1)
+                target = data.rewards.view(-1) + 0.99 * (1 - data.dones.flatten()) * q_target.view(-1)
+                
 
             qf1_loss = F.mse_loss(qf1(data.observations, data.actions).view(-1), target)
             qf2_loss = F.mse_loss(qf2(data.observations, data.actions).view(-1), target)
+            
             q_optimizer.zero_grad()
             (qf1_loss + qf2_loss).backward()
             q_optimizer.step()
@@ -236,30 +239,37 @@ def main():
                     args.policy_frequency
                 ):  # compensate for the delay by doing 'actor_update_interval' instead of 1
                     
-		    pi, log_pi = actor.get_action(b_obs) 
-		    min_qf_pi = torch.min(qf1(b_obs, pi), qf2(b_obs, pi))
-		    actor_loss = (log_alpha.exp() * log_pi - min_qf_pi).mean()
-		    actor_optimizer.zero_grad()
-		    actor_loss.backward()
-		    actor_optimizer.step()
-
+                    pi, log_pi = actor.get_action(data.observations) 
+                    min_qf_pi = torch.min(qf1(data.observations, pi), qf2(data.observations, pi))
+                    actor_loss = (log_alpha.exp() * log_pi - min_qf_pi).mean()
+		    
+                    actor_optimizer.zero_grad()
+                    actor_loss.backward()
+                    actor_optimizer.step()
+	    
             # Alpha update
-            alpha_loss = -(log_alpha * (log_pi + target_entropy).detach()).mean()
-            alpha_optimizer.zero_grad()
-            alpha_loss.backward()
-            alpha_optimizer.step()
+            if args.autotune:
+               with torch.no_grad():
+                   _, log_pi = actor.get_action(data.observations)
+                   
+               alpha_loss = -(log_alpha * (log_pi + target_entropy).detach()).mean()
+               alpha_optimizer.zero_grad()
+               alpha_loss.backward()
+               alpha_optimizer.step()
 
             # Target soft update
             tau = 0.005
-            for param, target_param in zip(qf1.parameters(), qf1_target.parameters()):
-                target_param.data.copy_(tau * param.data + (1 - tau) * target_param.data)
-            for param, target_param in zip(qf2.parameters(), qf2_target.parameters()):
-                target_param.data.copy_(tau * param.data + (1 - tau) * target_param.data)
-
-            writer.add_scalar("loss/qf1", qf1_loss.item(), global_step)
-            writer.add_scalar("loss/qf2", qf2_loss.item(), global_step)
-            writer.add_scalar("loss/actor", actor_loss.item(), global_step)
-            writer.add_scalar("loss/alpha", alpha_loss.item(), global_step)
+            if global_step % args.target_network_frequency == 0:
+               for param, target_param in zip(qf1.parameters(), qf1_target.parameters()):
+                   target_param.data.copy_(tau * param.data + (1 - tau) * target_param.data)
+               for param, target_param in zip(qf2.parameters(), qf2_target.parameters()):
+                   target_param.data.copy_(tau * param.data + (1 - tau) * target_param.data)
+	    
+            if global_step % 100 ==0:
+               writer.add_scalar("loss/qf1", qf1_loss.item(), global_step)
+               writer.add_scalar("loss/qf2", qf2_loss.item(), global_step)
+               writer.add_scalar("loss/actor", actor_loss.item(), global_step)
+               writer.add_scalar("loss/alpha", alpha_loss.item(), global_step)
 
     env.close()
     writer.close()
