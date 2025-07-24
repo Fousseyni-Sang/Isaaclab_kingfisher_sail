@@ -133,8 +133,11 @@ def main():
     writer = SummaryWriter(f"runs/{run_name}")
 
     # Start loop
-    obs, _ = env.reset(seed=args.seed)
-    obs = torch.tensor(obs, dtype=torch.float32, device=args.device)
+    """obs, _ = env.reset(seed=args.seed)
+    obs = torch.tensor(obs, dtype=torch.float32, device=args.device)"""
+    obs = env.reset()
+    if isinstance(obs, dict):
+        obs = obs["obs"]
     global_step = 0
 
     while simulation_app.is_running() and global_step < args.total_timesteps:
