@@ -14,15 +14,17 @@ from omni.isaac.lab.app import AppLauncher
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--task", type=str, required=True)
-parser.add_argument("--num_envs", type=int, default=64)
-parser.add_argument("--total_timesteps", type=int, default=1_000_000)
+parser.add_argument("--num_envs", type=int, default=1, help="Number of environments to run in parallel")
+parser.add_argument("--num_episodes", type=int, default=10, help="Number of episodes to run")
+parser.add_argument("--total_timesteps", type=int, default=1_000_000, help="Total number of timesteps to run")
+parser.add_argument("--episode_length", type=int, default=None, help="length of episode in seconds, if None, " \
+"use the default from the task config")
 parser.add_argument("--seed", type=int, default=42)
 parser.add_argument("--buffer_size", type=int, default=20_000_000)
 parser.add_argument("--batch_size", type=int, default=256)
 parser.add_argument("--policy_frequency", type=int, default=2, help="the frequency of training policy (delayed)")
 parser.add_argument("--target_network_frequency", type=int, default=1, help="the frequency of updates for the target nerworks")
 parser.add_argument("--task_dir_name", type=str, default="kingfisher_sail_direct", help="directory name for the task")
-parser.add_argument("--device", type=str, default="cuda:0", help="device to use for training (e.g., 'cuda:0' or 'cpu')")
 parser.add_argument("--checkpoint", type=str, default=None, help="path to the checkpoint file to load")
 parser.add_argument("--alpha", type=float, default=0.2, help="Entropy regularization coefficient")
 parser.add_argument("--autotune", type=bool, default=True, help="automatic tuning of the entropy coefficient")
@@ -30,6 +32,9 @@ parser.add_argument(
     "--disable_fabric", action="store_true", default=False, help="Disable fabric and use USD I/O operations."
 )
 parser.add_argument("--use_last_checkpoint", type=bool, default=False, help="Load latest checkpoint from checkpoint_dir")
+parser.add_argument("--actor_hdim", type=int, default=64, help="hidden dimension for the actor network")
+parser.add_argument("--critic_hdim", type=int, default=64, help="hidden dimension for the critic network")
+parser.add_argument("--wind_direction", type=float, default=180, help="direction of the true wind in degree.")
 
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
@@ -79,7 +84,6 @@ def find_latest_checkpoint_dir(base_root):
     latest = max(candidate_dirs, key=os.path.getmtime)
     return latest
 
-
 def main():
     
     # Prepare IsaacLab environment
@@ -98,12 +102,10 @@ def main():
     random.seed(args.seed)
 
     # Networks
-    actor = Actor(obs_dim, act_dim, action_scale).to(args.device)
-    actor.load(args.checkpoint) if args.checkpoint else None
+    actor = Actor(obs_dim, act_dim, action_scale, args.actor_hdim).to(args.device)
+    qf1 = SoftQNetwork(obs_dim, act_dim, args.critic_hdim).to(args.device)
+    qf2 = SoftQNetwork(obs_dim, act_dim, args.critic_hdim).to(args.device)
 
-    qf1 = SoftQNetwork(obs_dim, act_dim).to(args.device)
-    qf2 = SoftQNetwork(obs_dim, act_dim).to(args.device)
-    
     base_root = f"logs/cleanrl/sac/{args.task_dir_name}"
     if args.checkpoint is not None:
         checkpoint_path = args.checkpoint 
@@ -148,7 +150,7 @@ def main():
     env.unwrapped._aerodynamics.update_wind(wind_speed=wind_speed)
 
     # Start loop
-    obs = env.reset()
+    obs, _ = env.reset()
     if isinstance(obs, dict):
         obs = obs["policy"]
     global_step = 0
@@ -157,7 +159,7 @@ def main():
     episode_cntr = 0
     # For each environment, store list of [x, y] positions
     
-    num_episodes = 10
+    num_episodes = args.num_episodes
     max_episod_length = env.unwrapped.max_episode_length
     trajectories = torch.zeros((max_episod_length, args.num_envs, 2), device=env.unwrapped.device) #[[] for _ in range(env.num_envs)]
     lift_coeff_logs = torch.zeros((max_episod_length, args.num_envs), device=env.unwrapped.device) #[[] for _ in range(env.num_envs)]
@@ -198,6 +200,8 @@ def main():
         with torch.inference_mode():
             current_step += 1
             goal_pos =  env.unwrapped._desired_pos_w[:, :2]
+            if not any(torch.equal(goal_pos, x) for x in goal_pos_list):
+                goal_pos_list.append(goal_pos.clone())
 
             action, _ = actor.get_action(obs)
             next_obs, rew, done, trunc, info = env.step(action)
@@ -226,7 +230,7 @@ def main():
             rew_energy = env.unwrapped.reward_energy
             rew_backward = env.unwrapped.reward_backward
             loss = env.unwrapped.loss_discrim_energy
-
+            
             distance  = env.unwrapped.distance
             bearing = env.unwrapped.bearing
             #print(loss, rew_backward)
@@ -237,10 +241,11 @@ def main():
             step = env.unwrapped.episode_length_buf
             episode_length = step.max().item() + 1
             if current_step%200==0:
+                print(f"\nstep: {step}, episode: {episode_cntr}")
                 print(f"bearing: {bearing} next_wpt: {env.unwrapped.next_tack_wpt_idx}, goal: {goal_pos}, distance: {env.unwrapped.distance}")
                 #print(f"tack_wpts: {tack_wpts}, num_wpt: {env.unwrapped.tack_length}")
                 #print(f"wind_direction: {(180/torch.pi)*env.unwrapped._aerodynamics.Beta_w}, sail_mode: {env.unwrapped.sailing_mode}")
-            if torch.any(dones):
+            if torch.any(dones) or torch.any(trunc):
                 print(f"tack_wpts: {tack_wpts}")
                 
                 episode_lengths_list.append(current_step)
@@ -268,15 +273,16 @@ def main():
                 lift_coeff_logs.zero_()
                 drag_coeff_logs.zero_()
 
-                obs = env.reset()
+                obs, _ = env.reset()
                 if isinstance(obs, dict):
-                    obs = obs["obs"]
+                    obs = obs["policy"]
                 wind_modulo = (wind_direc + torch.pi)%(2*torch.pi) - torch.pi
                 env.unwrapped._aerodynamics.update_wind(wind_direction=wind_modulo)
 
-            alive_envs = (~dones).nonzero(as_tuple=True)[0].to(device=trajectories.device)
+            #print(f"done: {dones}, type: {type(dones)}")
+            alive_envs = (~dones.bool()).nonzero(as_tuple=True)[0].to(device=trajectories.device)
             #print(f"traj: {trajectories.device} alive_envs: {alive_envs.device} step: {step.device} robot_pos: {robot_pos.device}")
-            trajectories[step] = torch.where(~dones.unsqueeze(0), robot_pos.clone(), trajectories[step].clone())
+            trajectories[step] = torch.where(~dones.bool().unsqueeze(0), robot_pos.clone(), trajectories[step].clone())
             #lift_coeff_logs[alive_envs, step] = lift_coeff[alive_envs].float()
             
             lift_coeff_logs[step] = lift_coeff.clone().float()
@@ -288,8 +294,6 @@ def main():
             total_reward_logs[step] = rew.clone().float()
             bearing_logs[step] = bearing.clone().float()
             distance_logs[step] = distance.clone().float()
-
-
 
     return all_metrics, trajectories_list, lift_coeff_list, drag_coeff_list, goal_pos_list, env, episode_lengths_list, \
                 energy_list, reward_progress_list, reward_energy_list, reward_backward_list, total_reward_list, bearing_list, distance_list
@@ -304,8 +308,8 @@ if __name__ == "__main__":
     from datetime import datetime
 
     # Create timestamped subfolder
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_dir = os.path.join("eval_logs", timestamp)
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    output_dir = os.path.join("eval_logs/sac", timestamp)
     os.makedirs(output_dir, exist_ok=True)
 
     print(f"Saving logs to: {output_dir}")

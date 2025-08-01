@@ -373,7 +373,7 @@ class KingfisherSailEnvCfg(DirectRLEnvCfg):
     aerodynamics_cfg.air_density = 1.225
     aerodynamics_cfg.wing_span = 1
     aerodynamics_cfg.wing_chord = 0.2
-    aerodynamics_cfg.wind_direction = -90*torch.pi/180
+    aerodynamics_cfg.wind_direction = -180*torch.pi/180
     aerodynamics_cfg.wind_speed = 8
     aerodynamics_cfg.angle_of_attack = 20*torch.pi/180
     aerodynamics_cfg.min_upwind_angle = 45*torch.pi/180
@@ -889,8 +889,8 @@ class KingfisherSailEnv(DirectRLEnv):
         """print(f"\nbearing: {RAD2DEG*self.bearing} \tks: {RAD2DEG*ks} \tself.sailing_mode: {self.sailing_mode}")
         print(f"cross_track_error: {self.cross_track_error} \ttack_side: {self.tack_side} \tin_tack_mode: {self.in_tack_mode}\n")"""
         
-        self.bearing, self.next_tack_wpt_idx = get_desired_bearing_wpts(bearing=self.bearing, next_wpt_idx=self.next_tack_wpt_idx,
-                        tack_waypts=self.tack_waypoints, robot=self._robot, sail_mode=self.sailing_mode)
+        """self.bearing, self.next_tack_wpt_idx = get_desired_bearing_wpts(bearing=self.bearing, next_wpt_idx=self.next_tack_wpt_idx,
+                        tack_waypts=self.tack_waypoints, robot=self._robot, sail_mode=self.sailing_mode)"""
         #print(f"outside: {self.next_tack_wpt_idx}")        
         sampling_rate = 400
         left_thruster_enabled = torch.ones_like(self.thruster_left_randn)
@@ -976,10 +976,10 @@ class KingfisherSailEnv(DirectRLEnv):
         self.discriminator_time.memory.store_transition(torch.cat((torch.norm(self._robot.data.root_lin_vel_b[:, :2], 
                         dim=-1).reshape(self.num_envs, -1), self.time_context.reshape(self.num_envs, -1)), dim=-1))"""
         
-        if self.global_step % 20 == 0:
+        """if self.global_step % 20 == 0:
             #print(self.global_step)
             self.loss_discrim_energy, _ = self.discriminator_energy.learn() #, log_prob1
-        #self.loss_discrim_time, log_prob2 = self.discriminator_time.learn()
+        #self.loss_discrim_time, log_prob2 = self.discriminator_time.learn()"""
 
         #print(f"loss1: {self.loss_discrim_energy} \tloss2: {self.loss_discrim_time} ")
 
@@ -1146,7 +1146,7 @@ class KingfisherSailEnv(DirectRLEnv):
             "2_goal_reached": goal_reward,
             "3_energy": energy_reward,
             "4_backwards": backwards_penalty,
-            "5_bearing_penalty": bearing_penalty,
+            "5_bearing_penalty": 0*bearing_penalty,
             "6_time": time_reward,
             "7_tack_penalty": 0*distance_reward,
             "8_lift_drag_ratio": force_projection,
@@ -1297,8 +1297,8 @@ class KingfisherSailEnv(DirectRLEnv):
             """upwind = torch.any(torch.logical_and(self.episode_number[env_ids]>349, self.episode_number[env_ids]<400))
             random = torch.any(self.episode_number[env_ids]>400)"""
             
-            self._aerodynamics.reset_wind_condition(env_ids=env_ids, randomize_direction=False, randomize_speed=True, 
-                                                    upwind=True, downwind=False, beam=False, close=False, broad=False)
+            """self._aerodynamics.reset_wind_condition(env_ids=env_ids, randomize_direction=False, randomize_speed=True, 
+                                                    upwind=True, downwind=False, beam=False, close=False, broad=False)"""
 
             self.thruster_left_randn[env_ids] = torch.zeros_like(self.thruster_left_randn[env_ids]).uniform_(0, 1)
             self.thruster_right_randn[env_ids] = torch.zeros_like(self.thruster_right_randn[env_ids]).uniform_(0, 1)

@@ -26,8 +26,10 @@ parser.add_argument(
     action="store_true",
     help="When no checkpoint provided, use the last saved model. Otherwise use the best saved model.",
 )
-parser.add_argument("--episode_length", type=int, default=None, help="length of the episode in second.")
+parser.add_argument("--episode_length", type=int, default=None, help="length of the episode in second. " \
+"If None, use the default from the task config.")
 parser.add_argument("--wind_direction", type=float, default=180, help="direction of the true wind in degree.")
+
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
@@ -438,68 +440,7 @@ if __name__ == "__main__":
                 })
     pd.DataFrame(other_metrics_records).to_csv(os.path.join(output_dir, "other_metrics.csv"), index=False)
 
-    """print(f"Collected metrics: {len(metrics_list)} episodes")
 
-    # Extract metrics for plotting
-    final_distances = [m["Metrics/final_distance"] for m in metrics_list]
-    consumed_energy = [m["Metrics/consumed_energy"] for m in metrics_list]
-    disc_pred_mean = [m["Contexts/disc_prediction_mean"] for m in metrics_list]
-    #print(metrics_list)
-
-    # Plotting
-    plt.figure(figsize=(12, 4))
-
-    plt.subplot(3, 3, 1)
-    plt.plot(final_distances)
-    plt.title("Final Distance to Goal")
-    plt.xlabel("Episode")
-    plt.ylabel("Distance")
-
-    plt.subplot(3, 3, 2)
-    plt.plot(consumed_energy)
-    plt.title("Consumed Energy")
-    plt.xlabel("Episode")
-    plt.ylabel("Energy")
-
-    plt.subplot(3, 3, 3)
-    plt.plot(disc_pred_mean)
-    plt.title("Discriminator Prediction Mean")
-    plt.xlabel("Episode")
-    plt.ylabel("Mean Value")
-    
-    for ep in range(len(trajectories_list)):
-        for env_idx in range(env.unwrapped.num_envs):
-            x, y = trajectories_list[ep][:, env_idx, 0], trajectories_list[ep][:, env_idx, 1]
-            plt.subplot(3, 3, 4)
-            plt.plot(x, y)
-            plt.scatter(goal_pos_list[ep][:, 0], goal_pos_list[ep][:, 1], label="goal")
-            plt.title("trajectories")
-            plt.xlabel("x")
-            plt.ylabel("y")
-            #plt.legend()
-
-            plt.subplot(3, 3, 5)
-            plt.plot(lift_coeff_list[ep][:, env_idx])
-            plt.title("lift coefficient")
-            plt.xlabel("Episode")
-            plt.ylabel("lift coeff Values")
-
-            plt.subplot(3, 3, 6)
-            plt.plot(drag_coeff_list[ep][:, env_idx])
-            plt.title("drag coefficient value")
-            plt.xlabel("Episode")
-            plt.ylabel("drag coeff values")
-            
-
-            print(lift_coeff_list[ep][:50])
-
-
-    plt.tight_layout()
-    
-    #plt.show()
-    plt.savefig("metrics.png")"""
-    print("========================== END ! ================================")
-    #simulation_app.close()
     
 
     

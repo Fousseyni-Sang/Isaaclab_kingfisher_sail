@@ -28,6 +28,8 @@ parser.add_argument("--autotune", type=bool, default=True, help="automatic tunin
 parser.add_argument(
     "--disable_fabric", action="store_true", default=False, help="Disable fabric and use USD I/O operations."
 )
+parser.add_argument("--actor_hdim", type=int, default=64, help="hidden dimension for the actor network")
+parser.add_argument("--critic_hdim", type=int, default=64, help="hidden dimension for the critic network")
 
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
@@ -82,11 +84,11 @@ def main():
     random.seed(args.seed)
 
     # Networks
-    actor = Actor(obs_dim, act_dim, action_scale).to(args.device)
-    qf1 = SoftQNetwork(obs_dim, act_dim).to(args.device)
-    qf2 = SoftQNetwork(obs_dim, act_dim).to(args.device)
-    qf1_target = SoftQNetwork(obs_dim, act_dim).to(args.device)
-    qf2_target = SoftQNetwork(obs_dim, act_dim).to(args.device)
+    actor = Actor(obs_dim, act_dim, action_scale, hidden_dim=args.actor_hdim).to(args.device)
+    qf1 = SoftQNetwork(obs_dim, act_dim, hidden_dim=args.critic_hdim).to(args.device)
+    qf2 = SoftQNetwork(obs_dim, act_dim, hidden_dim=args.critic_hdim).to(args.device)
+    qf1_target = SoftQNetwork(obs_dim, act_dim, hidden_dim=args.critic_hdim).to(args.device)
+    qf2_target = SoftQNetwork(obs_dim, act_dim, hidden_dim=args.critic_hdim).to(args.device)
     qf1_target.load_state_dict(qf1.state_dict())
     qf2_target.load_state_dict(qf2.state_dict())
 
