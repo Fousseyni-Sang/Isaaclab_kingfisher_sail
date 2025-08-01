@@ -78,6 +78,8 @@ for ep in df_traj["episode"].unique()[:num_episodes]:  # Limit to first 3 episod
         plt.scatter(goal["goal_x"], goal["goal_y"], marker="x")
         #print(env_traj["x"].shape, env_traj["y"].shape)
 
+if args.wind_direction is None:
+    raise ValueError("Please provide episode_length in seconds.")
 wind_direc = (args.wind_direction * np.pi / 180)  # Example wind direction in radians
 wind_speed = 5  # Example wind speed
 # Plot wind vector
@@ -118,9 +120,9 @@ if args.episode_length is None:
     raise ValueError("Please provide episode_length in seconds.")
 dt = 1/60  # Assuming 60 FPS
 decimation = 3  # Number physics step for a policy step
-max_timestep = args.episode_length/(decimation*dt)  # truncate or pad to this length
+max_timestep = int(args.episode_length/(decimation*dt))  # truncate or pad to this length
 
-
+print(f"Max Timestep: {max_timestep}")
 lift_all = []
 drag_all = []
 
