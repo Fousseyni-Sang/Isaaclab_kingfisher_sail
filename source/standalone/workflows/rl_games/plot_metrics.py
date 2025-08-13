@@ -10,7 +10,7 @@ parser.add_argument("--sac", type=bool, default=False, help="plot SAC metrics")
 parser.add_argument("--dir_path", type=str, default=None, help="directory to plot")
 parser.add_argument("--num_episodes", type=int, default=10, help="Number of episodes to run")
 parser.add_argument("--wind_direction", type=float, default=None, help="direction of the true wind in degree.")
-parser.add_argument("--episode_length", type=int, default=None, help="length of episode in seconds, if None, " \
+parser.add_argument("--episode_length", type=int, default=300, help="length of episode in seconds, if None, " \
 "use the default from the task config")
 
 args = parser.parse_args()
@@ -19,18 +19,19 @@ args = parser.parse_args()
 if args.sac:
     eval_root = "eval_logs/sac" 
 else:
-    eval_root = "eval_logs/"
+    eval_root = "eval_logs/rl_games"
 
 subdirs = sorted(
     [os.path.join(eval_root, d) for d in os.listdir(eval_root) if os.path.isdir(os.path.join(eval_root, d))],
     key=lambda x: x.split("/")[-1],  # assumes timestamp folder names
     reverse=True
 )
+
 latest_dir = subdirs[0] if args.dir_path is None else args.dir_path
 num_episodes = args.num_episodes
 
 print("=========================================================================================================")
-
+print(f"root directory: {eval_root}")
 print(f"Loading data from: {latest_dir}")
 
 # --- Load CSVs ---
@@ -79,7 +80,7 @@ for ep in df_traj["episode"].unique()[:num_episodes]:  # Limit to first 3 episod
         #print(env_traj["x"].shape, env_traj["y"].shape)
 
 if args.wind_direction is None:
-    raise ValueError("Please provide episode_length in seconds.")
+    raise ValueError("Please provide wind_direction in seconds.")
 wind_direc = (args.wind_direction * np.pi / 180)  # Example wind direction in radians
 wind_speed = 5  # Example wind speed
 # Plot wind vector

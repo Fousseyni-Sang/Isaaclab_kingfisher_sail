@@ -92,6 +92,8 @@ class Aerodynamics:
         self.lift_coeff_interpolator = None
         self.drag_coeff_interpolator = None
 
+        self.max_aero_force = torch.zeros((self.num_envs, 3), device=self.device) # max aerodynamic force in the boat frame
+
         self.set_coeffs_interpolators()
 
         """vectors = {
@@ -106,7 +108,7 @@ class Aerodynamics:
         return
     
     def compute_wind_effect(self, Uw:torch.Tensor, Beta_w:torch.Tensor, ship_heading_w:torch.Tensor,
-                                 ship_lin_vel2D)->torch.Tensor:
+                                 ship_lin_vel2D, angle_of_attack:torch.Tensor, sail_angle:torch.Tensor)->torch.Tensor:
         """ This function will be used to apply wind effect:
                 Parameters:
             - Uw: (true) wind speed for all environmenents
@@ -133,7 +135,7 @@ class Aerodynamics:
 
         Re = self.compute_Reynold(Uw, self.cfg.wing_chord)
         t = 0.18*self.cfg.wing_chord # thickness, naca0018 so 18% of the chord
-        coeff_L, coeff_D = self.generate_coeffs((180/torch.pi)*self.angle_of_attack)
+        coeff_L, coeff_D = self.generate_coeffs((180/torch.pi)*angle_of_attack)
         """coeff_L, coeff_D, CN_alpha, CT_alpha, CD_90 = self.generate_coeff_from_article(
                         Re, self.angle_of_attack,t, self.cfg.wing_chord
                 )"""
@@ -141,7 +143,8 @@ class Aerodynamics:
         self.lift_coeff = coeff_L.clone()
         self.drag_coeff = coeff_D.clone()
 
-        lift_L, drag_D = self.generate_force(apparent_wind2D_b, sail_wing_aire, coeff_L, coeff_D, density_p)
+        lift_L, drag_D = self.generate_force(wind_Vapp=apparent_wind2D_b, angle_of_attack=angle_of_attack, sail_angle=sail_angle, 
+                                             aire_A=sail_wing_aire, coeff_L=coeff_L, coeff_D=coeff_D, density_p=density_p)
 
         force = torch.zeros((self.num_envs, 3))
 
@@ -163,6 +166,30 @@ class Aerodynamics:
         force[:, 1] = self.wind_lift_b[:, 1] + self.wind_drag_b[:, 1]
 
         return force.clone()
+    
+    def get_max_aero_force(self, true_wind, max_boat_speed=1.5) -> torch.Tensor:
+        """
+        Returns the maximum aerodynamic force (lift) in the boat frame,
+        assuming apparent wind angle of 90° (max lift), i.e. 
+        V_app = sqrt(true_wind^2 + max_boat_speed^2).
+        
+        Parameters:
+            true_wind: Tensor of shape (num_envs,) | float with wind speeds.
+            max_boat_speed: float, maximum boat speed magnitude (m/s).
+
+        Returns:
+            max_aero_force: Tensor of shape (num_envs, 3) with lift force in boat frame.
+        """
+        if isinstance(true_wind, float):
+            true_wind = torch.tensor([true_wind], device=self.device)
+        V_app = torch.sqrt(true_wind ** 2 + max_boat_speed ** 2)
+        sail_wing_area = self.cfg.wing_span * self.cfg.wing_chord
+        density = self.cfg.air_density
+        max_cl = self.max_cl
+
+        lift_magnitude = 0.5 * density * sail_wing_area * max_cl * V_app ** 2
+
+        return lift_magnitude
 
     def generate_true_wind_components(self, Uw: torch.Tensor, beta_w: torch.Tensor, 
                     ship_heading_w:torch.Tensor) -> torch.Tensor:
@@ -220,7 +247,7 @@ class Aerodynamics:
         #(apparent_wind_angle.reshape(-1,) - sail_angle.reshape(-1,) + torch.pi)%(2*torch.pi) - torch.pi
         return torch.atan2(torch.sin(aoa), torch.cos(aoa))
 
-    def generate_force(self, wind_Vapp: torch.Tensor, aire_A: float,coeff_L: torch.Tensor, coeff_D: torch.Tensor,
+    def generate_force(self, wind_Vapp: torch.Tensor, angle_of_attack:torch.Tensor, sail_angle:torch.Tensor, aire_A: float,coeff_L: torch.Tensor, coeff_D: torch.Tensor,
                        density_p: float = 1.225) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Generate lift and drag forces for each environment.
@@ -249,7 +276,7 @@ class Aerodynamics:
 
         # Cedric's code for boat forces -- Begin -->
         # build sail frame
-        sail_angle = self.sail_angle.clone().detach().reshape(-1, ) #self.get_sail_angle(self.apparent_wind_angle, self.angle_of_attack)
+        sail_angle = sail_angle.clone().detach().reshape(-1, ) #self.get_sail_angle(self.apparent_wind_angle, self.angle_of_attack)
         sail_unit_vector = torch.zeros_like(wind_Vapp)
 
         sail_unit_vector[:, 0] = torch.cos(sail_angle)
@@ -268,8 +295,9 @@ class Aerodynamics:
         
         aoa_unit_vector = torch.zeros_like(wind_Vapp)
 
-        aoa_unit_vector[:, 0] = torch.cos(self.angle_of_attack)
-        aoa_unit_vector[:, 1] = torch.sin(self.angle_of_attack)
+        #print(f"aoa: {angle_of_attack.shape}, aoa_unit_vector: {aoa_unit_vector.shape}")
+        aoa_unit_vector[:, 0] = torch.cos(angle_of_attack)
+        aoa_unit_vector[:, 1] = torch.sin(angle_of_attack)
 
         lift_vec = torch.zeros_like(wind_V_app_unit)
         drag_vec = torch.zeros_like(wind_V_app_unit)
@@ -292,28 +320,6 @@ class Aerodynamics:
         #print(f"sail: {torch.sum(sail_unit_vector*wind_V_app_unit, dim=1), torch.sum(sail_ortho_unit_vector*wind_V_app_unit, dim=1)}")
         #print(f"force: {torch.sum(lift_vec*sail_ortho_unit_vector, dim=1), torch.sum(drag_vec*sail_unit_vector, dim=1)}")
         # <-- End 
-
-        """# Lift directions (CCW and CW)
-        lift_ccw = lift_L.unsqueeze(1) * torch.stack([wind_V_app_unit[:, 1], -wind_V_app_unit[:, 0]], dim=1)
-        lift_cw  = lift_L.unsqueeze(1) * torch.stack([-wind_V_app_unit[:, 1], wind_V_app_unit[:, 0]], dim=1)
-
-        # 5 conditions
-        cond1 = (aoa_unit_vector * wind_V_app_unit).sum(dim=1) >= 0
-        cond2 = (drag_vec * aoa_unit_vector).sum(dim=1) >= 0
-        cond3_ccw = (lift_ccw * torch.stack([aoa_unit_vector[:, 1], -aoa_unit_vector[:, 0]], dim=1)).sum(dim=1) >= 0
-        cond3_cw  = (lift_cw  * torch.stack([aoa_unit_vector[:, 1], -aoa_unit_vector[:, 0]], dim=1)).sum(dim=1) >= 0
-        cond4_ccw = ((lift_ccw + drag_vec) * wind_V_app_unit).sum(dim=1) >= 0
-        cond4_cw  = ((lift_cw + drag_vec) * wind_V_app_unit).sum(dim=1) >= 0
-        cond5 = (drag_vec * wind_Vapp).sum(dim=1) >= 0
-
-        # All conditions for CCW and CW
-        all_ccw = cond1 & cond2 & cond3_ccw & cond4_ccw & cond5
-        all_cw  = cond1 & cond2 & cond3_cw  & cond4_cw  & cond5
-
-        # Default to CCW, switch to CW where CCW conditions are not satisfied and CW are
-        lift_vec = torch.where(all_ccw.unsqueeze(1), lift_ccw,
-                    torch.where(all_cw.unsqueeze(1), lift_cw, lift_ccw))  # fallback to CCW
-        #print(f"paral: {self.check_parallelism(drag_vec, wind_Vapp)}\n")"""
 
         return lift_vec, drag_vec
 
@@ -492,7 +498,7 @@ class Aerodynamics:
         Returns:
         - sail angle as a tensor of shape (num_envs,).
         """
-        angle = apparent_wind_angle - angle_of_attack
+        angle = apparent_wind_angle + angle_of_attack
         angle = torch.atan2(torch.sin(angle), torch.cos(angle))
         #print(f"sail: {angle*(180/torch.pi)} \tapp_ang: {apparent_wind_angle*(180/torch.pi)} \t aoa: {angle_of_attack*(180/torch.pi)}")
         return angle

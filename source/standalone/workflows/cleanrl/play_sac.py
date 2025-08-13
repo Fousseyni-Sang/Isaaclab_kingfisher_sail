@@ -62,6 +62,9 @@ import gymnasium as gym
 from buffers import ReplayBuffer
 from network import SoftQNetwork, Actor
 
+# Create Publisher Node
+import rclpy
+from ros2_Node import RlAgentPublisher, RewardWeightSubscriber
 
 def find_latest_checkpoint_dir(base_root):
     """
@@ -85,6 +88,12 @@ def find_latest_checkpoint_dir(base_root):
     return latest
 
 def main():
+
+    # ---- Initialize ROS2 ----
+    rclpy.init()
+    ros_node = RlAgentPublisher(args.num_envs)
+    slider_names = ['time', 'energy', 'goal', 'wind_direct', 'desired_speed', 'wind_speed']  # Must match the names you use in the publisher
+    slider_node = RewardWeightSubscriber(slider_names)
     
     # Prepare IsaacLab environment
     env_cfg = parse_env_cfg(args.task, num_envs=args.num_envs, device=args.device, use_fabric=not args.disable_fabric)
@@ -285,6 +294,11 @@ def main():
             trajectories[step] = torch.where(~dones.bool().unsqueeze(0), robot_pos.clone(), trajectories[step].clone())
             #lift_coeff_logs[alive_envs, step] = lift_coeff[alive_envs].float()
             
+            ros_node.publish(obs, action, rew, aero_force, thruster_force, lin_speed, aoa, app_angle, sail, 
+                            head_w, head_wrt_wind, ld_ratio, robot_pos, goal_pos, energy, episode_energy, lift, drag, 
+                            lift_coeff, drag_coeff, sum_angle, desired_pos, rew_progress, rew_bearing, rew_energy, 
+                            rew_backward, loss_disc, tack_wpts)
+            
             lift_coeff_logs[step] = lift_coeff.clone().float()
             drag_coeff_logs[step] = drag_coeff.clone().float()
             energy_logs[step] = energy.clone().float()
@@ -294,6 +308,12 @@ def main():
             total_reward_logs[step] = rew.clone().float()
             bearing_logs[step] = bearing.clone().float()
             distance_logs[step] = distance.clone().float()
+
+    # Cleanup
+    ros_node.destroy_node()
+    slider_node.destroy_node()
+
+    rclpy.shutdown()
 
     return all_metrics, trajectories_list, lift_coeff_list, drag_coeff_list, goal_pos_list, env, episode_lengths_list, \
                 energy_list, reward_progress_list, reward_energy_list, reward_backward_list, total_reward_list, bearing_list, distance_list

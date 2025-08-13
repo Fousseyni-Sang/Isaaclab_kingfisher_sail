@@ -18,6 +18,7 @@ parser.add_argument("--video_length", type=int, default=200, help="Length of the
 parser.add_argument(
     "--disable_fabric", action="store_true", default=False, help="Disable fabric and use USD I/O operations."
 )
+parser.add_argument("--ros", type=bool, default=False, help="publish ros topic if True, no pub otherwise")
 parser.add_argument("--num_envs", type=int, default=None, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
 parser.add_argument("--checkpoint", type=str, default=None, help="Path to model checkpoint.")
@@ -71,19 +72,19 @@ from omni.isaac.lab_tasks.utils.wrappers.rl_games import RlGamesGpuEnv, RlGamesV
 
 import numpy as np
 # Create Publisher Node
-"""import rclpy
-from ros2_Node import RlAgentPublisher, RewardWeightSubscriber"""
-import matplotlib.pyplot as plt
+import rclpy
+from ros2_Node import RlAgentPublisher, RewardWeightSubscriber
+#import matplotlib.pyplot as plt
 
 
 def main():
     """Play with RL-Games agent."""
         
     # ---- Initialize ROS2 ----
-    """rclpy.init()
+    rclpy.init()
     ros_node = RlAgentPublisher(args_cli.num_envs)
     slider_names = ['time', 'energy', 'goal', 'wind_direct', 'desired_speed', 'wind_speed']  # Must match the names you use in the publisher
-    slider_node = RewardWeightSubscriber(slider_names)"""
+    slider_node = RewardWeightSubscriber(slider_names)
     #rclpy.spin(slider_node)
 
     # parse env configuration
@@ -202,6 +203,7 @@ def main():
     total_reward_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.unwrapped.device) 
     bearing_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.unwrapped.device)
     distance_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.unwrapped.device)
+    reward_aero_force_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.unwrapped.device)
 
     trajectories_list = []
     lift_coeff_list = []
@@ -217,6 +219,7 @@ def main():
     total_reward_list = []
     bearing_list = []
     distance_list = []
+    reward_aero_force_list = []
 
     print(f"\n====================== Max EPISODE: {max_episod_length} ==================================\n")
     # store metrics per finished episode
@@ -282,7 +285,7 @@ def main():
                 print(f"bearing: {bearing} next_wpt: {env.unwrapped.next_tack_wpt_idx}, goal: {goal_pos}, distance: {env.unwrapped.distance}")
                 #print(f"tack_wpts: {tack_wpts}, num_wpt: {env.unwrapped.tack_length}")
                 #print(f"wind_direction: {(180/torch.pi)*env.unwrapped._aerodynamics.Beta_w}, sail_mode: {env.unwrapped.sailing_mode}")
-            if torch.any(dones):
+            if torch.any(dones) or current_step >= max_episod_length:
                 print(f"tack_wpts: {tack_wpts}")
                 
                 episode_lengths_list.append(current_step)
@@ -321,6 +324,12 @@ def main():
             trajectories[step] = torch.where(~dones.unsqueeze(0), robot_pos.clone(), trajectories[step].clone())
             #lift_coeff_logs[alive_envs, step] = lift_coeff[alive_envs].float()
             
+            ros_node.publish(obs, actions, rew, aero_force, thruster_force, lin_speed, aoa, app_angle, sail, 
+                            head_w, head_wrt_wind, ld_ratio, robot_pos, goal_pos, energy, episode_energy, lift, drag, 
+                            lift_coeff, drag_coeff, sum_angle, desired_pos, rew_progress, rew_bearing, rew_energy, 
+                            rew_backward, loss_disc, tack_wpts)
+
+
             lift_coeff_logs[step] = lift_coeff.clone().float()
             drag_coeff_logs[step] = drag_coeff.clone().float()
             energy_logs[step] = energy.clone().float()
@@ -330,17 +339,12 @@ def main():
             total_reward_logs[step] = rew.clone().float()
             bearing_logs[step] = bearing.clone().float()
             distance_logs[step] = distance.clone().float()
-
-
-
         
-    """finally:
+    # Cleanup
+    ros_node.destroy_node()
+    slider_node.destroy_node()
 
-        # Cleanup
-        env.close()
-        del env, obs, actions, rew, dones
-        gc.collect()
-        simulation_app.close()"""
+    rclpy.shutdown()
 
     return all_metrics, trajectories_list, lift_coeff_list, drag_coeff_list, goal_pos_list, env, episode_lengths_list, \
                 energy_list, reward_progress_list, reward_energy_list, reward_backward_list, total_reward_list, bearing_list, distance_list
@@ -355,7 +359,7 @@ if __name__ == "__main__":
 
     # Create timestamped subfolder
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_dir = os.path.join("eval_logs", timestamp)
+    output_dir = os.path.join("eval_logs/rl_games", timestamp)
     os.makedirs(output_dir, exist_ok=True)
 
     print(f"Saving logs to: {output_dir}")
