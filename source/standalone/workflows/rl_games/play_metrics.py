@@ -30,6 +30,8 @@ parser.add_argument(
 parser.add_argument("--episode_length", type=int, default=None, help="length of the episode in second. " \
 "If None, use the default from the task config.")
 parser.add_argument("--wind_direction", type=float, default=180, help="direction of the true wind in degree.")
+parser.add_argument("--wind_speed", type=float, default=5, help="speed of the true wind in degree.")
+parser.add_argument("--num_episode", type=int, default=10, help="number of episodes for evaluation.")
 
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
@@ -168,7 +170,7 @@ def main():
         env.unwrapped.cfg.episode_length_s = args_cli.episode_length
     
     wind_direc = (args_cli.wind_direction*torch.pi/180)
-    wind_speed = 5
+    wind_speed = args_cli.wind_speed
     wind_modulo = (wind_direc + torch.pi)%(2*torch.pi) - torch.pi
     env.unwrapped._aerodynamics.update_wind(wind_direction=wind_modulo)
     env.unwrapped._aerodynamics.update_wind(wind_speed=wind_speed)
@@ -191,7 +193,8 @@ def main():
     episode_cntr = 0
     # For each environment, store list of [x, y] positions
     
-    num_episodes = 10
+    num_episodes = args_cli.num_episode
+
     max_episod_length = env.unwrapped.max_episode_length
     trajectories = torch.zeros((max_episod_length, args_cli.num_envs, 2), device=env.unwrapped.device) #[[] for _ in range(env.num_envs)]
     lift_coeff_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.unwrapped.device) #[[] for _ in range(env.num_envs)]
@@ -204,13 +207,19 @@ def main():
     bearing_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.unwrapped.device)
     distance_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.unwrapped.device)
     reward_aero_force_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.unwrapped.device)
+    aoa_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.unwrapped.device)
+    wind_direc_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.unwrapped.device)
+    actions_logs = torch.zeros((max_episod_length, args_cli.num_envs, env.unwrapped.action_space.shape[1]), device=env.unwrapped.device)
+    sail_angle_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.unwrapped.device)
+    aero_force_logs = torch.zeros((max_episod_length, args_cli.num_envs, 3), device=env.unwrapped.device)
+    max_aero_force_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.unwrapped.device)
+    thruster_force_logs = torch.zeros((max_episod_length, args_cli.num_envs, 6), device=env.unwrapped.device)
 
     trajectories_list = []
     lift_coeff_list = []
     drag_coeff_list = []
     goal_pos_list = []
     episode_lengths_list = []
-
 
     energy_list = []
     reward_progress_list = []
@@ -220,6 +229,13 @@ def main():
     bearing_list = []
     distance_list = []
     reward_aero_force_list = []
+    aoa_list = []
+    wind_direc_list = []
+    actions_list = []
+    sail_angle_list = []
+    aero_force_list = []
+    max_aero_force_list = []
+    thruster_force_list = []
 
     print(f"\n====================== Max EPISODE: {max_episod_length} ==================================\n")
     # store metrics per finished episode
@@ -271,6 +287,7 @@ def main():
             rew_energy = env.unwrapped.reward_energy
             rew_backward = env.unwrapped.reward_backward
             loss = env.unwrapped.loss_discrim_energy
+            max_aero_force = env.unwrapped.max_aero_force.squeeze(0)
 
             distance  = env.unwrapped.distance
             bearing = env.unwrapped.bearing
@@ -307,6 +324,15 @@ def main():
                 total_reward_list.append(total_reward_logs[:-1].clone())
                 bearing_list.append(bearing_logs[:-1].clone())
                 distance_list.append(distance_logs[:-1].clone())
+                aoa_list.append(aoa_logs[:-1].clone())
+                wind_direc_list.append(wind_direc_logs[:-1].clone())
+                actions_list.append(actions_logs[:-1].clone())
+                sail_angle_list.append(sail_angle_logs[:-1].clone())
+                aero_force_list.append(aero_force_logs[:-1].clone())
+                max_aero_force_list.append(max_aero_force_logs[:-1].clone())
+                thruster_force_list.append(thruster_force_logs[:-1].clone())
+
+
 
                 # Reset buffers for next episode
                 trajectories.zero_()
@@ -339,6 +365,15 @@ def main():
             total_reward_logs[step] = rew.clone().float()
             bearing_logs[step] = bearing.clone().float()
             distance_logs[step] = distance.clone().float()
+            aoa_logs[step] = aoa.clone().float()
+            wind_direc_logs[step] = app_angle.clone().float()
+            #print(f"actions: {actions.device} actions_logs: {actions_logs.device}")
+            actions_logs[step, 0, :] = torch.tensor([actions[0, 0].clone().float(), actions[0, 1].clone().float(), 
+                                            actions[0, 2].clone().float() ], device=actions_logs.device)
+            sail_angle_logs[step] = sail.clone().float()
+            aero_force_logs[step] = aero_force.clone().float()
+            max_aero_force_logs[step] = max_aero_force.clone().float()
+            thruster_force_logs[step] = thruster_force.clone().float()
         
     # Cleanup
     ros_node.destroy_node()
@@ -347,19 +382,23 @@ def main():
     rclpy.shutdown()
 
     return all_metrics, trajectories_list, lift_coeff_list, drag_coeff_list, goal_pos_list, env, episode_lengths_list, \
-                energy_list, reward_progress_list, reward_energy_list, reward_backward_list, total_reward_list, bearing_list, distance_list
+                energy_list, reward_progress_list, reward_energy_list, reward_backward_list, total_reward_list, bearing_list, \
+                      distance_list, aoa_list, wind_direc_list, actions_list, sail_angle_list, aero_force_list, max_aero_force_list, \
+                        thruster_force_list
    
 if __name__ == "__main__":
     metrics_list, trajectories_list, lift_coeff_list, drag_coeff_list, goal_pos_list, env, episode_lengths_list, energy_list, \
-    reward_progress_list, reward_energy_list, reward_backward_list, total_reward_list, bearing_list, distance_list = main()
+    reward_progress_list, reward_energy_list, reward_backward_list, total_reward_list, bearing_list, distance_list, aoa_list, \
+    wind_direc_list, actions_list, sail_angle_list, aero_force_list, max_aero_force_list, thruster_force_list = main()
 
     import pandas as pd
     import os
     from datetime import datetime
 
     # Create timestamped subfolder
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
     output_dir = os.path.join("eval_logs/rl_games", timestamp)
+    output_dir = output_dir + f"_{args_cli.wind_direction}_{args_cli.wind_speed}"
     os.makedirs(output_dir, exist_ok=True)
 
     print(f"Saving logs to: {output_dir}")
@@ -378,9 +417,24 @@ if __name__ == "__main__":
                 })
     pd.DataFrame(traj_records).to_csv(os.path.join(output_dir, "trajectories.csv"), index=False)
 
-    # --- Save Aero Coefficients ---
+    # --- Save actions logs ---
+    actions_records = []
+    for ep_idx, actions in enumerate(actions_list):  # (T, N, D)
+        for t in range(actions.shape[0]):
+            for env_id in range(actions.shape[1]):
+                actions_records.append({
+                    "episode": ep_idx,
+                    "time_step": t,
+                    "env_id": env_id,
+                    "action_0": actions[t, env_id, 0].item(),
+                    "action_1": actions[t, env_id, 1].item(),
+                    "action_2": actions[t, env_id, 2].item()
+                })
+    pd.DataFrame(actions_records).to_csv(os.path.join(output_dir, "actions.csv"), index=False)
+
+    # --- Save Aero data ---
     aero_records = []
-    for ep_idx, (lift, drag) in enumerate(zip(lift_coeff_list, drag_coeff_list)):
+    for ep_idx, (lift, drag, aoa, app_wind_angle) in enumerate(zip(lift_coeff_list, drag_coeff_list, aoa_list, wind_direc_list)):
         for t in range(lift.shape[0]):
             for env_id in range(lift.shape[1]):
                 aero_records.append({
@@ -388,9 +442,12 @@ if __name__ == "__main__":
                     "time_step": t,
                     "env_id": env_id,
                     "lift_coeff": lift[t, env_id].item(),
-                    "drag_coeff": drag[t, env_id].item()
+                    "drag_coeff": drag[t, env_id].item(),
+                    'aoa': aoa[t, env_id].item(),
+                    'app_wind_angle': app_wind_angle[t, env_id].item(),
+                    "sail_angle": sail_angle_list[ep_idx][t, env_id].item()
                 })
-    pd.DataFrame(aero_records).to_csv(os.path.join(output_dir, "aero_coeffs.csv"), index=False)
+    pd.DataFrame(aero_records).to_csv(os.path.join(output_dir, "aero_data.csv"), index=False)
 
     # --- Save episode length ---
     episode_length_records = []
@@ -440,7 +497,13 @@ if __name__ == "__main__":
                     "reward_backward": reward_backward_list[ep_idx][t, env_id].item(),
                     "total_reward": total_reward_list[ep_idx][t, env_id].item(),
                     "bearing": bearing_list[ep_idx][t, env_id].item(),
-                    "distance": distance_list[ep_idx][t, env_id].item()
+                    "distance": distance_list[ep_idx][t, env_id].item(),
+                    "max_aero_force": max_aero_force_list[ep_idx][t, env_id].item(),
+                    "aero_force_x": aero_force_list[ep_idx][t, env_id, 0].item(),
+                    "aero_force_y": aero_force_list[ep_idx][t, env_id, 1].item(),
+                    "thruster_force_1_x": thruster_force_list[ep_idx][t, env_id, 0].item(),
+                    "thruster_force_2_x": thruster_force_list[ep_idx][t, env_id, 3].item(),
+                
                 })
     pd.DataFrame(other_metrics_records).to_csv(os.path.join(output_dir, "other_metrics.csv"), index=False)
 

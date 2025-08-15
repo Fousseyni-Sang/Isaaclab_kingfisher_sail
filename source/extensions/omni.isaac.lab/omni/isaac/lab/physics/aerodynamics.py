@@ -107,8 +107,9 @@ class Aerodynamics:
 
         return
     
-    def compute_wind_effect(self, Uw:torch.Tensor, Beta_w:torch.Tensor, ship_heading_w:torch.Tensor,
-                                 ship_lin_vel2D, angle_of_attack:torch.Tensor, sail_angle:torch.Tensor)->torch.Tensor:
+    def compute_wind_effect(self, Uw:torch.Tensor=torch.zeros(), Beta_w:torch.Tensor=torch.zeros(), ship_heading_w:torch.Tensor=torch.zeros(),
+                                 ship_lin_vel2D=torch.zeros(), angle_of_attack:torch.Tensor=torch.zeros(), sail_angle:torch.Tensor=torch.zeros(),
+                                 update_appw_only=False)->torch.Tensor:
         """ This function will be used to apply wind effect:
                 Parameters:
             - Uw: (true) wind speed for all environmenents
@@ -243,7 +244,7 @@ class Aerodynamics:
         - Angles of attack as a tensor of shape (num_envs,).
         """
         
-        aoa =  sail_angle.reshape(-1,) - apparent_wind_angle.reshape(-1,)
+        aoa =  apparent_wind_angle.reshape(-1,) - sail_angle.reshape(-1,) 
         #(apparent_wind_angle.reshape(-1,) - sail_angle.reshape(-1,) + torch.pi)%(2*torch.pi) - torch.pi
         return torch.atan2(torch.sin(aoa), torch.cos(aoa))
 
@@ -498,7 +499,7 @@ class Aerodynamics:
         Returns:
         - sail angle as a tensor of shape (num_envs,).
         """
-        angle = apparent_wind_angle + angle_of_attack
+        angle = apparent_wind_angle - angle_of_attack 
         angle = torch.atan2(torch.sin(angle), torch.cos(angle))
         #print(f"sail: {angle*(180/torch.pi)} \tapp_ang: {apparent_wind_angle*(180/torch.pi)} \t aoa: {angle_of_attack*(180/torch.pi)}")
         return angle

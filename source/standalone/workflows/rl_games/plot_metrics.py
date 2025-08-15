@@ -10,8 +10,6 @@ parser.add_argument("--sac", type=bool, default=False, help="plot SAC metrics")
 parser.add_argument("--dir_path", type=str, default=None, help="directory to plot")
 parser.add_argument("--num_episodes", type=int, default=10, help="Number of episodes to run")
 parser.add_argument("--wind_direction", type=float, default=None, help="direction of the true wind in degree.")
-parser.add_argument("--episode_length", type=int, default=300, help="length of episode in seconds, if None, " \
-"use the default from the task config")
 
 args = parser.parse_args()
 
@@ -36,11 +34,12 @@ print(f"Loading data from: {latest_dir}")
 
 # --- Load CSVs ---
 df_traj = pd.read_csv(os.path.join(latest_dir, "trajectories.csv"))
-df_aero = pd.read_csv(os.path.join(latest_dir, "aero_coeffs.csv"))
+df_aero = pd.read_csv(os.path.join(latest_dir, "aero_data.csv"))
 df_goals = pd.read_csv(os.path.join(latest_dir, "goals.csv"))
 df_metrics = pd.read_csv(os.path.join(latest_dir, "metrics.csv"))
 df_ep_length = pd.read_csv(os.path.join(latest_dir, "ep_length.csv"))
 df_other_metrics = pd.read_csv(os.path.join(latest_dir, "other_metrics.csv"))
+df_actions = pd.read_csv(os.path.join(latest_dir, "actions.csv"))
 
 #print(df_traj.head)
 # --- Plot Metrics ---
@@ -94,6 +93,71 @@ plt.legend()
 plt.tight_layout()
 plt.savefig(os.path.join(latest_dir, "trajectory_plot.png"))
 
+# --- Plot Action 0 ---
+plt.figure(figsize=(12, 4))
+plt.subplot(1, 3, 1)
+for ep in df_actions["episode"].unique()[:num_episodes]:
+    ep_length = ep_length_list[ep]
+    ep_actions = df_actions[df_actions["episode"] == ep]
+    
+    for env_id in ep_actions["env_id"].unique():
+        env_actions = ep_actions[ep_actions["env_id"] == env_id]
+        plt.plot(
+            np.arange(ep_length),
+            env_actions["action_0"][:ep_length],
+            label=f"action_0 Ep{ep} Env{env_id}"
+        )
+
+plt.title("Action 0")
+plt.xlabel("Timestep")
+plt.ylabel("Action 0 value")
+plt.legend()
+plt.tight_layout()
+
+# --- Plot Action 1 ---
+plt.subplot(1, 3, 2)
+for ep in df_actions["episode"].unique()[:num_episodes]:
+    ep_length = ep_length_list[ep]
+    ep_actions = df_actions[df_actions["episode"] == ep]
+    
+    for env_id in ep_actions["env_id"].unique():
+        env_actions = ep_actions[ep_actions["env_id"] == env_id]
+        plt.plot(
+            np.arange(ep_length),
+            env_actions["action_1"][:ep_length],
+            label=f"action_1 Ep{ep} Env{env_id}"
+        )
+
+plt.title("Action 1")
+plt.xlabel("Timestep")
+plt.ylabel("Action 1 value")
+plt.legend()
+plt.tight_layout()
+
+# --- Plot Action 2 ---
+plt.subplot(1, 3, 3)
+for ep in df_actions["episode"].unique()[:num_episodes]:
+    ep_length = ep_length_list[ep]
+    ep_actions = df_actions[df_actions["episode"] == ep]
+    
+    for env_id in ep_actions["env_id"].unique():
+        env_actions = ep_actions[ep_actions["env_id"] == env_id]
+        plt.plot(
+            np.arange(ep_length),
+            env_actions["action_2"][:ep_length],
+            label=f"action_2 Ep{ep} Env{env_id}"
+        )
+
+plt.title("Action 2")
+plt.xlabel("Timestep")
+plt.ylabel("Action 2 value")
+plt.legend()
+plt.tight_layout()
+
+plt.savefig(os.path.join(latest_dir, "actions_plot.png"))
+plt.close()
+
+
 # --- Plot Aero Coefficients ---
 """plt.figure(figsize=(12, 4))
 for ep in df_aero["episode"].unique()[:num_episodes]:
@@ -117,47 +181,66 @@ plt.savefig(os.path.join(latest_dir, "aero_coeffs.png"))"""
 #plt.show()
 
 # --- Settings ---
-if args.episode_length is None:
-    raise ValueError("Please provide episode_length in seconds.")
 dt = 1/60  # Assuming 60 FPS
 decimation = 3  # Number physics step for a policy step
-max_timestep = int(args.episode_length/(decimation*dt))  # truncate or pad to this length
-
+max_timestep = int(max(ep_length_list))  # truncate or pad to this length
 print(f"Max Timestep: {max_timestep}")
 lift_all = []
 drag_all = []
+aoa_all = []
+app_wind_angle_all = []  
+sail_angle_all = []
 
 # --- Aggregate Data ---
 for ep in df_aero["episode"].unique()[:num_episodes]:
     ep_aero = df_aero[df_aero["episode"] == ep]
+    
     for env_id in ep_aero["env_id"].unique():
         env_aero = ep_aero[ep_aero["env_id"] == env_id]
         
         lift = env_aero["lift_coeff"].values[:max_timestep]
         drag = env_aero["drag_coeff"].values[:max_timestep]
+        aoa = env_aero["aoa"].values[:max_timestep]  
+        sail = env_aero["sail_angle"].values[:max_timestep] 
+        app_wind_angle = env_aero["app_wind_angle"].values[:max_timestep]
 
         # Pad with NaNs if shorter than max_timestep
         if len(lift) < max_timestep:
             pad = max_timestep - len(lift)
             lift = np.pad(lift, (0, pad), constant_values=np.nan)
             drag = np.pad(drag, (0, pad), constant_values=np.nan)
+            aoa = np.pad(aoa, (0, pad), constant_values=np.nan)
+            app_wind_angle = np.pad(app_wind_angle, (0, pad), constant_values=np.nan)
+            sail = np.pad(sail, (0, pad), constant_values=np.nan)
 
         lift_all.append(lift)
         drag_all.append(drag)
+        aoa_all.append(aoa)
+        app_wind_angle_all.append(app_wind_angle)
+        sail_angle_all.append(sail)
 
 lift_all = np.stack(lift_all)  # shape: (num_trajs, max_timestep)
 drag_all = np.stack(drag_all)
+aoa_all = np.stack(aoa_all)
+app_wind_angle_all = np.stack(app_wind_angle_all)
+sail_angle_all = np.stack(sail_angle_all)
 
 # --- Compute stats ---
 lift_mean = np.nanmean(lift_all, axis=0)
 lift_std = np.nanstd(lift_all, axis=0)
 drag_mean = np.nanmean(drag_all, axis=0)
 drag_std = np.nanstd(drag_all, axis=0)
+aoa_mean = np.nanmean(aoa_all, axis=0)
+aoa_std = np.nanstd(aoa_all, axis=0)
+app_wind_angle_mean = np.nanmean(app_wind_angle_all, axis=0)
+app_wind_angle_std = np.nanstd(app_wind_angle_all, axis=0)
+sail_angle_mean = np.nanmean(sail_angle_all, axis=0)
+sail_angle_std = np.nanstd(sail_angle_all, axis=0)
 
 # --- Plot ---
 plt.figure(figsize=(12, 4))
 timesteps = np.arange(max_timestep)
-
+#plt.subplot(2, 1, 1)
 # Lift
 plt.plot(timesteps, lift_mean, label="Lift Mean", color='blue')
 plt.fill_between(timesteps, lift_mean - lift_std, lift_mean + lift_std, alpha=0.3, color='blue', label="Lift ±1 std")
@@ -173,9 +256,30 @@ plt.legend()
 plt.tight_layout()
 plt.savefig(os.path.join(latest_dir, "aero_coeffs_mean_std.png"))
 
+plt.figure(figsize=(12, 4))
+# Angle of Attack (aoa)
+plt.plot(timesteps, aoa_mean, label="aoa Mean", color='orange')
+plt.fill_between(timesteps, aoa_mean - aoa_std, aoa_mean + lift_std, alpha=0.3, color='orange', label="aoa ±1 std")
+
+# Apparent Wind Angle
+plt.plot(timesteps, app_wind_angle_mean, label="App Wind Angle Mean", color='purple')
+plt.fill_between(timesteps, app_wind_angle_mean - app_wind_angle_std, app_wind_angle_mean + app_wind_angle_std, alpha=0.3, 
+                 color='purple', label="App Wind Angle ±1 std")
+
+# Sail Angle
+plt.plot(timesteps, sail_angle_mean, label="Sail Angle Mean", color='green')
+plt.fill_between(timesteps, sail_angle_mean - sail_angle_std, sail_angle_mean + sail_angle_std, alpha=0.3, color='green', label="Sail Angle ±1 std")    
+
+plt.title("aero_angles (Mean ± Std)")
+plt.xlabel("Timestep")
+plt.ylabel("angle (°)")
+plt.legend()
+plt.tight_layout()
+plt.savefig(os.path.join(latest_dir, "aero_angles.png"))
+
 
 # --- Other Metrics ---
-max_timestep = 3000  # truncate or pad to this length
+#max_timestep = 3000  # truncate or pad to this length
 energy_all = []
 rew_progress_all = []
 rew_backward_all = []
@@ -183,6 +287,11 @@ rew_energy_all = []
 total_reward_all = []
 distance_all = []
 bearing_all = []
+aero_force_x_all = []
+aero_force_y_all = []
+thruster_force_1_x_all = []
+thruster_force_2_x_all = []
+max_aero_force_all = []
 
 # --- Aggregate Data ---
 for ep in df_other_metrics["episode"].unique()[:num_episodes]:
@@ -198,6 +307,11 @@ for ep in df_other_metrics["episode"].unique()[:num_episodes]:
         total_reward = env_other_metrics["total_reward"].values[:max_timestep]
         bearing = env_other_metrics["bearing"].values[:max_timestep]
         distance = env_other_metrics["distance"].values[:max_timestep]
+        aero_force_x = env_other_metrics["aero_force_x"].values[:max_timestep]
+        aero_force_y = env_other_metrics["aero_force_y"].values[:max_timestep]
+        thruster_force_1_x = env_other_metrics["thruster_force_1_x"].values[:max_timestep]
+        thruster_force_2_x = env_other_metrics["thruster_force_2_x"].values[:max_timestep]
+        max_aero_force = env_other_metrics["max_aero_force"].values[:max_timestep]
 
         """# Pad with NaNs if shorter than max_timestep
         if len(lift) < max_timestep:
@@ -212,6 +326,11 @@ for ep in df_other_metrics["episode"].unique()[:num_episodes]:
         total_reward_all.append(total_reward)
         bearing_all.append(bearing)
         distance_all.append(distance)
+        aero_force_x_all.append(aero_force_x)
+        aero_force_y_all.append(aero_force_y)
+        thruster_force_1_x_all.append(thruster_force_1_x)
+        thruster_force_2_x_all.append(thruster_force_2_x)
+        max_aero_force_all.append(max_aero_force)
 
         """lift_all.append(lift)
         drag_all.append(drag)"""
@@ -224,6 +343,11 @@ rew_energy_all = np.stack(rew_energy_all)
 total_reward_all = np.stack(total_reward_all)
 bearing_all = np.stack(bearing_all)
 distance_all = np.stack(distance_all)
+aero_force_x_all = np.stack(aero_force_x_all)
+aero_force_y_all = np.stack(aero_force_y_all)
+thruster_force_1_x_all = np.stack(thruster_force_1_x_all)
+thruster_force_2_x_all = np.stack(thruster_force_2_x_all)
+max_aero_force_all = np.stack(max_aero_force_all)
 
 # --- Compute stats for other metrics ---
 energy_mean = np.nanmean(energy_all, axis=0)
@@ -240,6 +364,16 @@ bearing_mean = np.nanmean(bearing_all, axis=0)
 bearing_std = np.nanstd(bearing_all, axis=0)
 distance_mean = np.nanmean(distance_all, axis=0)
 distance_std = np.nanstd(distance_all, axis=0)
+aero_force_x_mean = np.nanmean(aero_force_x_all, axis=0)
+aero_force_x_std = np.nanstd(aero_force_x_all, axis=0)
+aero_force_y_mean = np.nanmean(aero_force_y_all, axis=0)
+aero_force_y_std = np.nanstd(aero_force_y_all, axis=0)
+thruster_force_1_x_mean = np.nanmean(thruster_force_1_x_all, axis=0)
+thruster_force_1_x_std = np.nanstd(thruster_force_1_x_all, axis=0)
+thruster_force_2_x_mean = np.nanmean(thruster_force_2_x_all, axis=0)
+thruster_force_2_x_std = np.nanstd(thruster_force_2_x_all, axis=0)
+max_aero_force_mean = np.nanmean(max_aero_force_all, axis=0)
+max_aero_force_std = np.nanstd(max_aero_force_all, axis=0)
 
 # --- Plot Other Metrics ---
 plt.figure(figsize=(12, 4))
@@ -293,6 +427,28 @@ plt.ylabel("Value")
 plt.legend()    
 plt.savefig(os.path.join(latest_dir, "total_reward_std.png"))
 
+plt.figure()
+# Max Aero Force
+plt.plot(np.arange(len(max_aero_force_mean)), max_aero_force_mean, label="Max Aero Force Mean", color='magenta')
+plt.fill_between(np.arange(len(max_aero_force_mean)), max_aero_force_mean - max_aero_force_std, max_aero_force_mean + max_aero_force_std, alpha=0.3, color='magenta', label="Max Aero Force ±1 std")
+
+plt.plot(np.arange(len(aero_force_x_mean)), aero_force_x_mean, label="Aero Force X Mean", color='blue')
+plt.fill_between(np.arange(len(aero_force_x_mean)), aero_force_x_mean - aero_force_x_std, aero_force_x_mean + aero_force_x_std, alpha=0.3, color='blue', label="Aero Force X ±1 std")
+
+plt.plot(np.arange(len(aero_force_y_mean)), aero_force_y_mean, label="Aero Force Y Mean", color='red')
+plt.fill_between(np.arange(len(aero_force_y_mean)), aero_force_y_mean - aero_force_y_std, aero_force_y_mean + aero_force_y_std, alpha=0.3, color='red', label="Aero Force Y ±1 std")
+
+plt.plot(np.arange(len(thruster_force_1_x_mean)), thruster_force_1_x_mean, label="Thruster Force 1 X Mean", color='green')
+plt.fill_between(np.arange(len(thruster_force_1_x_mean)), thruster_force_1_x_mean - thruster_force_1_x_std, thruster_force_1_x_mean + thruster_force_1_x_std, alpha=0.3, color='green', label="Thruster Force 1 X ±1 std")
+
+plt.plot(np.arange(len(thruster_force_2_x_mean)), thruster_force_2_x_mean, label="Thruster Force 2 X Mean", color='orange')
+plt.fill_between(np.arange(len(thruster_force_2_x_mean)), thruster_force_2_x_mean - thruster_force_2_x_std, thruster_force_2_x_mean + thruster_force_2_x_std, alpha=0.3, color='orange', label="Thruster Force 2 X ±1 std")
+
+plt.title("Forces (Mean ± Std)")
+plt.xlabel("Timestep")
+plt.ylabel("Value")
+plt.legend()    
+plt.savefig(os.path.join(latest_dir, "forces_std.png"))
 
 plt.figure(figsize=(12, 4))
 for ep_idx in range(len(bearing_all)):
