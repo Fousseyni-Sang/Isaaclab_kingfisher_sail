@@ -6,234 +6,157 @@ import os
 import torch
 import matplotlib.pyplot as plt
 import time
-#from .buffer import ReplayBuffer
 
 class ReplayBuffer:
-    def __init__(self, num_envs, max_size, input_shape, device="cpu"):
+    def __init__(self, num_envs, max_size, state_shape, context_shape, device="cpu"):
         self.mem_size = max_size
         self.mem_cntr = 0
         self.device = device
 
-        # for the discriminator, it contains its state and context
-        self.state_memory = torch.zeros((num_envs, self.mem_size, input_shape), dtype=torch.float32, device=self.device)
-    
-    def store_transition(self, state):
-        index = self.mem_cntr % self.mem_size
+        # State and context memory
+        self.state_memory = torch.zeros(
+            (num_envs, self.mem_size, state_shape),
+            dtype=torch.float32,
+            device=self.device
+        )
+        self.context_memory = torch.zeros(
+            (num_envs, self.mem_size, context_shape),
+            dtype=torch.float32,
+            device=self.device
+        )
 
+    def store_transition(self, state, context):
+        index = self.mem_cntr % self.mem_size
         self.state_memory[:, index] = state
-        
+        self.context_memory[:, index] = context
         self.mem_cntr += 1
 
     def sample_buffer(self, num_envs, batch_size):
         max_mem = min(self.mem_cntr, self.mem_size)
-        batch = torch.randint(0, max_mem*num_envs, (batch_size, ), device=self.device)
-        # Create environment indices: [0, 1, ..., 99] repeated for each sample
-        #env_ids = torch.arange(num_envs, device=self.device).unsqueeze(1).expand(-1, batch_size)  
+        batch = torch.randint(
+            0, max_mem * num_envs, (batch_size,), device=self.device
+        )
 
-        states = self.state_memory.reshape(num_envs*self.mem_size, -1)[batch]  
+        flat_states = self.state_memory.reshape(num_envs * self.mem_size, -1)
+        flat_contexts = self.context_memory.reshape(num_envs * self.mem_size, -1)
 
-        #flat = states.reshape(-1, states.shape[-1])  # shape: (1024*1000, D)
+        return flat_states[batch], flat_contexts[batch]
 
-        #idx = torch.randperm(flat.size(0))[:256]
-        #state_context = flat[idx]
-
-        #states = self.state_memory[batch]
-        #print(f"batch: {batch.shape} state_buffer: {states.shape}")
-        return states
 
 class DiscriminatorNetwork(nn.Module):
-    def __init__(self, lr, input_dims, fc1_dims=256,
-            fc2_dims=256, prediction_dims=1, memory_dim=2, num_envs=1024, mem_size=1000, name='discriminator', chkpt_dir='/tmp/sac', device='cpu'):
+    def __init__(self, lr, state_dim, context_dim,
+                 fc1_dims=256, fc2_dims=256,
+                 num_envs=1024, mem_size=1000,
+                 name='discriminator', chkpt_dir='logs/acord', device='cpu'):
         super().__init__()
-        self.input_dims = input_dims
+        self.state_dim = state_dim
+        self.context_dim = context_dim
         self.fc1_dims = fc1_dims
         self.fc2_dims = fc2_dims
         self.lr = lr
-        self.prediction_dims = prediction_dims
         self.name = name
         self.checkpoint_dir = chkpt_dir
-        self.checkpoint_file = os.path.join(self.checkpoint_dir, name+'_sac')
+        self.checkpoint_file = os.path.join(self.checkpoint_dir, name + '_sac')
         self.reparam_noise = 1e-6
 
-        self.output_dims = self.prediction_dims
-
-        
-        self.fc1 = nn.Linear(self.input_dims, self.fc1_dims)
+        # Network layers
+        self.fc1 = nn.Linear(self.state_dim, self.fc1_dims)
         self.fc2 = nn.Linear(self.fc1_dims, self.fc2_dims)
-        self.output = nn.Linear(self.fc2_dims, self.prediction_dims)
-        self.mu = nn.Linear(self.fc2_dims, self.prediction_dims)
-        self.sigma = nn.Linear(self.fc2_dims, self.prediction_dims)
+        self.mu = nn.Linear(self.fc2_dims, self.context_dim)
+        self.sigma = nn.Linear(self.fc2_dims, self.context_dim)
 
         self.optimizer = optim.Adam(self.parameters(), lr=self.lr)
-        self.device = device #torch.device('cpu' if torch.cuda.is_available() else 'cpu')
+        self.device = device
         self.to(self.device)
 
-        self.memory = ReplayBuffer(num_envs, mem_size, memory_dim, device)
+        # Replay buffer for state-context pairs
+        self.memory = ReplayBuffer(num_envs, mem_size, self.state_dim, self.context_dim, device)
         self.batch_size = 256
         self.num_envs = num_envs
 
-    """def forward(self, x):
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        x = self.output(x)  # No activation, raw output for regression
-        return x
-
-    def learn(self):
-        if self.memory.mem_cntr < self.batch_size:
-            return None
-
-        state_context = self.memory.sample_buffer(self.num_envs, self.batch_size)
-        state = state_context[:, 0].reshape(-1, self.input_dims)
-        context = state_context[:, -1].reshape(-1, self.output_dims)
-
-        prediction = self.forward(state)
-        loss = F.mse_loss(prediction, context)
-        loss.requires_grad = True
-        self.optimizer.zero_grad()
-        loss.backward()
-        self.optimizer.step()
-
-        return loss"""
-
     def forward(self, state):
-        prob = F.relu(self.fc1(state))
-        prob = F.tanh(self.fc2(prob))*5
-
-        mu = torch.sigmoid(self.mu(prob))
-        sigma = torch.sigmoid(self.sigma(prob)) #F.softplus(self.sigma(prob)) + 1e-4 #
-
-        sigma = torch.clamp(sigma, min=.1, max=1)
-
+        x = F.relu(self.fc1(state))
+        x = F.tanh(self.fc2(x)) * 5
+        mu = torch.sigmoid(self.mu(x))
+        sigma = torch.sigmoid(self.sigma(x))
+        sigma = torch.clamp(sigma, min=0.1, max=1)
         return mu, sigma
-    
-    """def predict(self, state, reparameterize=True, requires_grad=True):
-        mu, sigma = self.forward(state)
-        sigma = F.softplus(sigma) + 1e-2
-        dist = Normal(mu, sigma)
 
-        with torch.set_grad_enabled(requires_grad):
-            predictions = dist.rsample() if reparameterize else dist.sample()
-            prediction = torch.clamp(predictions, 0.0001, 0.9999)
-            log_probs = dist.log_prob(predictions)
-            log_probs -= torch.log(1 - prediction.pow(2) + self.reparam_noise)
-
-        return prediction, log_probs, dist"""
-    
     def predict(self, state, reparameterize=True, requires_grad=True):
         if requires_grad:
             mu, sigma = self.forward(state)
-            probabilities = Normal(mu, sigma)
-            if reparameterize:
-                predictions = probabilities.rsample()
-            else:
-                predictions = probabilities.sample()
-
-            prediction = predictions.to(self.device)
-            prediction = torch.clamp(prediction, .0001, .9999)
-            log_probs = probabilities.log_prob(predictions)
-            log_probs -= torch.log(1-prediction.pow(2)+self.reparam_noise)
-
-            return mu, log_probs, probabilities
+            dist = Normal(mu, sigma)
+            samples = dist.rsample() if reparameterize else dist.sample()
+            samples = torch.clamp(samples, 0.0001, 0.9999)
+            log_probs = dist.log_prob(samples)
+            log_probs -= torch.log(1 - samples.pow(2) + self.reparam_noise)
+            return samples, log_probs, dist
         else:
             with torch.no_grad():
                 mu, sigma = self.forward(state)
-                probabilities = Normal(mu, sigma)
-
-                if reparameterize:
-                    predictions = probabilities.rsample()
-                else:
-                    predictions = probabilities.sample()
-
-                prediction = predictions.to(self.device)
-                prediction = torch.clamp(prediction, .0001, .9999)
-                log_probs = probabilities.log_prob(predictions)
-                log_probs -= torch.log(1-prediction.pow(2)+self.reparam_noise)
-                #log_probs = log_probs.sum(0, keepdim=True)
-
-                return mu, log_probs, probabilities
-
+                dist = Normal(mu, sigma)
+                samples = dist.rsample() if reparameterize else dist.sample()
+                samples = torch.clamp(samples, 0.0001, 0.9999)
+                log_probs = dist.log_prob(samples)
+                log_probs -= torch.log(1 - samples.pow(2) + self.reparam_noise)
+                return samples, log_probs, dist
 
     def learn(self):
-
         if self.memory.mem_cntr < self.batch_size:
-                return None, None
-        
-        state_context = self.memory.sample_buffer(self.num_envs, self.batch_size)
-        #print(f"state_context: {state_context[:10]}\n")
-        state = state_context[:, 0].reshape(-1, self.input_dims)
-        context = state_context[:, -1].reshape(-1, self.input_dims)
-        #print(f"state: {state[:10]} \ncontext: {context[:10]}\n")
-        predictions, log_probs, dist1 = self.predict(state)
-        #predictions, dist1 = self.forward(state)
-        #print(f"prediction: {predictions[:10]}\n")
-        #print(f"pred: {predictions.requires_grad}")
-        #print(f"st_cont: {state_context.shape} state: {state.shape} context: {context.shape} predic: {predictions.shape}")
+            return None, None
+
+        states, contexts = self.memory.sample_buffer(self.num_envs, self.batch_size)
+        predictions, log_probs, dist = self.predict(states)
+
         self.optimizer.zero_grad()
-        loss = (F.mse_loss(predictions, context)) #*100 + (1 / torch.abs(torch.min(dist1.loc) - torch.max(dist1.loc))) * 0.1
-        #print(f"loss: {loss}\n")
-        #loss.requires_grad = True
-        #print(f"required: {loss.requires_grad}")
+        loss = F.mse_loss(predictions, contexts)
         loss.backward()
         self.optimizer.step()
 
-        return loss, torch.mean(log_probs).item()
-        
+        return loss.item(), torch.mean(log_probs).item()
 
 
-if __name__=="__main__":
+if __name__ == "__main__":
     num_envs = 1024
     mem_size = 1000
-    
-    discriminator1 = DiscriminatorNetwork(lr=0.0001, input_dims=1, fc1_dims=256, fc2_dims=256, prediction_dims=1, 
-                                                   num_envs=num_envs, mem_size=mem_size)
-    discriminator2 = DiscriminatorNetwork(lr=0.0001, input_dims=1, fc1_dims=256, fc2_dims=256, prediction_dims=1, 
-                                                num_envs=num_envs)
-    
-    # Instantiate and test
-    torch.manual_seed(0)
-    start = time.time()
-    # Fill the buffer with synthetic data
-    for _ in range(mem_size):
-        s = torch.rand((num_envs, 2), device=discriminator1.device)  # state and context
-        s[:, 0] =  _*0.002
-        s[:, 1] = 0 if _ %10==0 else _*0.001
-        discriminator1.memory.store_transition(s)
-    sample = discriminator1.memory.sample_buffer(num_envs, 30)
-    print(sample)
-    # Run learning steps
-    losses = []
-    logprobs = []
-    for _ in range(1):
-        #loss, logp = discriminator1.learn()
-        loss, mean = discriminator1.learn()
-        if loss is not None:
-            losses.append(loss.detach().numpy())
-            #logprobs.append(logp)
+    discriminator1 = DiscriminatorNetwork(
+        lr=0.0001, state_dim=1, context_dim=1,
+        fc1_dims=256, fc2_dims=256,
+        num_envs=num_envs, mem_size=mem_size
+    )
 
-    state_context = discriminator1.memory.sample_buffer(num_envs, 100)
-    #print(f"state_context: {state_context[:10]}\n")
-    state = state_context[:, 0].reshape(-1, 1)
-    context = state_context[:, -1].reshape(-1, 1)
-    #print(f"state: {state[:10]} \ncontext: {context[:10]}\n")
-    predictions, log_probs, dist1 = discriminator1.predict(state, False, False)
-    
-    end = time.time()
-    print(f"Time taken: {end - start} seconds")
-    print(f"losses: {losses[-1]}")
-    plt.figure()
+    torch.manual_seed(0)
+
+    # Fill buffer with simple relation: context = state * 0.5 + noise
+    for _ in range(mem_size):
+        state = torch.rand((num_envs, 1), device=discriminator1.device)
+        context = torch.sin(state ** 0.5) + torch.tan(0.5 * torch.randn_like(state))
+        discriminator1.memory.store_transition(state, context)
+
+    losses = []
+    for _ in range(1000):  # multiple training steps
+        loss, _ = discriminator1.learn()
+        if loss is not None:
+            losses.append(loss)
+
+    # Sample for evaluation
+    state_batch, context_batch = discriminator1.memory.sample_buffer(num_envs, 100)
+    predictions, _, _ = discriminator1.predict(state_batch, False, False)
+
+    # Plot
+    plt.figure(figsize=(8,6))
     plt.subplot(2, 1, 1)
-    plt.plot(losses, label="loss_determ")
+    plt.plot(losses, label="loss")
     plt.legend()
 
     plt.subplot(2, 1, 2)
-    plt.plot(predictions, label="predictions")
-    plt.plot(context, label="context")
-    #plt.plot(state, label="state")
-    plt.plot(torch.abs(predictions - context), label="pred_error")
+    plt.plot(predictions.cpu().numpy(), label="predictions")
+    plt.plot(context_batch.cpu().numpy(), label="context")
+    plt.plot(torch.abs(predictions - context_batch).cpu().numpy(), label="pred_error")
     plt.legend()
 
-
-    plt.savefig("/home/fousseyni/asv-sawasp-fousseyni/IsaacLab_kingfisher/loss.png")
+    plt.savefig("loss_disc.png")
+    print("Plot saved to loss_disc.png")
 
     
     """max_energy = 2
