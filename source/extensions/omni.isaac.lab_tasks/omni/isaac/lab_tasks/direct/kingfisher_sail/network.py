@@ -6,6 +6,9 @@ import os
 import torch
 import matplotlib.pyplot as plt
 import time
+from torch.utils.tensorboard import SummaryWriter
+import glob
+
 
 class ReplayBuffer:
     def __init__(self, num_envs, max_size, state_shape, context_shape, device="cpu"):
@@ -43,11 +46,32 @@ class ReplayBuffer:
         return flat_states[batch], flat_contexts[batch]
 
 
+def find_latest_checkpoint_dir(base_root):
+    """
+    Finds the latest checkpoint file under logs/acord/discr/{time_dir}/nn/
+    Returns the directory containing the latest checkpoint file.
+    """
+    candidate_files = []
+    for time_dir in os.listdir(base_root):
+        nn_dir = os.path.join(base_root, time_dir, "nn")
+        if not os.path.isdir(nn_dir):
+            continue
+        for checkpoint_file in os.listdir(nn_dir):
+            full_path = os.path.join(nn_dir, checkpoint_file)
+            if os.path.isfile(full_path):
+                candidate_files.append(full_path)
+
+    if not candidate_files:
+        raise FileNotFoundError(f"No checkpoint files found under {base_root}/**/nn/")
+
+    # Find the latest checkpoint file by modification time
+    latest_file = max(candidate_files, key=os.path.getmtime)
+    # Return the directory containing the latest checkpoint file
+    return os.path.dirname(latest_file)
+
 class DiscriminatorNetwork(nn.Module):
-    def __init__(self, lr, state_dim, context_dim,
-                 fc1_dims=256, fc2_dims=256,
-                 num_envs=1024, mem_size=1000,
-                 name='discriminator', chkpt_dir='logs/acord', device='cpu'):
+    def __init__(self, lr, state_dim, context_dim, fc1_dims=256, fc2_dims=256, num_envs=1024, mem_size=1000000,
+                name='discriminator', chkpt_dir='logs/acord/discr', device='cpu'):
         super().__init__()
         self.state_dim = state_dim
         self.context_dim = context_dim
@@ -55,8 +79,8 @@ class DiscriminatorNetwork(nn.Module):
         self.fc2_dims = fc2_dims
         self.lr = lr
         self.name = name
-        self.checkpoint_dir = chkpt_dir
-        self.checkpoint_file = os.path.join(self.checkpoint_dir, name + '_sac')
+        checkpoint_dir = chkpt_dir
+        #self.checkpoint_file = os.path.join(self.checkpoint_dir, name + '_sac')
         self.reparam_noise = 1e-6
 
         # Network layers
@@ -68,15 +92,82 @@ class DiscriminatorNetwork(nn.Module):
         self.optimizer = optim.Adam(self.parameters(), lr=self.lr)
         self.device = device
         self.to(self.device)
+        
 
         # Replay buffer for state-context pairs
         self.memory = ReplayBuffer(num_envs, mem_size, self.state_dim, self.context_dim, device)
         self.batch_size = 256
         self.num_envs = num_envs
 
+         # Logging
+        time_str = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
+
+        self.run_name_dir = f"{checkpoint_dir}/{time_str}"
+        self.checkpoint_dir = f"{self.run_name_dir}/nn"
+        self.summary_dir = f"{self.run_name_dir}/summaries"
+
+        self.saving_frequency = 10
+
+        self.writer = None
+
+    def save(self, step_marker):
+        os.makedirs(self.checkpoint_dir, exist_ok=True)
+        torch.save(self.state_dict(), f"{self.checkpoint_dir}/discr_{step_marker}.pt")
+        return
+
+    def init_writer(self):
+
+        os.makedirs(self.checkpoint_dir, exist_ok=True)
+        os.makedirs(self.summary_dir, exist_ok=True)
+
+        self.writer = SummaryWriter(self.summary_dir)
+
+    def load_checkpoint(self, path_checkpoint=None):
+        """
+        Loads the latest or specified discriminator checkpoint.
+        If path_checkpoint is a file, loads from it.
+        If path_checkpoint is a directory, loads the latest discr_*.pt in that directory.
+        If path_checkpoint is None, finds the latest time_dir under logs/acord/discr/*/nn/
+        and loads the latest discr_*.pt inside that.
+        """
+        if path_checkpoint is not None:
+            if os.path.isfile(path_checkpoint):
+                checkpoint_path = path_checkpoint
+            elif os.path.isdir(path_checkpoint):
+                candidates = glob.glob(os.path.join(path_checkpoint, "discr_*.pt"))
+                if not candidates:
+                    raise FileNotFoundError(f"No discr_*.pt found in {path_checkpoint}")
+                checkpoint_path = max(candidates, key=os.path.getmtime)
+            else:
+                raise FileNotFoundError(f"{path_checkpoint} is not a valid file or directory")
+        else:
+            # Find latest time_dir under logs/acord/discr/*/nn/
+            discr_root = os.path.join("logs", "acord", "kingfisher_direct")
+            if not os.path.isdir(discr_root):
+                raise FileNotFoundError(f"{discr_root} does not exist")
+            # Find all logs/acord/discr/*/nn directories
+            nn_dirs = []
+            for d in os.listdir(discr_root):
+                nn_dir = os.path.join(discr_root, d, "nn")
+                if os.path.isdir(nn_dir):
+                    nn_dirs.append(nn_dir)
+            if not nn_dirs:
+                raise FileNotFoundError(f"No nn directories found in {discr_root}")
+            # Choose the most recent nn directory
+            latest_nn_dir = max(nn_dirs, key=os.path.getmtime)
+            candidates = glob.glob(os.path.join(latest_nn_dir, "discr_*.pt"))
+            if not candidates:
+                raise FileNotFoundError(f"No discr_*.pt found in {latest_nn_dir}")
+            checkpoint_path = max(candidates, key=os.path.getmtime)
+
+        print(f"[DISCRIMINATOR] Loading checkpoint: {checkpoint_path}")
+        self.load_state_dict(torch.load(checkpoint_path, map_location=self.device))
+        self.eval()
+        return
+
     def forward(self, state):
         x = F.relu(self.fc1(state))
-        x = F.tanh(self.fc2(x)) * 5
+        x = F.tanh(self.fc2(x)) #* 5
         mu = torch.sigmoid(self.mu(x))
         sigma = torch.sigmoid(self.sigma(x))
         sigma = torch.clamp(sigma, min=0.1, max=1)
@@ -85,11 +176,15 @@ class DiscriminatorNetwork(nn.Module):
     def predict(self, state, reparameterize=True, requires_grad=True):
         if requires_grad:
             mu, sigma = self.forward(state)
+            
             dist = Normal(mu, sigma)
             samples = dist.rsample() if reparameterize else dist.sample()
+            
             samples = torch.clamp(samples, 0.0001, 0.9999)
             log_probs = dist.log_prob(samples)
+            
             log_probs -= torch.log(1 - samples.pow(2) + self.reparam_noise)
+            
             return samples, log_probs, dist
         else:
             with torch.no_grad():
@@ -101,58 +196,172 @@ class DiscriminatorNetwork(nn.Module):
                 log_probs -= torch.log(1 - samples.pow(2) + self.reparam_noise)
                 return samples, log_probs, dist
 
-    def learn(self):
-        if self.memory.mem_cntr < self.batch_size:
-            return None, None
+    def learn(self, state_batch, context_batch):
+        """if self.memory.mem_cntr < self.batch_size:
+            return None, None"""
 
-        states, contexts = self.memory.sample_buffer(self.num_envs, self.batch_size)
-        predictions, log_probs, dist = self.predict(states)
-
+        #states, contexts = self.memory.sample_buffer(self.num_envs, self.batch_size)
+        predictions, log_probs, dist = self.predict(state_batch)
+        #if predictions.requires_grad == False: predictions.requires_grad = True
+        #print(f"rew_disc: {predictions.requires_grad}")
         self.optimizer.zero_grad()
-        loss = F.mse_loss(predictions, contexts)
+        loss = loss = (F.mse_loss(predictions, context_batch) * 10 + 1 / torch.abs(torch.min(dist.loc) - torch.max(dist.loc))) * 10
+
+        #loss = ((F.mse_loss(predictions, context_batch))*10 + (1 / torch.abs((min(dist.loc) - max(dist.loc))))) * 10
+        
+        #disc1_loss = (F.mse_loss(disc1_predictions, limit_factor1)*10+ (1/torch.abs((min(dist1.loc)-max(dist1.loc)))))*10
+        #if loss.requires_grad == False: loss.requires_grad = True
+        
+        
+        #print(f"loss: {loss.requires_grad} loss: {loss}")
         loss.backward()
         self.optimizer.step()
 
+        self.loss = loss
         return loss.item(), torch.mean(log_probs).item()
 
+class GeneratorNetwork(nn.Module):
+    def __init__(self, lr, input_dim, output_dim, fc1_dims=256, fc2_dims=256, num_envs=1024, mem_size=1000000,
+                name='generator', chkpt_dir='logs/acord/gener', device='cpu'):
+        super().__init__()
+
+        self.fc1 = nn.Linear(input_dim, fc1_dims)
+        self.fc2 = nn.Linear(fc2_dims, fc2_dims)
+        self.mu = nn.Linear(fc2_dims, output_dim)
+        self.sigma = nn.Linear(fc2_dims, output_dim)
+
+        self.optimizer = optim.Adam(self.parameters(), lr=lr)
+        self.device = device
+        checkpoint_dir = chkpt_dir
+        self.to(self.device)
+
+        self.memory = ReplayBuffer(num_envs, mem_size, state_shape=1, context_shape=1, device=device)
+        self.batch_size = 256
+        self.num_envs = num_envs
+
+         # Logging
+        time_str = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
+
+        self.run_name_dir = f"{checkpoint_dir}/{time_str}"
+        self.checkpoint_dir = f"{self.run_name_dir}/nn"
+        self.summary_dir = f"{self.run_name_dir}/summaries"
+
+        self.saving_frequency = 10
+
+        self.writer = None
+        self.acord_reward_scale = 0.05
+
+        self.reparam_noise = 1e-6
+
+    def forward(self, x):
+        
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        mu = F.tanh(self.mu(x))
+        sigma = F.sigmoid(self.sigma(x))
+
+        return mu, sigma
+    
+    def get_energy(self, actions):
+        return torch.sum(actions**2, dim=1, keepdim=True)
+    
+    def predict(self, state, reparameterize=True, requires_grad=True):
+        if requires_grad:
+            mu, sigma = self.forward(state)
+            dist = Normal(mu, sigma)
+            samples = dist.rsample() if reparameterize else dist.sample()
+            
+            samples = torch.clamp(samples, 0.0001, 0.9999)
+            log_probs = dist.log_prob(samples)
+            
+            log_probs -= torch.log(1 - samples.pow(2) + self.reparam_noise)
+            
+            return samples, log_probs, dist
+        else:
+            with torch.no_grad():
+                mu, sigma = self.forward(state)
+                dist = Normal(mu, sigma)
+                samples = dist.rsample() if reparameterize else dist.sample()
+                samples = torch.clamp(samples, 0.0001, 0.9999)
+                log_probs = dist.log_prob(samples)
+                log_probs -= torch.log(1 - samples.pow(2) + self.reparam_noise)
+                return samples, log_probs, dist
+            
+            
+    def learn(self, state_batch, context_batch, discriminator:DiscriminatorNetwork):
+        
+        gen_state  = torch.cat((state_batch, context_batch), dim=1)
+        actions, _, _ = self.predict(gen_state, reparameterize=False, requires_grad=False)
+        energy_batch = self.get_energy(actions)
+        predicted_context_batch, _, _ = discriminator.predict(energy_batch, reparameterize=False, requires_grad=True)
+        print(f"rew1: {predicted_context_batch.requires_grad}")
+        predic_error_energy = torch.clamp(torch.abs(predicted_context_batch-context_batch)**2, min=0.000001, max=0.99999)
+        reward_acord = self.acord_reward_scale * (- torch.log(predic_error_energy))
+        self.optimizer.zero_grad()
+        loss = -reward_acord
+        loss.backward()
+        self.optimizer.step()
+
+        return loss.item()
 
 if __name__ == "__main__":
     num_envs = 1024
     mem_size = 1000
-    discriminator1 = DiscriminatorNetwork(
-        lr=0.0001, state_dim=1, context_dim=1,
-        fc1_dims=256, fc2_dims=256,
-        num_envs=num_envs, mem_size=mem_size
-    )
+    device = "cpu"
+    discriminator = DiscriminatorNetwork(lr=0.0001, state_dim=1, context_dim=1, num_envs=num_envs, mem_size=mem_size, device=device)
 
+    generator = GeneratorNetwork(lr=0.0001, input_dim=2, output_dim=2, num_envs=num_envs, mem_size=mem_size, device=device)
     torch.manual_seed(0)
 
     # Fill buffer with simple relation: context = state * 0.5 + noise
-    for _ in range(mem_size):
-        state = torch.rand((num_envs, 1), device=discriminator1.device)
-        context = torch.sin(state ** 0.5) + torch.tan(0.5 * torch.randn_like(state))
-        discriminator1.memory.store_transition(state, context)
+    actions = torch.rand((num_envs, 2), device=device)
+    gen_losses = []
+    disc_losses = []
 
-    losses = []
-    for _ in range(1000):  # multiple training steps
-        loss, _ = discriminator1.learn()
-        if loss is not None:
-            losses.append(loss)
+    for it in range(10000):
+
+        context =torch.rand((num_envs, 1), device=device)
+        energy = generator.get_energy(actions).reshape_as(context)
+        
+        discriminator.memory.store_transition(energy, context)
+        generator.memory.store_transition(energy, context)
+        #print(f"energy: {context}")
+        gen_state = torch.cat((energy, context), dim=1)
+        actions, log_probs, dist = generator.predict(gen_state, reparameterize=False, requires_grad=True)
+
+        if it%100==0:  # multiple training steps
+            d_temp_loss = 0
+            g_temp_loss = 0
+            num_grad = 2
+            for _ in range(num_grad):
+                state_batch, context_batch = discriminator.memory.sample_buffer(num_envs, discriminator.batch_size)
+                #print(f"state_batch: {state_batch}")
+                d_loss, _ = discriminator.learn(state_batch, context_batch)
+                g_loss = generator.learn(state_batch, context_batch, discriminator)
+
+                d_temp_loss += d_loss
+                g_temp_loss += g_loss
+
+            gen_losses.append(g_temp_loss/num_grad)
+            disc_losses.append(d_temp_loss/num_grad)
+       
+
+    #discriminator.load_checkpoint()
 
     # Sample for evaluation
-    state_batch, context_batch = discriminator1.memory.sample_buffer(num_envs, 100)
-    predictions, _, _ = discriminator1.predict(state_batch, False, False)
+    state_batch, context_batch = discriminator.memory.sample_buffer(num_envs, 100)
+    predictions, _, _ = discriminator.predict(state_batch, False, False)
 
     # Plot
     plt.figure(figsize=(8,6))
     plt.subplot(2, 1, 1)
-    plt.plot(losses, label="loss")
+    plt.plot(disc_losses, label="d_loss")
     plt.legend()
 
     plt.subplot(2, 1, 2)
-    plt.plot(predictions.cpu().numpy(), label="predictions")
-    plt.plot(context_batch.cpu().numpy(), label="context")
-    plt.plot(torch.abs(predictions - context_batch).cpu().numpy(), label="pred_error")
+    plt.plot(gen_losses, label="g_loss")
+    """plt.plot(context_batch.cpu().numpy(), label="context")
+    plt.plot(torch.abs(predictions - context_batch).cpu().numpy(), label="pred_error")"""
     plt.legend()
 
     plt.savefig("loss_disc.png")
@@ -170,17 +379,17 @@ if __name__ == "__main__":
     energy_context = torch.zeros_like(energy_context).uniform_(0, 1)
     time_context = torch.zeros_like(time_context).uniform_(0, 1)
     
-    discriminator1.memory.store_transition(torch.cat((energy.reshape(num_envs, -1), 
+    discriminator.memory.store_transition(torch.cat((energy.reshape(num_envs, -1), 
                                             energy_context.reshape(num_envs, -1)), dim=-1))
         
-    discriminator1.memory.store_transition(torch.cat((torch.norm(robot_speed, 
+    discriminator.memory.store_transition(torch.cat((torch.norm(robot_speed, 
                         dim=-1).reshape(num_envs, -1), time_context.reshape(num_envs, -1)), dim=-1))
     
 
-    prediction1, log_prob1, distribution1 = discriminator1.predict(energy.reshape(num_envs, -1))
+    prediction1, log_prob1, distribution1 = discriminator.predict(energy.reshape(num_envs, -1))
     prediction2, log_prob2, distribution2 = discriminator2.predict(torch.norm(robot_speed, dim=-1).reshape(num_envs, -1))
 
-    predicted_energy_context, log_probs1, distrib1 = discriminator1.predict(energy.reshape(num_envs, -1))
+    predicted_energy_context, log_probs1, distrib1 = discriminator.predict(energy.reshape(num_envs, -1))
     predic_error_energy = torch.abs(predicted_energy_context.reshape(-1) - energy_context.reshape(-1))
     predicted_time_context, log_probs2, distrib2= discriminator2.predict(energy.reshape(num_envs, -1))
     predic_error_time = torch.abs(predicted_time_context.reshape(-1) - time_context.reshape(-1))

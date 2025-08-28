@@ -8,7 +8,6 @@ import argparse
 parser = argparse.ArgumentParser()
 parser.add_argument("--sac", type=bool, default=False, help="plot SAC metrics")
 parser.add_argument("--dir_path", type=str, default=None, help="directory to plot")
-parser.add_argument("--num_episodes", type=int, default=10, help="Number of episodes to run")
 parser.add_argument("--wind_direction", type=float, default=None, help="direction of the true wind in degree.")
 
 args = parser.parse_args()
@@ -26,7 +25,7 @@ subdirs = sorted(
 )
 
 latest_dir = subdirs[0] if args.dir_path is None else args.dir_path
-num_episodes = args.num_episodes
+
 
 print("=========================================================================================================")
 print(f"root directory: {eval_root}")
@@ -40,6 +39,7 @@ df_metrics = pd.read_csv(os.path.join(latest_dir, "metrics.csv"))
 df_ep_length = pd.read_csv(os.path.join(latest_dir, "ep_length.csv"))
 df_other_metrics = pd.read_csv(os.path.join(latest_dir, "other_metrics.csv"))
 df_actions = pd.read_csv(os.path.join(latest_dir, "actions.csv"))
+df_acord = pd.read_csv(os.path.join(latest_dir, "acord_data.csv"))
 
 #print(df_traj.head)
 # --- Plot Metrics ---
@@ -60,6 +60,7 @@ plt.savefig(os.path.join(latest_dir, "metrics.png"))
 # --- Get episode_length ---
 
 ep_length_list = df_ep_length["ep_length"].tolist()
+num_episodes = len(ep_length_list)
 """for ep in df_ep_length["episode"].unique()[:3]:
     ep_length = df_ep_length[df_ep_length["episode"]==ep]
     
@@ -67,13 +68,14 @@ ep_length_list = df_ep_length["ep_length"].tolist()
 """
 print(f"episode_length: {ep_length_list}")
 # --- Plot Trajectories ---
-plt.figure(figsize=(12, 6))
+plt.figure()
+plt.subplot(2, 1, 1)
 for ep in df_traj["episode"].unique()[:num_episodes]:  # Limit to first 3 episodes
     ep_length = ep_length_list[ep]
     ep_traj = df_traj[df_traj["episode"] == ep]
     for env_id in ep_traj["env_id"].unique():
         env_traj = ep_traj[ep_traj["env_id"] == env_id]
-        plt.plot(env_traj["x"][:ep_length], env_traj["y"][:ep_length], label=f"Ep{ep} Env{env_id}")
+        plt.plot(env_traj["x"][:ep_length], env_traj["y"][:ep_length])
         goal = df_goals[(df_goals["episode"] == ep) & (df_goals["env_id"] == env_id)]
         plt.scatter(goal["goal_x"], goal["goal_y"], marker="x")
         #print(env_traj["x"].shape, env_traj["y"].shape)
@@ -89,9 +91,109 @@ plt.quiver(110, 0, wind_x, wind_y, angles='xy', scale_units='xy', scale=0.5, col
 plt.title("Trajectories with Goals")
 plt.xlabel("x")
 plt.ylabel("y")
+plt.axis("equal")
 plt.legend()
 plt.tight_layout()
+
+
+plt.subplot(2, 1, 2)
+for ep in df_acord["episode"].unique()[:num_episodes]:  # Limit to first 3 episodes
+    ep_length = ep_length_list[ep]
+    ep_context = df_acord[df_acord["episode"] == ep]
+    for env_id in ep_context["env_id"].unique():
+        env_context = ep_context[ep_context["env_id"] == env_id]
+        context = env_context["actual_context"][:ep_length]
+        plt.plot(np.arange(len(context)), context)
+        
+
+plt.title("energy context")
+plt.legend()
+
 plt.savefig(os.path.join(latest_dir, "trajectory_plot.png"))
+
+
+# --- Plot acord predictions logs ---
+plt.figure()
+plt.subplot(2, 2, 1)
+for ep in df_acord["episode"].unique()[:num_episodes]:  # Limit to first 3 episodes
+    ep_length = ep_length_list[ep]
+    ep_acord = df_acord[df_acord["episode"] == ep]
+    ep_context = df_goals[df_goals["episode"] == ep]
+    for env_id in ep_acord["env_id"].unique():
+        context = df_goals[(df_goals["episode"] == ep) & (df_goals["env_id"] == env_id)]
+        context_all = []
+        env_traj = ep_acord[ep_acord["env_id"] == env_id]
+        plt.plot(np.arange(len(ep_acord["predicted_context"][:ep_length])), ep_acord["predicted_context"][:ep_length], linestyle = 'dotted', label="pred")
+        plt.plot(np.arange(len(ep_acord["actual_context"][:ep_length])), ep_acord["actual_context"][:ep_length], linestyle = 'dotted', label="act")
+
+plt.title("predicted context")
+plt.legend()
+plt.tight_layout()
+
+plt.subplot(2, 2, 2)
+for ep in df_acord["episode"].unique()[:num_episodes]:  # Limit to first 3 episodes
+    ep_length = ep_length_list[ep]
+    ep_acord = df_acord[df_acord["episode"] == ep]
+    ep_context = df_goals[df_goals["episode"] == ep]
+    #context = df_goals[(df_goals["episode"] == ep) & (df_goals["env_id"] == env_id)]
+    for env_id in ep_acord["env_id"].unique():
+        env_traj = ep_acord[ep_acord["env_id"] == env_id]
+        plt.plot(np.arange(len(ep_acord["mean"][:ep_length])), ep_acord["mean"][:ep_length], linewidth=1)
+        #plt.scatter(context["episode"], context["energy_context"], marker="x")
+
+plt.title("mean predicted context")
+plt.legend()
+plt.tight_layout()
+
+plt.subplot(2, 2, 3)
+for ep in df_acord["episode"].unique()[:num_episodes]:  # Limit to first 3 episodes
+    ep_length = ep_length_list[ep]
+    ep_acord = df_acord[df_acord["episode"] == ep]
+    for env_id in ep_acord["env_id"].unique():
+        env_traj = ep_acord[ep_acord["env_id"] == env_id]
+        plt.scatter(np.arange(len(ep_acord["std"][:ep_length])), ep_acord["std"][:ep_length])
+
+plt.title("std predicted context")
+plt.legend()
+plt.tight_layout()
+
+
+# --- Prediction context error ---
+plt.subplot(2, 2, 4)
+predicted_error_all = []
+max_timestep = int(max(ep_length_list))
+for ep in df_acord["episode"].unique()[:num_episodes]:  # Limit to first 3 episodes
+    ep_length = ep_length_list[ep]
+    ep_acord = df_acord[df_acord["episode"] == ep]
+    for env_id in ep_acord["env_id"].unique():
+        env_traj = ep_acord[ep_acord["env_id"] == env_id]
+        error = ep_acord["predicted_context"][:ep_length]-ep_acord["actual_context"][:ep_length]
+        
+        # Pad with NaNs if shorter than max_timestep
+        if len(error) < max_timestep:
+            pad = max_timestep - len(error)
+            error = np.pad(error, (0, pad), constant_values=np.nan)
+
+        
+        """plt.scatter(np.arange(len(ep_acord["predicted_context"][:ep_length])), 
+                 ep_acord["predicted_context"][:ep_length]-context["energy_context"].item())
+"""
+        predicted_error_all.append(error)  
+
+predicted_error_all = np.stack(predicted_error_all)
+   # --- Compute stats ---
+error_mean = np.nanmean(predicted_error_all, axis=0)
+error_std = np.nanstd(predicted_error_all, axis=0)
+timesteps = np.arange(max_timestep)
+
+plt.plot(timesteps, error_mean, label="error Mean", color='blue')
+plt.fill_between(timesteps, error_mean - error_std, error_mean + error_std, alpha=0.3, color='blue', label="error ±1 std")
+
+plt.title("predicted context error")
+plt.legend()
+plt.tight_layout()
+
+plt.savefig(os.path.join(latest_dir, "acord_data.png"))    
 
 # --- Plot Action 0 ---
 plt.figure(figsize=(12, 4))
@@ -155,6 +257,31 @@ plt.legend()
 plt.tight_layout()
 
 plt.savefig(os.path.join(latest_dir, "actions_plot.png"))
+plt.close()
+
+# Energy plot
+# --- Energy Data ---
+
+plt.figure()
+for ep in df_other_metrics["episode"].unique()[:num_episodes]:
+    ep_other_metrics = df_other_metrics[df_other_metrics["episode"] == ep]
+    ep_length = ep_length_list[ep]
+    ep_context = df_acord[df_acord["episode"] == ep]
+
+    for env_id in ep_other_metrics["env_id"].unique():
+        env_other_metrics = ep_other_metrics[ep_other_metrics["env_id"] == env_id]
+        env_context = ep_context[ep_context["env_id"] == env_id]
+        
+        energy = env_other_metrics["energy"].values[:ep_length]
+        context = env_context["actual_context"].values[:ep_length]
+
+        plt.scatter(energy, context, label="energy")
+        #plt.plot(np.arange(len(context)), 2*context, label="context")
+
+plt.xlabel("time")
+plt.ylabel("energy")
+plt.title("energy and context")
+plt.savefig(os.path.join(latest_dir, "energy_acord.png"))
 plt.close()
 
 
@@ -291,7 +418,12 @@ aero_force_x_all = []
 aero_force_y_all = []
 thruster_force_1_x_all = []
 thruster_force_2_x_all = []
-max_aero_force_all = []
+max_aero_force_all = [] 
+episode_energy_all = []
+ratio_energy_usage_all = []
+max_available_energy_all = []
+reward_aero_all = []
+reward_acord_all = []
 
 # --- Aggregate Data ---
 for ep in df_other_metrics["episode"].unique()[:num_episodes]:
@@ -304,7 +436,11 @@ for ep in df_other_metrics["episode"].unique()[:num_episodes]:
         reward_progress = env_other_metrics["reward_progress"].values[:max_timestep]
         reward_backward = env_other_metrics["reward_backward"].values[:max_timestep]
         reward_energy = env_other_metrics["reward_energy"].values[:max_timestep]
+        reward_aero = env_other_metrics["reward_aero"].values[:max_timestep]
+        reward_acord = env_other_metrics["reward_acord"].values[:max_timestep]
         total_reward = env_other_metrics["total_reward"].values[:max_timestep]
+        #print(total_reward)
+
         bearing = env_other_metrics["bearing"].values[:max_timestep]
         distance = env_other_metrics["distance"].values[:max_timestep]
         aero_force_x = env_other_metrics["aero_force_x"].values[:max_timestep]
@@ -312,6 +448,9 @@ for ep in df_other_metrics["episode"].unique()[:num_episodes]:
         thruster_force_1_x = env_other_metrics["thruster_force_1_x"].values[:max_timestep]
         thruster_force_2_x = env_other_metrics["thruster_force_2_x"].values[:max_timestep]
         max_aero_force = env_other_metrics["max_aero_force"].values[:max_timestep]
+        episode_energy = env_other_metrics["episode_energy"].values[:max_timestep]
+        max_available_energy = env_other_metrics["max_available_energy"].values[:max_timestep]
+        ratio_energy_usage = env_other_metrics["ratio_energy_usage"].values[:max_timestep]
 
         """# Pad with NaNs if shorter than max_timestep
         if len(lift) < max_timestep:
@@ -323,6 +462,8 @@ for ep in df_other_metrics["episode"].unique()[:num_episodes]:
         rew_progress_all.append(reward_progress)
         rew_backward_all.append(reward_backward)
         rew_energy_all.append(reward_energy)
+        reward_acord_all.append(reward_acord)
+        reward_aero_all.append(reward_aero)
         total_reward_all.append(total_reward)
         bearing_all.append(bearing)
         distance_all.append(distance)
@@ -331,15 +472,22 @@ for ep in df_other_metrics["episode"].unique()[:num_episodes]:
         thruster_force_1_x_all.append(thruster_force_1_x)
         thruster_force_2_x_all.append(thruster_force_2_x)
         max_aero_force_all.append(max_aero_force)
+        episode_energy_all.append(episode_energy)
+        max_available_energy_all.append(max_available_energy)
+        ratio_energy_usage_all.append(ratio_energy_usage)
 
+    
         """lift_all.append(lift)
         drag_all.append(drag)"""
+
 
 
 energy_all = np.stack(energy_all)
 rew_progress_all = np.stack(rew_progress_all)
 rew_backward_all = np.stack(rew_backward_all)
 rew_energy_all = np.stack(rew_energy_all)
+reward_aero_all = np.stack(reward_aero_all)
+reward_acord_all = np.stack(reward_acord_all)
 total_reward_all = np.stack(total_reward_all)
 bearing_all = np.stack(bearing_all)
 distance_all = np.stack(distance_all)
@@ -348,6 +496,10 @@ aero_force_y_all = np.stack(aero_force_y_all)
 thruster_force_1_x_all = np.stack(thruster_force_1_x_all)
 thruster_force_2_x_all = np.stack(thruster_force_2_x_all)
 max_aero_force_all = np.stack(max_aero_force_all)
+episode_energy_all = np.stack(episode_energy_all)
+max_available_energy_all = np.stack(max_available_energy_all)
+ratio_energy_usage_all = np.stack(ratio_energy_usage_all)
+
 
 # --- Compute stats for other metrics ---
 energy_mean = np.nanmean(energy_all, axis=0)
@@ -358,6 +510,10 @@ rew_backward_mean = np.nanmean(rew_backward_all, axis=0)
 rew_backward_std = np.nanstd(rew_backward_all, axis=0)
 rew_energy_mean = np.nanmean(rew_energy_all, axis=0)
 rew_energy_std = np.nanstd(rew_energy_all, axis=0)
+rew_aero_mean = np.nanmean(reward_aero_all, axis=0)
+rew_aero_std = np.nanstd(reward_aero_all, axis=0)
+rew_acord_mean = np.nanmean(reward_acord_all, axis=0)
+rew_acord_std = np.nanstd(reward_acord_all, axis=0)
 total_reward_mean = np.nanmean(total_reward_all, axis=0)
 total_reward_std = np.nanstd(total_reward_all, axis=0)
 bearing_mean = np.nanmean(bearing_all, axis=0)
@@ -374,12 +530,19 @@ thruster_force_2_x_mean = np.nanmean(thruster_force_2_x_all, axis=0)
 thruster_force_2_x_std = np.nanstd(thruster_force_2_x_all, axis=0)
 max_aero_force_mean = np.nanmean(max_aero_force_all, axis=0)
 max_aero_force_std = np.nanstd(max_aero_force_all, axis=0)
+episode_energy_mean = np.nanmean(episode_energy_all, axis=0)
+episode_energy_std = np.nanstd(episode_energy_all, axis=0)
+max_available_energy_mean = np.nanmean(max_available_energy_all, axis=0)
+max_available_energy_std = np.nanstd(max_available_energy_all, axis=0)
+ratio_energy_usage_mean = np.nanmean(ratio_energy_usage_all, axis=0)
+ratio_energy_usage_std = np.nanstd(ratio_energy_usage_all, axis=0)
+
 
 # --- Plot Other Metrics ---
-plt.figure(figsize=(12, 4))
+plt.figure(figsize=[30, 10])
 timesteps = np.arange(max_timestep-1) 
 
-plt.subplot(2, 2, 1)
+plt.subplot(2, 3, 1)
 # Energy    
 plt.plot(np.arange(len(energy_mean)) , energy_mean, label="Energy Mean", color='green')
 plt.fill_between(np.arange(len(energy_mean)), energy_mean - energy_std, energy_mean + energy_std, alpha=0.3, color='green', label="Energy ±1 std")
@@ -389,7 +552,7 @@ plt.ylabel("Value")
 plt.legend()
 
 # Reward Progress
-plt.subplot(2, 2, 2)
+plt.subplot(2, 3, 2)
 plt.plot(np.arange(len(rew_progress_mean)), rew_progress_mean, label="Reward Progress Mean", color='orange')
 plt.fill_between(np.arange(len(rew_progress_mean)), rew_progress_mean - rew_progress_std, rew_progress_mean + rew_progress_std, alpha=0.3, color='orange', label="Reward Progress ±1 std")
 plt.title("Reward progress (Mean ± Std)")
@@ -398,7 +561,7 @@ plt.ylabel("Value")
 plt.legend()
 
 # Reward Backward
-plt.subplot(2, 2, 3)
+plt.subplot(2, 3, 3)
 plt.plot(np.arange(len(rew_backward_mean)), rew_backward_mean, label="Reward Backward Mean", color='purple')
 plt.fill_between(np.arange(len(rew_backward_mean)), rew_backward_mean - rew_backward_std, rew_backward_mean + rew_backward_std, alpha=0.3, color='purple', label="Reward Backward ±1 std")
 plt.title("Reward backward (Mean ± Std)")
@@ -407,7 +570,7 @@ plt.ylabel("Value")
 plt.legend()
 
 # Reward Energy
-plt.subplot(2, 2, 4)
+plt.subplot(2, 3, 4)
 plt.plot(np.arange(len(rew_energy_mean)), rew_energy_mean, label="Reward Energy Mean", color='brown')
 plt.fill_between(np.arange(len(rew_energy_mean)), rew_energy_mean - rew_energy_std, rew_energy_mean + rew_energy_std, alpha=0.3, color='brown', label="Reward Energy ±1 std")
 plt.title("Reward Energy (Mean ± Std)")
@@ -415,6 +578,25 @@ plt.xlabel("Timestep")
 plt.ylabel("Value")
 plt.legend()
 plt.tight_layout()
+
+plt.subplot(2, 3, 5)
+# Reward acord
+plt.plot(np.arange(len(rew_acord_mean)) , rew_acord_mean, label="rew_acord_mean", color='green')
+plt.fill_between(np.arange(len(rew_acord_mean)), rew_acord_mean - rew_acord_std, rew_acord_mean + rew_acord_std, alpha=0.3, color='green', label="rew_acord ±1 std")
+plt.title("reward acord (Mean ± Std)")
+plt.xlabel("Timestep")
+plt.ylabel("Value")
+plt.legend()
+
+# Reward aero
+plt.subplot(2, 3, 6)
+plt.plot(np.arange(len(rew_aero_mean)), rew_aero_mean, label="Reward aero Mean", color='orange')
+plt.fill_between(np.arange(len(rew_aero_mean)), rew_aero_mean - rew_aero_std, rew_aero_mean + rew_aero_std, alpha=0.3, color='orange', label="Reward Progress ±1 std")
+plt.title("Reward aero (Mean ± Std)")
+plt.xlabel("Timestep")
+plt.ylabel("Value")
+plt.legend()
+
 plt.savefig(os.path.join(latest_dir, "other_metrics_mean_std.png"))
 
 plt.figure()
@@ -424,6 +606,7 @@ plt.fill_between(np.arange(len(total_reward_mean)), total_reward_mean - total_re
 plt.title("Total Reward (Mean ± Std)")
 plt.xlabel("Timestep")
 plt.ylabel("Value")
+plt.ylim([-1, 1])
 plt.legend()    
 plt.savefig(os.path.join(latest_dir, "total_reward_std.png"))
 
@@ -450,7 +633,35 @@ plt.ylabel("Value")
 plt.legend()    
 plt.savefig(os.path.join(latest_dir, "forces_std.png"))
 
-plt.figure(figsize=(12, 4))
+plt.figure()
+plt.subplot(2, 1, 1)
+# Episode Energy
+plt.plot(np.arange(len(episode_energy_mean)), episode_energy_mean, label="Episode Energy Mean", color='purple')
+plt.fill_between(np.arange(len(episode_energy_mean)), episode_energy_mean - episode_energy_std, episode_energy_mean + episode_energy_std, alpha=0.3, color='purple', label="Episode Energy ±1 std")
+
+plt.plot(np.arange(len(max_available_energy_mean)), max_available_energy_mean, label="Max Available Energy Mean", color='brown')
+plt.fill_between(np.arange(len(max_available_energy_mean)), max_available_energy_mean - max_available_energy_std, max_available_energy_mean + max_available_energy_std, alpha=0.3, color='brown', label="Max Available Energy ±1 std")  
+
+plt.title("Episode Energy (Mean ± Std)")
+plt.xlabel("Timestep")
+plt.ylabel("Value")
+plt.legend()
+
+plt.subplot(2, 1, 2)
+# Ratio Energy Usage
+plt.plot(np.arange(len(ratio_energy_usage_mean)), ratio_energy_usage_mean, label="Ratio Energy Usage Mean", color='cyan')
+plt.fill_between(np.arange(len(ratio_energy_usage_mean)), ratio_energy_usage_mean - ratio_energy_usage_std, ratio_energy_usage_mean + ratio_energy_usage_std, alpha=0.3, color='cyan', label="Ratio Energy Usage ±1 std")       
+
+plt.title("Ratio Energy Usage (Mean ± Std)")
+plt.xlabel("Timestep")
+plt.ylabel("Value")
+plt.legend()
+plt.tight_layout()
+
+plt.savefig(os.path.join(latest_dir, "energy_figure.png"))
+
+
+plt.figure()
 for ep_idx in range(len(bearing_all)):
     
     # Bearing

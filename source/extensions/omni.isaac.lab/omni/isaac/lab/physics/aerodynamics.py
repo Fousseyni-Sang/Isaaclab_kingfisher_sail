@@ -107,8 +107,8 @@ class Aerodynamics:
 
         return
     
-    def compute_wind_effect(self, Uw:torch.Tensor=torch.zeros(), Beta_w:torch.Tensor=torch.zeros(), ship_heading_w:torch.Tensor=torch.zeros(),
-                                 ship_lin_vel2D=torch.zeros(), angle_of_attack:torch.Tensor=torch.zeros(), sail_angle:torch.Tensor=torch.zeros(),
+    def compute_wind_effect(self, Uw:torch.Tensor, Beta_w:torch.Tensor, ship_heading_w:torch.Tensor,
+                                 ship_lin_vel2D, angle_of_attack:torch.Tensor, sail_angle:torch.Tensor,
                                  update_appw_only=False)->torch.Tensor:
         """ This function will be used to apply wind effect:
                 Parameters:
@@ -313,7 +313,7 @@ class Aerodynamics:
         # parallel to the apparent wind ---> VERIFIED
         drag_vec[:, 0] = drag_D*wind_V_app_unit[:, 0]
         drag_vec[:, 1] = drag_D*wind_V_app_unit[:, 1]
-        drag_vec = torch.where((torch.sum(drag_vec*sail_unit_vector, dim=1)<0).unsqueeze(1), -drag_vec, drag_vec)
+        #drag_vec = torch.where((torch.sum(drag_vec*sail_unit_vector, dim=1)<0).unsqueeze(1), -drag_vec, drag_vec)
         
         self.sail_unit_vector = sail_unit_vector.clone()
         self.sail_ortho_unit_vector = sail_ortho_unit_vector.clone()
@@ -577,6 +577,7 @@ class Aerodynamics:
         broad=False,
         randomize_direction=False,
         randomize_speed=False,
+        fixed=False
     ):
         if env_ids is None:
             env_ids = torch.arange(self.num_envs, device=self.device)
@@ -620,24 +621,46 @@ class Aerodynamics:
                 beta[mask] = torch.pi * torch.empty(n, device=self.device).uniform_(-1, 1)
 
             elif name == "upwind":
-                # ±135° (wind coming toward agent from near front)
-                beta[mask] = torch.deg2rad(torch.empty(n, device=self.device).uniform_(-135, 135))
+                # Upwind: angles between 135-180 and -180 to -135 degrees
+                beta_upwind = torch.empty(n, device=self.device).uniform_(136, 180)
+                # Randomly assign negative signs to half the samples
+                if fixed:
+                    beta_upwind = 180
+                sign = torch.randint(0, 2, (n,), device=self.device) * 2 - 1  # -1 or 1
+                beta[mask] = torch.deg2rad(sign * beta_upwind)
 
             elif name == "downwind":
                 # ±30° (wind from behind)
-                beta[mask] = torch.deg2rad(torch.empty(n, device=self.device).uniform_(-30, 30))
+                # Downwind: angles between -30 and 30 degrees
+                beta[mask] = torch.deg2rad(torch.empty(n, device=self.device).uniform_(-45, 45))
+                if fixed:
+                    beta[mask] = 0
 
             elif name == "beam":
                 # ±90° (wind from sides)
-                beta[mask] = torch.deg2rad(torch.empty(n, device=self.device).uniform_(-100, 100))
-
+                beta_beam = torch.empty(n, device=self.device).uniform_(90, 90)
+                if fixed:
+                    beta_beam = 90
+                # Randomly assign negative signs to half the samples
+                sign = torch.randint(0, 2, (n,), device=self.device) * 2 - 1  # -1 or 1
+                beta[mask] = torch.deg2rad(sign * beta_beam)
+                
             elif name == "close":
                 # ±45° (close haul)
-                beta[mask] = torch.deg2rad(torch.empty(n, device=self.device).uniform_(-60, 60))
+                beta_close = torch.empty(n, device=self.device).uniform_(91, 135)
+                if fixed:
+                    beta_close = 115
+                # Randomly assign negative signs to half the samples
+                sign = torch.randint(0, 2, (n,), device=self.device) * 2 - 1  # -1 or 1
+                beta[mask] = torch.deg2rad(sign * beta_close)
 
             elif name == "broad":
                 # ±135° (broad reach)
-                beta[mask] = torch.deg2rad(torch.empty(n, device=self.device).uniform_(-150, 150))
+                beta_broad = torch.empty(n, device=self.device).uniform_(46, 90)
+                if fixed:
+                    beta_broad = 70
+                sign = torch.randint(0, 2, (n,), device=self.device) * 2 - 1  # -1 or 1
+                beta[mask] = torch.deg2rad(sign * beta_broad)
 
             elif name == "no_wind":
                 beta[mask] = 0.0

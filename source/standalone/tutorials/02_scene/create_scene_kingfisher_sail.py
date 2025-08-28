@@ -471,8 +471,8 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
     # Environment
     min_target_distance = 100.0 
     max_target_distance =  100.0
-    min_target_bearing =  45*torch.pi/180
-    max_target_bearing = 45*torch.pi/180 #torch.pi / 2
+    min_target_bearing =  0*torch.pi/180
+    max_target_bearing = 4*torch.pi/180 #torch.pi / 2
 
     _desired_pos_w = torch.zeros(scene.num_envs, 3, device=robot.device)
     desired_pos_b = torch.zeros(scene.num_envs, 3, device=robot.device)
@@ -523,6 +523,8 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
             #joint_pos += torch.rand_like(joint_pos) * 0.1
             robot.write_joint_state_to_sim(joint_pos, joint_vel)
 
+            initial_robot_pos = robot.data.root_link_pos_w.clone()
+
             # clear internal buffers
             scene.reset()
             print("[INFO]: Resetting robot state...")
@@ -547,12 +549,16 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
         )
         reshape_aero_force = aerodynamic_force.clone().detach().reshape(scene.num_envs, 3)
 
+        sail_position = torch.tensor([0.5, 0.0, 0.5], device=reshape_aero_force.device)
+        aero_torque = torch.cross(sail_position.expand(scene.num_envs, 3), reshape_aero_force, dim=1)
+
         combined_force = hydrostatic_force + hydrodynamic_force
         #print(f"combined_force: {combined_force.shape}, reshape_aero_force: {reshape_aero_force.shape}")
         combined_force[:, :3] = combined_force[:, :3] + reshape_aero_force
+        combined_force[:, 3:] = combined_force[:, 3:] + aero_torque
 
         force = combined_force[:, :3]
-        torque = combined_force[:, 3:]
+        torque = combined_force[:, 3:] 
         
 
         # Get the link ids
@@ -642,8 +648,15 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
 
         time_reward = -time_penalty_scale * torch.ones_like(energy_norm)*sim_dt
 
+        goal_passed = torch.sum((_desired_pos_w[:, :2] - initial_robot_pos[:, :2])*(robot.data.root_link_pos_w[:, :2] \
+        - initial_robot_pos[:, :2]), dim=-1)>torch.square(torch.norm(_desired_pos_w[:, :2] - 
+                            initial_robot_pos[:, :2], dim=-1))+(min_target_distance/2)**2
+        
         rew_aero = torch.sum(aerodynamic_force[:, 0, :2] * desired_pos_b_3d[:, :2], dim=-1) / (max_aero_force*distance)
-        constants = torch.tensor([max_wind_speed, max_aero_force, time_reward], device=robot.device, dtype=torch.float32)
+        constants = torch.tensor([max_wind_speed, max_aero_force, time_reward, goal_passed], device=robot.device, dtype=torch.float32)
+
+        
+        
 
         # Publish the sail position
         sail_publisher.publish(

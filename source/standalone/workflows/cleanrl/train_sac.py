@@ -71,6 +71,7 @@ def main():
     # Prepare IsaacLab environment
     env_cfg = parse_env_cfg(args.task, num_envs=args.num_envs, device=args.device, use_fabric=not args.disable_fabric)
     env = gym.make(args.task, cfg=env_cfg)
+    
     obs_space = env.observation_space
     act_space = env.action_space
     #print(f"================== obs_space: {obs_space.shape}, act_space: {act_space.shape}")
