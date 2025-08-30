@@ -1,10 +1,8 @@
 from omni.isaac.lab.utils import configclass
 
-"""from bipedal_locomotion.utils.wrappers.rsl_rl import (
-    MlpModuleCfg,
-    RslRlOnPolicyRunnerMlpCfg,
-    RslRlPpoActorCriticCfg,
-    RslRlPpoAlgorithmMlpCfg,
+from omni.isaac.lab_tasks.utils.wrappers.rsl_rl import (
+   RslRlOnPolicyRunnerCfg, RslRlPpoActorCriticCfg, RslRlPpoAlgorithmCfg, RslRlVecEnvWrapper, 
+   RslRlOnPolicyRunnerMlpCfg, RslRlPpoAlgorithmMlpCfg, MlpModuleCfg
 )
 
 
@@ -80,4 +78,4 @@ class WFStairPPORunnerMlpCfg(PFFlatPPORunnerMlpCfg):
         super().__post_init__()
 
         self.experiment_name = "wf_mlp_stair"
-        self.runner_type = "OnPolicyRunnerMlp"""
+        self.runner_type = "OnPolicyRunnerMlp"

@@ -1,5 +1,5 @@
 from omni.isaac.lab.utils import configclass
-"""from omni.isaac.lab_tasks.utils.wrappers.rsl_rl import (
+from omni.isaac.lab_tasks.utils.wrappers.rsl_rl import (
     RslRlOnPolicyRunnerCfg,
     RslRlPpoActorCriticCfg,
     RslRlPpoAlgorithmCfg,
@@ -65,4 +65,3 @@ class WheelFootPPORunnerCfg(RslRlOnPolicyRunnerCfg):
         desired_kl=0.01,
         max_grad_norm=1.0,
     )
-"""

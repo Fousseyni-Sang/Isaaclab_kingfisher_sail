@@ -1,17 +1,15 @@
 import gymnasium as gym
 
+from .agents.rsl_rl_ppo_cfg import PointFootPPORunnerCfg, WheelFootPPORunnerCfg
+from .agents.rsl_rl_ppo_mlp_cfg import PFFlatPPORunnerMlpCfg, PFStairPPORunnerMlpCfg, WFFlatPPORunnerMlpCfg, WFRoughPPORunnerMlpCfg, WFStairPPORunnerMlpCfg
 from . import agents
-
-#from agents.rsl_rl_ppo_cfg import PointFootPPORunnerCfg, WheelFootPPORunnerCfg
-#from agents.rsl_rl_ppo_mlp_cfg import PFFlatPPORunnerMlpCfg, PFStairPPORunnerMlpCfg, WFFlatPPORunnerMlpCfg, WFRoughPPORunnerMlpCfg, WFStairPPORunnerMlpCfg
-
 from . import pointfoot_env_cfg, wheelfoot_env_cfg
 
 ##
 # Create PPO runners for RSL-RL
 ##
 
-"""pf_blind_flat_runner_cfg = PointFootPPORunnerCfg()
+pf_blind_flat_runner_cfg = PointFootPPORunnerCfg()
 pf_blind_flat_runner_cfg.experiment_name = "pf_blind_flat"
 
 pf_blind_rough_runner_cfg = PointFootPPORunnerCfg()
@@ -52,7 +50,7 @@ wf_mlp_rough_runner_cfg.experiment_name = "wf_mlp_rough"
 
 wf_stair_runner_cfg = WFStairPPORunnerMlpCfg()
 wf_stair_runner_cfg.experiment_name = "wf_mlp_stair"
-"""
+
 
 
 ##
@@ -69,6 +67,7 @@ gym.register(
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": f"{__name__}.pointfoot_env_cfg:PFBlindFlatEnvCfg",
+        "rsl_rl_cfg_entry_point": pf_blind_flat_runner_cfg,
         "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
 
     },
@@ -80,6 +79,7 @@ gym.register(
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": pointfoot_env_cfg.PFBlindFlatEnvCfg_PLAY,
+        "rsl_rl_cfg_entry_point": pf_blind_flat_runner_cfg,
         "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
     },
 )
@@ -95,6 +95,7 @@ gym.register(
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": pointfoot_env_cfg.PFBlindFlatEnvCfg,
+        "rsl_rl_cfg_entry_point": pf_mlp_blind_flat_runner_cfg,
     },
 )
 
@@ -104,6 +105,7 @@ gym.register(
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": pointfoot_env_cfg.PFBlindFlatEnvCfg_PLAY,
+        "rsl_rl_cfg_entry_point": pf_mlp_blind_flat_runner_cfg,
     },
 )
 
@@ -118,6 +120,7 @@ gym.register(
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": pointfoot_env_cfg.PFBlindRoughEnvCfg,
+        "rsl_rl_cfg_entry_point": pf_blind_rough_runner_cfg,
     },
 )
 
@@ -127,6 +130,7 @@ gym.register(
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": pointfoot_env_cfg.PFBlindRoughEnvCfg_PLAY,
+        "rsl_rl_cfg_entry_point": pf_blind_rough_runner_cfg,
     },
 )
 
@@ -141,6 +145,7 @@ gym.register(
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": pointfoot_env_cfg.PFBlindRoughEnvCfg,
+        "rsl_rl_cfg_entry_point": pf_blind_rough_runner_cfg,
     },
 )
 
@@ -150,6 +155,7 @@ gym.register(
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": pointfoot_env_cfg.PFBlindRoughEnvCfg_PLAY,
+        "rsl_rl_cfg_entry_point": pf_blind_rough_runner_cfg,
     },
 )
 
@@ -164,6 +170,7 @@ gym.register(
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": pointfoot_env_cfg.PFBlindStairEnvCfg,
+        "rsl_rl_cfg_entry_point": pf_blind_stairs_runner_cfg,
     },
 )
 
@@ -173,6 +180,7 @@ gym.register(
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": pointfoot_env_cfg.PFBlindStairEnvCfg_PLAY,
+        "rsl_rl_cfg_entry_point": pf_blind_stairs_runner_cfg,
     },
 )
 
@@ -187,6 +195,7 @@ gym.register(
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": pointfoot_env_cfg.PFBlindStairEnvCfg,
+        "rsl_rl_cfg_entry_point": pf_mlp_stair_runner_cfg,
     },
 )
 
@@ -196,6 +205,7 @@ gym.register(
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": pointfoot_env_cfg.PFBlindStairEnvCfg_PLAY,
+        "rsl_rl_cfg_entry_point": pf_mlp_stair_runner_cfg,
     },
 )
 
@@ -210,6 +220,7 @@ gym.register(
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": wheelfoot_env_cfg.WFBlindFlatEnvCfg,
+        "rsl_rl_cfg_entry_point": wf_blind_flat_runner_cfg,
     },
 )
 
@@ -219,6 +230,7 @@ gym.register(
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": wheelfoot_env_cfg.WFBlindFlatEnvCfg_PLAY,
+        "rsl_rl_cfg_entry_point": wf_blind_flat_runner_cfg,
     },
 )
 
@@ -227,7 +239,7 @@ gym.register(
 # WF Blind Flat Environment v1
 #############################
 
-"""gym.register(
+gym.register(
     id="Isaac-WF-Blind-Flat-v1",
     entry_point="omni.isaac.lab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,
@@ -426,4 +438,3 @@ gym.register(
 
 
 
-"""
