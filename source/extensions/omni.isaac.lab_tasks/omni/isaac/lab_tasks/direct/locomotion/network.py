@@ -86,6 +86,7 @@ class DiscriminatorNetwork(nn.Module):
         # Network layers
         self.fc1 = nn.Linear(self.state_dim, self.fc1_dims)
         self.fc2 = nn.Linear(self.fc1_dims, self.fc2_dims)
+
         self.mu = nn.Linear(self.fc2_dims, self.context_dim)
         self.sigma = nn.Linear(self.fc2_dims, self.context_dim)
 
@@ -135,6 +136,7 @@ class DiscriminatorNetwork(nn.Module):
         If path_checkpoint is None, finds the latest time_dir under logs/acord/discr/*/nn/
         and loads the latest discr_*.pt inside that.
         """
+
         if path_checkpoint is not None:
             if os.path.isfile(path_checkpoint):
                 checkpoint_path = path_checkpoint
@@ -179,7 +181,6 @@ class DiscriminatorNetwork(nn.Module):
         mu = torch.sigmoid(self.mu(x))
         sigma = torch.sigmoid(self.sigma(x))
         sigma = torch.clamp(sigma, min=0.01, max=1)
-
         return mu, sigma
 
     def predict(self, state, reparameterize=True, requires_grad=True):

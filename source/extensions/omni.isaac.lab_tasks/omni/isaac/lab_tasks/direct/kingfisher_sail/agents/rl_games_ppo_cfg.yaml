@@ -55,12 +55,12 @@ params:
     normalize_advantage: True
     gamma: 0.99
     tau: 0.95
-    learning_rate: 5e-4
+    learning_rate: 5e-3 #5e-4
     lr_schedule: adaptive
     schedule_type: legacy
     kl_threshold: 0.016
     score_to_win: 20000000
-    max_epochs: 300
+    max_epochs: 600
     save_best_after: 25
     save_frequency: 50
     grad_norm: 1.0

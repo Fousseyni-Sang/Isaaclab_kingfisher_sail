@@ -13,7 +13,7 @@ from omni.isaac.core.utils.torch.rotations import compute_heading_and_up, comput
 import omni.isaac.lab.sim as sim_utils
 from omni.isaac.lab.assets import Articulation
 from omni.isaac.lab.envs import DirectRLEnv, DirectRLEnvCfg
-
+from .network import DiscriminatorNetwork
 
 def normalize_angle(x):
     return torch.atan2(torch.sin(x), torch.cos(x))
@@ -44,6 +44,12 @@ class LocomotionEnv(DirectRLEnv):
         self.inv_start_rot = quat_conjugate(self.start_rotation).repeat((self.num_envs, 1))
         self.basis_vec0 = self.heading_vec.clone()
         self.basis_vec1 = self.up_vec.clone()
+
+        self.discriminator = DiscriminatorNetwork(lr=0.0001, state_dim=1, fc1_dims=256, fc2_dims=256, context_dim=1, 
+                                                   num_envs=self.num_envs, device=self.device)
+        self.is_Training = True
+        self.discr_checkpoint = ""
+        self.discr_context = torch.ones(self.num_envs, device=self.device)
 
     def _setup_scene(self):
         self.robot = Articulation(self.cfg.robot)
@@ -106,20 +112,24 @@ class LocomotionEnv(DirectRLEnv):
     def _get_observations(self) -> dict:
         obs = torch.cat(
             (
-                self.torso_position[:, 2].view(-1, 1),
-                self.vel_loc,
-                self.angvel_loc * self.cfg.angular_velocity_scale,
-                normalize_angle(self.yaw).unsqueeze(-1),
-                normalize_angle(self.roll).unsqueeze(-1),
-                normalize_angle(self.angle_to_target).unsqueeze(-1),
-                self.up_proj.unsqueeze(-1),
-                self.heading_proj.unsqueeze(-1),
-                self.dof_pos_scaled,
-                self.dof_vel * self.cfg.dof_vel_scale,
-                self.actions,
+                self.torso_position[:, 2].view(-1, 1), # 1
+                self.vel_loc, # 3
+                self.angvel_loc * self.cfg.angular_velocity_scale, # 3
+                normalize_angle(self.yaw).unsqueeze(-1), # 1
+                normalize_angle(self.roll).unsqueeze(-1), # 1
+                normalize_angle(self.angle_to_target).unsqueeze(-1), # 1
+                self.up_proj.unsqueeze(-1), # 1
+                self.heading_proj.unsqueeze(-1), # 1
+                self.dof_pos_scaled, # 8
+                self.dof_vel * self.cfg.dof_vel_scale, # 8
+                self.actions, # 8
+                self.discr_context.unsqueeze(-1), # 1
             ),
             dim=-1,
         )
+        """print(f"\nvel_loc_shape: {self.vel_loc.shape}, \nangvel_loc_shape: {self.angvel_loc.shape}, \ndof_pos_scaled_shape: \
+              {self.dof_pos_scaled.shape}, \ndof_vel_shape: {(self.dof_vel).shape}, \nactions_shape: {self.actions.shape}")
+        """
         observations = {"policy": obs}
         return observations
 
@@ -142,6 +152,19 @@ class LocomotionEnv(DirectRLEnv):
             self.cfg.alive_reward_scale,
             self.motor_effort_ratio,
         )
+        if self.is_Training:
+            self.discr_context = torch.where(self.episode_length_buf%250==0,
+                        torch.zeros_like(self.discr_context).uniform_(0, 1), self.discr_context)
+        else:
+            self.discr_context = torch.where(self.episode_length_buf%300==0,
+                        torch.zeros_like(self.discr_context).uniform_(0, 1), self.discr_context)
+            
+            norm = self.vel_loc.norm(dim=1)
+            predicted_context, log_probs1, distrib1 = self.discriminator.predict(
+            norm.reshape(self.num_envs, -1), requires_grad=False, reparameterize=False)
+
+            print(f"\nContext: {self.discr_context} \ntorso: {norm}\n prediction: {predicted_context}\n")
+
         return total_reward
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
@@ -155,6 +178,7 @@ class LocomotionEnv(DirectRLEnv):
             env_ids = self.robot._ALL_INDICES
         self.robot.reset(env_ids)
         super()._reset_idx(env_ids)
+
 
         joint_pos = self.robot.data.default_joint_pos[env_ids]
         joint_vel = self.robot.data.default_joint_vel[env_ids]

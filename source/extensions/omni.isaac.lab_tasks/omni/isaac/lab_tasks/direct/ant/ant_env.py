@@ -21,11 +21,11 @@ from omni.isaac.lab_tasks.direct.locomotion.locomotion_env import LocomotionEnv
 @configclass
 class AntEnvCfg(DirectRLEnvCfg):
     # env
-    episode_length_s = 15.0
+    episode_length_s = 30.0
     decimation = 2
     action_scale = 0.5
     action_space = 8
-    observation_space = 36
+    observation_space = 37 #36
     state_space = 0
 
     # simulation

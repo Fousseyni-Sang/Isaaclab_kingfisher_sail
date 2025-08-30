@@ -53,6 +53,7 @@ def load_cfg_from_registry(task_name: str, entry_point_key: str) -> dict | objec
     """
     # obtain the configuration entry point
     cfg_entry_point = gym.spec(task_name).kwargs.get(entry_point_key)
+    print(f"[INFO===========]: Loading configuration for task: '{task_name}' from entry point: '{cfg_entry_point}'")
     # check if entry point exists
     if cfg_entry_point is None:
         raise ValueError(

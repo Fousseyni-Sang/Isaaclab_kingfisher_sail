@@ -115,6 +115,10 @@ def main():
         resume_path = retrieve_file_path(args_cli.checkpoint)
     log_dir = os.path.dirname(os.path.dirname(resume_path))
 
+    acord_dir = log_dir.split("/")
+    acord_dir_name = ('/'.join(acord_dir[:-3]) + "/acord/" + '/'.join(acord_dir[-2:]))
+    checkpoint_name_acord = acord_dir_name + "/nn/"
+
     # wrap around environment for rl-games
     rl_device = agent_cfg["params"]["config"]["device"]
     clip_obs = agent_cfg["params"]["env"].get("clip_observations", math.inf)
@@ -166,6 +170,9 @@ def main():
 
     # reset environment
     env.unwrapped.is_Training = False
+    env.unwrapped.discr_checkpoint = checkpoint_name_acord
+    env.unwrapped.discriminator_energy.load_checkpoint(checkpoint_name_acord)
+    env.unwrapped.discriminator_energy.eval()
     if args_cli.episode_length is not None:
         env.unwrapped.cfg.episode_length_s = args_cli.episode_length
     
@@ -313,6 +320,7 @@ def main():
             loss = env.unwrapped.loss_discrim_energy
             max_aero_force = env.unwrapped.max_aero_force.squeeze(0)
             acord_prediction_logs = env.unwrapped.acord_prediction_logs
+            predicted_context = acord_prediction_logs[:, 0]
 
             distance  = env.unwrapped.distance
             bearing = env.unwrapped.bearing
@@ -323,10 +331,10 @@ def main():
             dones = dones.to(device=trajectories.device)
             step = env.unwrapped.episode_length_buf
             episode_length = step.max().item() + 1
-            if current_step%1000==0:
+            if current_step%20==0:
                 #print(f"bearing: {bearing} next_wpt: {env.unwrapped.next_tack_wpt_idx}, goal: {goal_pos}, distance: {env.unwrapped.distance}")
                 print(f"\nforce_aero: {aero_force}\nlift: {lift} lift_coeff: {lift_coeff} \ndrag: {drag} drag_coeff: {drag_coeff}") 
-                print(f"rew_aero: {reward_aero} \nrew_prog: {rew_progress} \ncontext: {energy_context}")
+                print(f"rew_aero: {reward_aero} \nrew_prog: {rew_progress} \ncontext: {energy_context} \npredicted_context: {predicted_context}")
             if torch.any(dones) or current_step >= max_episod_length:
                 print(f"tack_wpts: {tack_wpts}")
                 
@@ -386,7 +394,7 @@ def main():
             ros_node.publish(obs, actions, rew, aero_force, thruster_force, lin_speed, aoa, app_angle, sail, 
                             head_w, head_wrt_wind, ld_ratio, robot_pos, goal_pos, energy, episode_energy, lift, drag, 
                             lift_coeff, drag_coeff, sum_angle, desired_pos, rew_progress, rew_bearing, rew_energy, 
-                            rew_backward, loss_disc, tack_wpts, energy_context)
+                            rew_backward, loss_disc, tack_wpts, energy_context, predicted_context)
 
 
             lift_coeff_logs[step] = lift_coeff.clone().float()

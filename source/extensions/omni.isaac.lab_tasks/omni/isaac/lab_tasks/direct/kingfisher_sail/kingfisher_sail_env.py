@@ -489,15 +489,15 @@ class KingfisherSailEnvCfg(DirectRLEnvCfg):
     time_penalty_scale = -0.1 #-0.008 #
     penalty_inefficient_sailing_scale = -0.1
     tack_penalty_scale = -10
-    bearing_penalty_scale = 0.8
-    beargin_penalty_coef = -0.5 #-4
+    bearing_penalty_scale = 0.5
+    beargin_penalty_coef = -4 #0.5 #-4
     lift_drag_ratio_scale = 0.1
     acord_reward_scale = 0.5
     speed_penalty_scale = -0.1
 
     # Environment
-    min_target_distance = 200.0 
-    max_target_distance = 200.0
+    min_target_distance = 70.0 
+    max_target_distance = 80.0
     min_target_bearing =  45*torch.pi/180 #-torch.pi / 2
     max_target_bearing = 120*torch.pi/180 #torch.pi / 2
     max_cross_track = 8.0
@@ -622,7 +622,7 @@ class KingfisherSailEnv(DirectRLEnv):
         self.disc_prediction_mean = torch.zeros(self.num_envs, device=self.device)
         self.disc_prediction_std = torch.zeros(self.num_envs, device=self.device)
         self.disc_prediction_error = torch.zeros(self.num_envs, device=self.device)
-        
+        self.discr_checkpoint = ""
         self.energy_context = torch.ones_like(self.episode_number)
         self.acord_prediction_logs = torch.ones(self.num_envs, 3) # prediction, mean, std
         self.time_context = torch.ones_like(self.episode_number)
@@ -1068,7 +1068,7 @@ class KingfisherSailEnv(DirectRLEnv):
         #print((torch.abs(self.previous_distance - self.distance)/torch.norm(self._robot.data.root_lin_vel_b, dim=-1)) * self.cfg.time_penalty_scale * self.step_dt * self.time_context)
         # Penalize bearing errors
         root_vel_w = self._robot.data.root_lin_vel_w.clone()
-        bearing_penalty = 0.5*self.cfg.bearing_penalty_scale*(torch.exp(self.cfg.beargin_penalty_coef * torch.abs(self.bearing/torch.pi)) - 1)
+        bearing_penalty = self.cfg.bearing_penalty_scale*(torch.exp(self.cfg.beargin_penalty_coef * torch.abs(self.bearing/torch.pi)) - 1)
         #bearing_penalty = -(torch.abs(self.bearing/torch.pi)) 
         
         #torch.zeros_like(self.bearing) #
@@ -1173,14 +1173,14 @@ class KingfisherSailEnv(DirectRLEnv):
         #print(f"reward_acord: {reward_acord}")
         #print(f"std1: {distrib1.scale} \tstd2: {distrib2.scale} ")
         rewards = {  
-            "1_distance_progress": 0.*distance_progress_reward,
-            "2_goal_reached": 0*goal_reward,
+            "1_distance_progress": distance_progress_reward,
+            "2_goal_reached": goal_reward,
             "3_energy": 0*energy_reward,
-            "4_backwards": 0*backwards_penalty,
+            "4_backwards": backwards_penalty,
             "5_bearing_penalty": 0*bearing_penalty,
             "6_time": 0*time_reward,
             "7_tack_penalty": 0*reward_acord,
-            "8_lift_drag_ratio": 0*reward_aero,
+            "8_lift_drag_ratio": reward_aero,
         }
         #print(f"rewards: {rewards} rew_lift_drag_ratio: {lift_drag_ratio}\n")
         # #"6_time": time_reward
@@ -1192,15 +1192,18 @@ class KingfisherSailEnv(DirectRLEnv):
             self._episode_sums[key] += value
 
 
-        context_sampling_rate = self.max_episode_length//5
+        context_sampling_rate = self.max_episode_length//3 #((self.initial_distance/(self.cfg.max_robot_speed))*(self.cfg.decimation/self.step_dt))//3 #
         """if self.is_Training or True:
             apply_mask = (self.episode_length_buf%context_sampling_rate)==0
             env_ids = torch.nonzero(apply_mask, as_tuple=False).squeeze(-1)
             self.energy_context[env_ids] = torch.zeros_like(self.time_context[env_ids]).uniform_(0, 1)"""
-        self.energy_context = torch.where(self.episode_length_buf%context_sampling_rate==0,
-                    torch.zeros_like(self.time_context).uniform_(0, 1), self.energy_context)
-
-        
+        if self.is_Training:
+            self.energy_context = torch.where(self.episode_length_buf%context_sampling_rate==0,
+                        torch.zeros_like(self.time_context).uniform_(0, 1), self.energy_context)
+        else:
+            self.energy_context = torch.where(self.episode_length_buf%context_sampling_rate==0,
+                        torch.zeros_like(self.time_context).uniform_(0, 1), self.energy_context)
+            #print(f"initial_distance: {self.initial_distance} \tcontext_sampling_rate: {context_sampling_rate} \tenergy_context: {self.energy_context}")
 
         """self.distance[env_ids] = self.initial_distance[env_ids]
         self.previous_distance[env_ids] = self.initial_distance[env_ids]
@@ -1208,8 +1211,6 @@ class KingfisherSailEnv(DirectRLEnv):
         self._desired_pos_w[env_ids, 1] = torch.sin(self.initial_bearing[env_ids]) * self.initial_distance[env_ids]
         self._desired_pos_w[env_ids, 2] = 0.0  # only in 2D
         self._desired_pos_w[env_ids, :2] += self._terrain.env_origins[env_ids, :2]"""
-
-       
 
         return reward
 
@@ -1338,11 +1339,7 @@ class KingfisherSailEnv(DirectRLEnv):
         self.max_aero_force = self._aerodynamics.get_max_aero_force(self._aerodynamics.Uw)
 
         self.energy_context[env_ids] = torch.zeros_like(self.time_context[env_ids]).uniform_(0, 1)
-
-        if not self.is_Training:
-            self.discriminator_energy.load_checkpoint()
-            
-
+        
         if self.is_Training:
             #self.discriminator_energy.init_writer()
             #torch.zeros_like(self.time_context[env_ids]).uniform_(0, 1)

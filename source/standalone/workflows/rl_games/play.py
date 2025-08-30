@@ -87,6 +87,10 @@ def main():
         resume_path = retrieve_file_path(args_cli.checkpoint)
     log_dir = os.path.dirname(os.path.dirname(resume_path))
 
+    acord_dir = log_dir.split("/")
+    acord_dir_name = ('/'.join(acord_dir[:-3]) + "/acord/" + '/'.join(acord_dir[-2:]))
+    checkpoint_name_acord = acord_dir_name + "/nn/"
+
     # wrap around environment for rl-games
     rl_device = agent_cfg["params"]["config"]["device"]
     clip_obs = agent_cfg["params"]["env"].get("clip_observations", math.inf)
@@ -137,6 +141,10 @@ def main():
     agent.reset()
 
     # reset environment
+    """env.unwrapped.is_Training = False
+    env.unwrapped.discr_checkpoint = checkpoint_name_acord
+    env.unwrapped.discriminator.load_checkpoint(checkpoint_name_acord)
+    env.unwrapped.discriminator.eval()"""
     obs = env.reset()
     if isinstance(obs, dict):
         obs = obs["obs"]
