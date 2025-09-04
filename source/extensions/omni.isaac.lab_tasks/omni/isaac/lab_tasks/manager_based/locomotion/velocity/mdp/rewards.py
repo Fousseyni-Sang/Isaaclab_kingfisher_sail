@@ -106,3 +106,11 @@ def track_ang_vel_z_world_exp(
         env.command_manager.get_command(command_name)[:, 2] - asset.data.root_com_ang_vel_w[:, 2]
     )
     return torch.exp(-ang_vel_error / std**2)
+
+def bounded_forward_velocity_reward(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")):
+    asset = env.scene[asset_cfg.name]
+    forward_vel = asset.data.root_com_lin_vel_b[:, 0]
+    forward_vel[forward_vel>0] = 0.1
+    forward_vel[forward_vel<0] = -10 
+    # saturate beyond 1 m/s
+    return forward_vel

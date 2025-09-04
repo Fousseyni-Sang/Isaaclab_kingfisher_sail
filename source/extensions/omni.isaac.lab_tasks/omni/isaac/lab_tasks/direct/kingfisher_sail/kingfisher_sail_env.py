@@ -1173,7 +1173,7 @@ class KingfisherSailEnv(DirectRLEnv):
         #print(f"reward_acord: {reward_acord}")
         #print(f"std1: {distrib1.scale} \tstd2: {distrib2.scale} ")
         rewards = {  
-            "1_distance_progress": distance_progress_reward,
+            "1_distance_progress": 0.7*distance_progress_reward,
             "2_goal_reached": goal_reward,
             "3_energy": 0*energy_reward,
             "4_backwards": backwards_penalty,

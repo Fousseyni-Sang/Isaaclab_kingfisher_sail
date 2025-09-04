@@ -51,6 +51,7 @@ class AnymalCEnv(DirectRLEnv):
         self._base_id, _ = self._contact_sensor.find_bodies("base")
         self._feet_ids, _ = self._contact_sensor.find_bodies(".*FOOT")
         self._undesired_contact_body_ids, _ = self._contact_sensor.find_bodies(".*THIGH")
+        self.energy_context = torch.zeros(self.num_envs, device=self.device)
 
     def _setup_scene(self):
         self._robot = Articulation(self.cfg.robot)
@@ -85,6 +86,7 @@ class AnymalCEnv(DirectRLEnv):
             height_data = (
                 self._height_scanner.data.pos_w[:, 2].unsqueeze(1) - self._height_scanner.data.ray_hits_w[..., 2] - 0.5
             ).clip(-1.0, 1.0)
+        
         obs = torch.cat(
             [
                 tensor
@@ -95,8 +97,9 @@ class AnymalCEnv(DirectRLEnv):
                     self._commands,
                     self._robot.data.joint_pos - self._robot.data.default_joint_pos,
                     self._robot.data.joint_vel,
-                    height_data,
                     self._actions,
+                    height_data,
+                    self.energy_context.unsqueeze(1),
                 )
                 if tensor is not None
             ],
@@ -111,6 +114,10 @@ class AnymalCEnv(DirectRLEnv):
             torch.square(self._commands[:, :2] - self._robot.data.root_com_lin_vel_b[:, :2]), dim=1
         )
         lin_vel_error_mapped = torch.exp(-lin_vel_error / 0.25)
+        backwards_penalty = torch.zeros(self.num_envs, device=self.device)
+        root_lin_vel_b_x = self._robot.data.root_com_lin_vel_b[:, 0]
+        backwards_penalty[root_lin_vel_b_x < 0.0] = -0.5
+        forward_vel = backwards_penalty #self._robot.data.root_com_lin_vel_b[:, 0]
         # yaw rate tracking
         yaw_rate_error = torch.square(self._commands[:, 2] - self._robot.data.root_com_ang_vel_b[:, 2])
         yaw_rate_error_mapped = torch.exp(-yaw_rate_error / 0.25)
@@ -140,7 +147,7 @@ class AnymalCEnv(DirectRLEnv):
         flat_orientation = torch.sum(torch.square(self._robot.data.projected_gravity_b[:, :2]), dim=1)
 
         rewards = {
-            "track_lin_vel_xy_exp": lin_vel_error_mapped * self.cfg.lin_vel_reward_scale * self.step_dt,
+            "track_lin_vel_xy_exp": forward_vel * self.cfg.lin_vel_reward_scale * self.step_dt,
             "track_ang_vel_z_exp": yaw_rate_error_mapped * self.cfg.yaw_rate_reward_scale * self.step_dt,
             "lin_vel_z_l2": z_vel_error * self.cfg.z_vel_reward_scale * self.step_dt,
             "ang_vel_xy_l2": ang_vel_error * self.cfg.ang_vel_reward_scale * self.step_dt,
@@ -155,6 +162,12 @@ class AnymalCEnv(DirectRLEnv):
         # Logging
         for key, value in rewards.items():
             self._episode_sums[key] += value
+
+        context_sampling_rate = self.max_episode_length//3
+        self.energy_context = torch.where(self.episode_length_buf%context_sampling_rate==0,
+                        torch.zeros_like(self.energy_context).uniform_(0, 1), self.energy_context)
+        if torch.any(self.episode_length_buf%context_sampling_rate==0):
+            print("New context vector sampled:", self.energy_context[ self.episode_length_buf%context_sampling_rate==0])
         return reward
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:

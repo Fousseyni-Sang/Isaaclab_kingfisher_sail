@@ -1,10 +1,6 @@
 params:
   seed: 42
 
-  # environment wrapper clipping
-  env:
-    clip_actions: 1.0
-
   algo:
     name: a2c_continuous
 
@@ -26,7 +22,7 @@ params:
           val: 0
         fixed_sigma: True
     mlp:
-      units: [64, 64]
+      units: [128, 128, 128]
       activation: elu
       d2rl: False
 
@@ -39,7 +35,7 @@ params:
   load_path: '' # path to the checkpoint to load
 
   config:
-    name: kingfisher_direct
+    name: bipedal_walker
     env_name: rlgpu
     device: 'cuda:0'
     device_name: 'cuda:0'
@@ -48,18 +44,18 @@ params:
     normalize_input: True
     normalize_value: True
     value_bootstrap: True
-    num_actors: -1  # configured from the script (based on num_envs)
+    num_actors: 128  # configured from the script (based on num_envs)
     reward_shaper:
       scale_value: 0.01
     normalize_advantage: True
     gamma: 0.99
     tau: 0.95
-    learning_rate: 5e-3 #5e-4
+    learning_rate: 5e-4 #5e-4
     lr_schedule: adaptive
     schedule_type: legacy
     kl_threshold: 0.016
-    score_to_win: 20000000
-    max_epochs: 600
+    score_to_win: 300
+    max_epochs: 1200
     save_best_after: 25
     save_frequency: 50
     grad_norm: 1.0
@@ -67,7 +63,7 @@ params:
     truncate_grads: True
     e_clip: 0.2 #0.2
     horizon_length: 48  #96 #180 #48 
-    minibatch_size: 24576  #49152 #184320 #92160 #24576 
+    minibatch_size: 2048  #49152 #184320 #92160 #24576 
     mini_epochs: 5 
     critic_coef: 2
     clip_value: True

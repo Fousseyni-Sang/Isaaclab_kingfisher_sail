@@ -10,7 +10,7 @@ from omni.isaac.lab_tasks.utils.wrappers.rsl_rl import (
 class PointFootPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     runner_type = "OnPolicyRunner"
     num_steps_per_env = 24
-    max_iterations = 3001
+    max_iterations = 2001
     save_interval = 200
     experiment_name = "bipedal_locomotion"
     empirical_normalization = False
@@ -40,7 +40,7 @@ class PointFootPPORunnerCfg(RslRlOnPolicyRunnerCfg):
 class WheelFootPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     runner_type = "OnPolicyRunner"
     num_steps_per_env = 24
-    max_iterations = 3001
+    max_iterations = 2001
     save_interval = 200
     experiment_name = "bipedal_locomotion"
     empirical_normalization = False

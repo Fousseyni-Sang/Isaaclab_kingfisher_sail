@@ -112,7 +112,7 @@ class ActionsCfg:
     joint_pos = mdp.JointPositionActionCfg(
         asset_name="robot",
         joint_names=["abad_L_Joint", "abad_R_Joint", "hip_L_Joint", "hip_R_Joint", "knee_L_Joint", "knee_R_Joint"],
-        scale=0.25,
+        scale=1,
         use_default_offset=True,
     )
 
@@ -147,8 +147,6 @@ class ObservarionsCfg:
         # heights scan
         heights: ObsTerm = MISSING
 
-        # Privileged observation
-        #base_lin_vel = ObsTerm(func=mdp.base_lin_vel)
         robot_joint_torque = ObsTerm(func=mdp.robot_joint_torque)
         robot_joint_acc = ObsTerm(func=mdp.robot_joint_acc)
         robot_feet_contact_force = ObsTerm(
@@ -173,55 +171,7 @@ class ObservarionsCfg:
             self.history_length = 5
             self.flatten_history_dim = True
 
-    @configclass
-    class CriticCfg(ObsGroup):
-        """Observation for critic group"""
-
-        # Policy observation
-
-        base_ang_vel = ObsTerm(func=mdp.base_ang_vel)
-        proj_gravity = ObsTerm(func=mdp.projected_gravity)
-
-        joint_pos = ObsTerm(func=mdp.joint_pos_rel)
-        joint_vel = ObsTerm(func=mdp.joint_vel)
-
-        last_action = ObsTerm(func=mdp.last_action)
-
-        vel_command = ObsTerm(func=mdp.generated_commands, params={"command_name": "base_velocity"})
-
-        gait_phase = ObsTerm(func=mdp.get_gait_phase)
-        gait_command = ObsTerm(func=mdp.get_gait_command, params={"command_name": "gait_command"})
-
-        heights: ObsTerm = MISSING
-        
-        # Privileged observation
-        base_lin_vel = ObsTerm(func=mdp.base_lin_vel)
-        robot_joint_torque = ObsTerm(func=mdp.robot_joint_torque)
-        robot_joint_acc = ObsTerm(func=mdp.robot_joint_acc)
-        robot_feet_contact_force = ObsTerm(
-            func=mdp.robot_feet_contact_force,
-            params={
-                "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*foot_[LR]_Link"),
-            },
-        )
-
-        robot_mass = ObsTerm(func=mdp.robot_mass)
-        robot_inertia = ObsTerm(func=mdp.robot_inertia)
-        robot_joint_stiffness = ObsTerm(func=mdp.robot_joint_stiffness)
-        robot_joint_damping = ObsTerm(func=mdp.robot_joint_damping)
-        robot_pos = ObsTerm(func=mdp.robot_pos)
-        robot_vel = ObsTerm(func=mdp.robot_vel)
-        robot_material_propertirs = ObsTerm(func=mdp.robot_material_properties)
-        robot_base_pose = ObsTerm(func=mdp.robot_base_pose)
-
-        def __post_init__(self):
-            self.enable_corruption = False
-            self.concatenate_terms = True
-            self.history_length = 5
-            self.flatten_history_dim = True
-
     policy: PolicyCfg = PolicyCfg()
-    critic: CriticCfg = CriticCfg()
 
 
 @configclass

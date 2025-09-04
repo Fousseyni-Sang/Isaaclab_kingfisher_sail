@@ -10,28 +10,44 @@ from torch.utils.tensorboard import SummaryWriter
 import glob
 
 
+#============================================== IMPORT FOR ACORD ===============================================#
+
+import torch.nn.functional as F
+import torch.nn as nn
+import torch.optim as optim
+from torch.distributions.normal import Normal
+import os
+import torch
+import matplotlib.pyplot as plt
+import time
+from torch.utils.tensorboard import SummaryWriter
+import glob
+
+#============================================== DISCRIMINATOR FOR ACORD ===============================================#
 class ReplayBuffer:
     def __init__(self, num_envs, max_size, state_shape, context_shape, device="cpu"):
         self.mem_size = max_size
         self.mem_cntr = 0
         self.device = device
 
+        
         # State and context memory
         self.state_memory = torch.zeros(
-            (num_envs, self.mem_size, state_shape),
+            (self.mem_size, num_envs, state_shape),
             dtype=torch.float32,
             device=self.device
         )
         self.context_memory = torch.zeros(
-            (num_envs, self.mem_size, context_shape),
+            (self.mem_size, num_envs, context_shape),
             dtype=torch.float32,
             device=self.device
         )
-
+        #print(f"num_envs: {num_envs}, state_shape: {self.state_memory.shape}, context_shape: {self.context_memory.shape}")
     def store_transition(self, state, context):
         index = self.mem_cntr % self.mem_size
-        self.state_memory[:, index] = state
-        self.context_memory[:, index] = context
+        #print(f"state shape: {state.shape}, context shape: {context.shape}, memory: {self.state_memory.shape}")
+        self.state_memory[index, :, :] = state
+        self.context_memory[index, :, :] = context
         self.mem_cntr += 1
 
     def sample_buffer(self, num_envs, batch_size):
@@ -46,32 +62,86 @@ class ReplayBuffer:
         return flat_states[batch], flat_contexts[batch]
 
 
-def find_latest_checkpoint_dir(base_root):
-    """
-    Finds the latest checkpoint file under logs/acord/discr/{time_dir}/nn/
-    Returns the directory containing the latest checkpoint file.
-    """
-    candidate_files = []
-    for time_dir in os.listdir(base_root):
-        nn_dir = os.path.join(base_root, time_dir, "nn")
-        if not os.path.isdir(nn_dir):
-            continue
-        for checkpoint_file in os.listdir(nn_dir):
-            full_path = os.path.join(nn_dir, checkpoint_file)
-            if os.path.isfile(full_path):
-                candidate_files.append(full_path)
+from torchsort import soft_rank
 
-    if not candidate_files:
-        raise FileNotFoundError(f"No checkpoint files found under {base_root}/**/nn/")
+def spearman_corr(x: torch.Tensor, y: torch.Tensor, regularization_strength: float = 1.0):
+    """
+    Compute differentiable Spearman correlation between x and y via soft ranks.
+    
+    Args:
+        x, y: tensors of shape [N]
+        regularization_strength: parameter for soft ranking smoothness
 
-    # Find the latest checkpoint file by modification time
-    latest_file = max(candidate_files, key=os.path.getmtime)
-    # Return the directory containing the latest checkpoint file
-    return os.path.dirname(latest_file)
+    Returns:
+        Scalar tensor: approximate Spearman correlation in [-1, 1]
+    """
+    # Flatten to [1, N]
+    x = x.view(1, -1).cpu()
+    y = y.view(1, -1).cpu()
+
+    # Compute soft ranks (shape [N])
+    x_rank = soft_rank(x, regularization_strength=regularization_strength).squeeze(0)
+    y_rank = soft_rank(y, regularization_strength=regularization_strength).squeeze(0)
+
+    # Center ranks
+    x_r = x_rank - x_rank.mean()
+    y_r = y_rank - y_rank.mean()
+
+    # Pearson on ranks
+    cov = (x_r * y_r).sum()
+    corr = cov / (torch.norm(x_r, 2) * torch.norm(y_r, 2) + 1e-8)
+    return corr
+
+
+def soft_spearman(x, y, tau=1.0):
+    """
+    Differentiable Spearman correlation using softmax-based ranking.
+    tau: temperature (lower -> sharper ranks, less smooth)
+    """
+    def soft_rank(vec):
+        diffs = vec.unsqueeze(1) - vec.unsqueeze(0)  # [N, N]
+        P = torch.sigmoid(-diffs / tau)              # pairwise comparison probs
+        rank = P.sum(dim=1) + 0.5                    # expected rank
+        return rank
+
+    x_rank = soft_rank(x.view(-1))
+    y_rank = soft_rank(y.view(-1))
+
+    x_rank -= x_rank.mean()
+    y_rank -= y_rank.mean()
+
+    corr = (x_rank * y_rank).sum() / (
+        torch.norm(x_rank, 2) * torch.norm(y_rank, 2) + 1e-8
+    )
+    return corr
+
+
+def pearson_corr(x: torch.Tensor, y: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
+    """
+    Computes the Pearson correlation coefficient between two 1D tensors.
+    
+    Args:
+        x: tensor of shape [N]
+        y: tensor of shape [N]
+        eps: small value to avoid divide-by-zero
+    
+    Returns:
+        scalar tensor: Pearson correlation in [-1, 1]
+    """
+   
+    x_centered = x - x.mean()
+    y_centered = y - y.mean()
+    
+    cov = (x_centered * y_centered).sum()
+    stds = torch.sqrt((x_centered**2).sum() * (y_centered**2).sum()) + eps
+    
+    return cov / stds
 
 class DiscriminatorNetwork(nn.Module):
-    def __init__(self, lr, state_dim, context_dim, fc1_dims=256, fc2_dims=256, num_envs=1024, mem_size=1000000,
-                name='discriminator', chkpt_dir='logs/acord/discr', device='cpu'):
+    def __init__(self, lr, state_dim, context_dim,
+                 fc1_dims=256, fc2_dims=256,
+                 num_envs=1024, mem_size=5000,
+                 name='discriminator', chkpt_dir='logs/acord/discr', device='cpu'):
         super().__init__()
         self.state_dim = state_dim
         self.context_dim = context_dim
@@ -79,14 +149,13 @@ class DiscriminatorNetwork(nn.Module):
         self.fc2_dims = fc2_dims
         self.lr = lr
         self.name = name
-        checkpoint_dir = chkpt_dir
         #self.checkpoint_file = os.path.join(self.checkpoint_dir, name + '_sac')
         self.reparam_noise = 1e-6
+        checkpoint_dir = chkpt_dir
 
         # Network layers
         self.fc1 = nn.Linear(self.state_dim, self.fc1_dims)
         self.fc2 = nn.Linear(self.fc1_dims, self.fc2_dims)
-
         self.mu = nn.Linear(self.fc2_dims, self.context_dim)
         self.sigma = nn.Linear(self.fc2_dims, self.context_dim)
 
@@ -99,6 +168,9 @@ class DiscriminatorNetwork(nn.Module):
         self.device = device
         self.to(self.device)
         
+        self.loss = torch.zeros(1, device=self.device)
+        self.losses = []
+        self.rewards = torch.zeros(1, device=self.device)
 
         # Replay buffer for state-context pairs
         self.memory = ReplayBuffer(num_envs, mem_size, self.state_dim, self.context_dim, device)
@@ -116,9 +188,9 @@ class DiscriminatorNetwork(nn.Module):
 
         self.writer = None
 
-    def save(self, step_marker):
-        os.makedirs(self.checkpoint_dir, exist_ok=True)
-        torch.save(self.state_dict(), f"{self.checkpoint_dir}/discr_{step_marker}.pt")
+    def save(self, checkpoint_dir, step_marker):
+        os.makedirs(checkpoint_dir, exist_ok=True)
+        torch.save(self.state_dict(), f"{checkpoint_dir}/discr_rew_{step_marker}_loss_{self.loss}.pt")
         return
 
     def init_writer(self):
@@ -136,7 +208,6 @@ class DiscriminatorNetwork(nn.Module):
         If path_checkpoint is None, finds the latest time_dir under logs/acord/discr/*/nn/
         and loads the latest discr_*.pt inside that.
         """
-
         if path_checkpoint is not None:
             if os.path.isfile(path_checkpoint):
                 checkpoint_path = path_checkpoint
@@ -180,15 +251,13 @@ class DiscriminatorNetwork(nn.Module):
         x = self.dropoutmu(x)
         mu = torch.sigmoid(self.mu(x))
         sigma = torch.sigmoid(self.sigma(x))
-        sigma = torch.clamp(sigma, min=0.01, max=1)
+        sigma = torch.clamp(sigma, min=0.0001, max=1)
+
         return mu, sigma
 
     def predict(self, state, reparameterize=True, requires_grad=True):
         if requires_grad:
             mu, sigma = self.forward(state)
-            if mu.requires_grad==False: mu.requires_grad = True
-            if sigma.requires_grad==False: sigma.requires_grad = True
-            if state.requires_grad==False: state.requires_grad = True
             
             dist = Normal(mu, sigma)
             samples = dist.rsample() if reparameterize else dist.sample()
@@ -216,10 +285,20 @@ class DiscriminatorNetwork(nn.Module):
         #states, contexts = self.memory.sample_buffer(self.num_envs, self.batch_size)
         predictions, log_probs, dist = self.predict(state_batch)
         #if predictions.requires_grad == False: predictions.requires_grad = True
-
+        
         self.optimizer.zero_grad()
-        loss = loss = (F.mse_loss(predictions, context_batch) * 10 + 1 / torch.abs(torch.min(dist.loc) - torch.max(dist.loc))) * 10
+        cos_similarity = F.cosine_similarity(state_batch.flatten(), context_batch.flatten(), dim=0)
+        #cos_similarity = F.cosine_similarity(state_batch, predictions).mean()
+        
+        pear_corr = pearson_corr(state_batch, predictions)
+        spear_corr = spearman_corr(state_batch, predictions)
 
+        mse = F.mse_loss(predictions, context_batch)
+        spread = 1 / torch.abs(torch.min(dist.loc) - torch.max(dist.loc))
+        loss = 100*(1-spear_corr) + ( 100*mse) + 0.05*spread
+        #loss = (mse * 10 + spread) * 10 + 0*(1-cos_similarity)
+
+        #print(f"cosine similarity: {cos_similarity} \tloss: {mse*10} \tspread: {spread}")
         #loss = ((F.mse_loss(predictions, context_batch))*10 + (1 / torch.abs((min(dist.loc) - max(dist.loc))))) * 10
         
         #disc1_loss = (F.mse_loss(disc1_predictions, limit_factor1)*10+ (1/torch.abs((min(dist1.loc)-max(dist1.loc)))))*10
@@ -233,87 +312,8 @@ class DiscriminatorNetwork(nn.Module):
         self.loss = loss
         return loss.item(), torch.mean(log_probs).item()
 
-class GeneratorNetwork(nn.Module):
-    def __init__(self, lr, input_dim, output_dim, fc1_dims=256, fc2_dims=256, num_envs=1024, mem_size=1000000,
-                name='generator', chkpt_dir='logs/acord/gener', device='cpu'):
-        super().__init__()
+#========================================= END DISCRIMINATOR ===========================================================#
 
-        self.fc1 = nn.Linear(input_dim, fc1_dims)
-        self.fc2 = nn.Linear(fc2_dims, fc2_dims)
-        self.mu = nn.Linear(fc2_dims, output_dim)
-        self.sigma = nn.Linear(fc2_dims, output_dim)
-
-        self.optimizer = optim.Adam(self.parameters(), lr=lr)
-        self.device = device
-        checkpoint_dir = chkpt_dir
-        self.to(self.device)
-
-        self.memory = ReplayBuffer(num_envs, mem_size, input_dim, output_dim, device)
-        self.batch_size = 256
-        self.num_envs = num_envs
-
-         # Logging
-        time_str = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
-
-        self.run_name_dir = f"{checkpoint_dir}/{time_str}"
-        self.checkpoint_dir = f"{self.run_name_dir}/nn"
-        self.summary_dir = f"{self.run_name_dir}/summaries"
-
-        self.saving_frequency = 10
-
-        self.writer = None
-        self.acord_reward_scale = 0.05
-
-    def forward(self, x):
-        
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        mu = F.tanh(self.mu(x))
-        sigma = F.sigmoid(self.sigma(x))
-
-        return mu, sigma
-    
-    def get_energy(self, actions):
-        return torch.sum(actions**2, dim=1, keepdim=True)
-    
-    def predict(self, state, reparameterize=True, requires_grad=True):
-        if requires_grad:
-            mu, sigma = self.forward(state)
-            if mu.requires_grad==False: mu.requires_grad = True
-            if sigma.requires_grad==False: sigma.requires_grad = True
-            if state.requires_grad==False: state.requires_grad = True
-            
-            dist = Normal(mu, sigma)
-            samples = dist.rsample() if reparameterize else dist.sample()
-            
-            samples = torch.clamp(samples, 0.0001, 0.9999)
-            log_probs = dist.log_prob(samples)
-            
-            log_probs -= torch.log(1 - samples.pow(2) + self.reparam_noise)
-            
-            return samples, log_probs, dist
-        else:
-            with torch.no_grad():
-                mu, sigma = self.forward(state)
-                dist = Normal(mu, sigma)
-                samples = dist.rsample() if reparameterize else dist.sample()
-                samples = torch.clamp(samples, 0.0001, 0.9999)
-                log_probs = dist.log_prob(samples)
-                log_probs -= torch.log(1 - samples.pow(2) + self.reparam_noise)
-                return samples, log_probs, dist
-            
-            
-    def learn(self, context_batch, predicted_context_batch):
-        
-        predic_error_energy = torch.clamp(torch.abs(predicted_context_batch-context_batch.reshape(-1))**2, min=0.000001, max=0.99999)
-        reward_acord = self.acord_reward_scale * (- torch.log(predic_error_energy))
-
-        self.optimizer.zero_grad()
-        loss = -reward_acord
-        loss.backward()
-        self.optimizer.step()
-
-        return loss.item()
 
 if __name__ == "__main__":
     num_envs = 1024
@@ -321,12 +321,10 @@ if __name__ == "__main__":
     device = "cpu"
     discriminator = DiscriminatorNetwork(lr=0.0001, state_dim=1, context_dim=1, num_envs=num_envs, mem_size=mem_size, device=device)
 
-    generator = GeneratorNetwork(lr=0.0001, input_dim=2, output_dim=2, num_envs=num_envs, mem_size=mem_size, device=device)
     torch.manual_seed(0)
 
     # Fill buffer with simple relation: context = state * 0.5 + noise
     actions = torch.zeros((num_envs, 2), device=device)
-    energy = generator.get_energy(actions)
     
     for _ in range(mem_size):
         state = 2*torch.rand((num_envs, 1), device=discriminator.device)
@@ -335,10 +333,10 @@ if __name__ == "__main__":
 
     losses = []
     state_batch, context_batch = discriminator.memory.sample_buffer(num_envs, discriminator.batch_size)
-    """for _ in range(1000):  # multiple training steps
+    for _ in range(1000):  # multiple training steps
         loss, _ = discriminator.learn(state_batch, context_batch)
         if loss is not None:
-            losses.append(loss)"""
+            losses.append(loss)
 
     discriminator.load_checkpoint()
 

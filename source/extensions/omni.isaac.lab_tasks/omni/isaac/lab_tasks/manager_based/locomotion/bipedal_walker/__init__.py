@@ -96,6 +96,7 @@ gym.register(
     kwargs={
         "env_cfg_entry_point": pointfoot_env_cfg.PFBlindFlatEnvCfg,
         "rsl_rl_cfg_entry_point": pf_mlp_blind_flat_runner_cfg,
+        "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
     },
 )
 
@@ -106,6 +107,7 @@ gym.register(
     kwargs={
         "env_cfg_entry_point": pointfoot_env_cfg.PFBlindFlatEnvCfg_PLAY,
         "rsl_rl_cfg_entry_point": pf_mlp_blind_flat_runner_cfg,
+        "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
     },
 )
 
@@ -121,6 +123,7 @@ gym.register(
     kwargs={
         "env_cfg_entry_point": pointfoot_env_cfg.PFBlindRoughEnvCfg,
         "rsl_rl_cfg_entry_point": pf_blind_rough_runner_cfg,
+        "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
     },
 )
 
@@ -131,6 +134,7 @@ gym.register(
     kwargs={
         "env_cfg_entry_point": pointfoot_env_cfg.PFBlindRoughEnvCfg_PLAY,
         "rsl_rl_cfg_entry_point": pf_blind_rough_runner_cfg,
+        "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
     },
 )
 
