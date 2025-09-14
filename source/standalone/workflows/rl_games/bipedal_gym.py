@@ -58,8 +58,8 @@ config = {
             "tau": 0.95,
             "lr_schedule": "constant",
             "kl_threshold": 0.02,
-            "score_to_win": 1000,   # stop when solved
-            "max_epochs": 2000,
+            "score_to_win": 20000,   # stop when solved
+            "max_epochs": 1500,
             "num_actors": 128,
             "horizon_length": 48,
             "minibatch_size": 2048,

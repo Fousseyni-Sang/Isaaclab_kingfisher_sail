@@ -138,7 +138,7 @@ for ep in df_acord["episode"].unique()[:num_episodes]:  # Limit to first 3 episo
     #context = df_goals[(df_goals["episode"] == ep) & (df_goals["env_id"] == env_id)]
     for env_id in ep_acord["env_id"].unique():
         env_traj = ep_acord[ep_acord["env_id"] == env_id]
-        plt.plot(np.arange(len(ep_acord["mean"][:ep_length])), ep_acord["mean"][:ep_length], linewidth=1)
+        plt.plot(np.arange(len(ep_acord["mean"][:ep_length])), ep_acord["mean"][:ep_length])
         #plt.scatter(context["episode"], context["energy_context"], marker="x")
 
 plt.title("mean predicted context")
@@ -275,7 +275,7 @@ for ep in df_other_metrics["episode"].unique()[:num_episodes]:
         energy = env_other_metrics["energy"].values[:ep_length]
         context = env_context["actual_context"].values[:ep_length]
 
-        plt.scatter(energy, context, label="energy")
+        plt.scatter(energy, context, label="energy", alpha=0.1)
         #plt.plot(np.arange(len(context)), 2*context, label="context")
 
 plt.xlabel("time")
@@ -684,28 +684,6 @@ for ep_idx in range(len(distance_all)):
     plt.legend()
     plt.tight_layout()
 
-plt.savefig(os.path.join(latest_dir, "distance.png")) 
-
-
-"""plt.figure()
-plt.subplot(2, 1, 1)
-# Bearing
-plt.plot(np.arange(len(bearing_mean)), bearing_mean, label="Bearing Mean", color='magenta')
-plt.fill_between(np.arange(len(bearing_mean)), bearing_mean - bearing_std, bearing_mean + bearing_std, alpha=0.3, color='magenta', label="Bearing ±1 std")
-plt.title("Bearing (Mean ± Std)")
-plt.xlabel("Timestep")
-plt.ylabel("Value")
-plt.legend()    
-
-plt.subplot(2, 1, 2)
-# Distance
-plt.plot(np.arange(len(distance_mean)), distance_mean, label="Distance Mean", color='teal')
-plt.fill_between(np.arange(len(distance_mean)), distance_mean - distance_std, distance_mean + distance_std, alpha=0.3, color='teal', label="Distance ±1 std")
-plt.title("Distance (Mean ± Std)")
-plt.xlabel("Timestep")
-plt.ylabel("Value")
-plt.legend()
-plt.tight_layout()
-plt.savefig(os.path.join(latest_dir, "bearing_distance_std.png"))  """ 
+plt.savefig(os.path.join(latest_dir, "distance.png"))  
 
 

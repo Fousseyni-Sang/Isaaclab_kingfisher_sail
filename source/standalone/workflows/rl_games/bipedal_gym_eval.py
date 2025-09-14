@@ -91,14 +91,16 @@ config = {
 }
 
 
-def evaluate(agent_path, episodes=5, render=False, record_video=False):
+
+def evaluate(agent_path:str, episodes=5, render=False, record_video=False):
     env = gym.make("BipedalWalker-v3", render_mode="rgb_array" if args_cli.video else None)
     # optional video recording
-    
+    video_dir = agent_path.split('/')
+    video_dir = "/".join(video_dir[0:2])
     if args_cli.video:
         print(f"========== VIDEO: {args_cli.video}")
         video_kwargs = {
-            "video_folder": os.path.join("bipedal_walker_04-13-53-32", "videos", "play"),
+            "video_folder": os.path.join(video_dir, "videos", "play"),
             "step_trigger": lambda step: step == 0,
             "video_length": args_cli.video_length,
             "disable_logger": True,
@@ -107,7 +109,7 @@ def evaluate(agent_path, episodes=5, render=False, record_video=False):
         #print_dict(video_kwargs, nesting=4)
         env = gym.wrappers.RecordVideo(env, **video_kwargs)
 
-    env = ContextWrapper(env, context_dim=2, resample_every=50, low=-1.0, high=1.0, device="cuda:0")
+    env = ContextWrapper(env)
 
     config['params']['config']['player']['render'] = True if render else False
     config['params']['config']['player']['games_num'] = 1
@@ -118,7 +120,7 @@ def evaluate(agent_path, episodes=5, render=False, record_video=False):
 
     # ---- Evaluation Loop ----
     episode_cntr = 0
-    max_episode_length = 1600
+    max_episode_length = 3000
     num_episodes = args_cli.num_episode
     max_episod_length = max_episode_length
 
@@ -126,15 +128,20 @@ def evaluate(agent_path, episodes=5, render=False, record_video=False):
     acord_prediction_logs = torch.zeros((max_episod_length, args_cli.num_envs, 3), device=env.device)
     vel_context_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.device)
 
-    angle_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.device)
-    angle_context_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.device)
+    hull_angle_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.device)
+    hull_angle_context_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.device)
+
+    joint_pos_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.device)
+    joint_pos_context_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.device)
 
     lin_vel_x_list = []
     acord_prediction_list = []
     vel_context_list = []
     episode_lengths_list = []
-    angle_list = []
-    angle_context_list = []
+    hull_angle_list = []
+    hull_angle_context_list = []
+    joint_pos_list = []
+    joint_pos_context_list = []
 
     """agent.env = env
     agent.run()"""
@@ -142,6 +149,7 @@ def evaluate(agent_path, episodes=5, render=False, record_video=False):
     
     for ep in range(args_cli.num_episode):
         obs, info = env.reset()
+        #print(f"=============>oberservation: {obs}")
         done = False
         total_r = 0
         it = 0
@@ -149,44 +157,56 @@ def evaluate(agent_path, episodes=5, render=False, record_video=False):
             #obs_v = torch.tensor(obs, dtype=torch.float32).unsqueeze(0)
             #print(f"obs_v: {obs_v.device}")
             with torch.no_grad():
+
                 obs = agent.obs_to_torch(obs)
                 act = agent.get_action(obs, is_deterministic=agent.is_deterministic)
             obs, r, done, _, _ = env.step(act.cpu().numpy())
             it+=1
 
             vel_context = obs[-2]
-            angle_context = obs[-1]
+            hull_angle_context = obs[-1]
+            joint_pos_context = obs[-3]
 
             total_r += r
             if render:
                 env.render()
 
+            if it>=max_episode_length-1:
+                done=True
+
+            lin_vel_x_logs[it] = obs[2].clone().float()
+            vel_context_logs[it] = vel_context.clone().float()
+            hull_angle_logs[it] = obs[0].clone().float()
+            hull_angle_context_logs[it] = hull_angle_context.clone().float()
+            joint_pos_logs[it] = obs[4].clone().float()
+            joint_pos_context_logs[it] = joint_pos_context.clone().float()
+
         rewards.append(total_r)
         print(f"Episode {ep+1}: {total_r:.2f}")
         print(f"total_iter: {it}")
 
-        lin_vel_x_logs[it] = obs[2].clone().float()
-        vel_context_logs[it] = vel_context.clone().float()
-        angle_logs[it] = obs[0].clone().float()
-        angle_context_logs[it] = angle_context.clone().float()
+        
 
         episode_lengths_list.append(it)
 
         lin_vel_x_list.append(lin_vel_x_logs[:-1].clone())
         vel_context_list.append(vel_context_logs[:-1].clone())
-        angle_list.append(angle_logs[:-1].clone())
-        angle_context_list.append(angle_context_logs[:-1].clone())
+        hull_angle_list.append(hull_angle_logs[:-1].clone())
+        hull_angle_context_list.append(hull_angle_context_logs[:-1].clone())
+        joint_pos_list.append(joint_pos_logs[:-1].clone())
+        joint_pos_context_list.append(joint_pos_context_logs[:-1].clone())
 
     env.close()
-    print(f"Average reward over {episodes} episodes: {np.mean(rewards):.2f}")
+    print(f"Average reward over {args_cli.num_episode} episodes: {np.mean(rewards):.2f}")
 
-    return lin_vel_x_list, vel_context_list, episode_lengths_list, angle_list, angle_context_list
+    return lin_vel_x_list, vel_context_list, episode_lengths_list, hull_angle_list, hull_angle_context_list, \
+        joint_pos_list, joint_pos_context_list
 
 # Example usage:
 if __name__ == "__main__":
     # run the main execution
-    lin_vel_x_list, vel_context_list, episode_lengths_list, angle_list, angle_context_list = \
-    evaluate("runs/bipedal_walker_04-13-53-32/nn/last_bipedal_walker_ep_300_rew_269.9858.pth",
+    lin_vel_x_list, vel_context_list, episode_lengths_list, hull_angle_list, hull_angle_context_list, joint_pos_list, \
+    joint_pos_context_list = evaluate("runs/bipedal_walker_07-02-54-25/nn/last_bipedal_walker_ep_900_rew_281.6036.pth",
          episodes=10, record_video=True, render=True)
 
     import pandas as pd
@@ -211,8 +231,10 @@ if __name__ == "__main__":
                     "env_id": env_id,
                     "lin_vel_x": lin_vel_x[t, env_id].item(),
                     "vel_context": context[t, env_id].item(),
-                    "angle": angle_list[ep_idx][t, env_id].item(),
-                    "angle_context": angle_context_list[ep_idx][t, env_id].item()
+                    "hull_angle": hull_angle_list[ep_idx][t, env_id].item(),
+                    "hull_angle_context": hull_angle_context_list[ep_idx][t, env_id].item(),
+                    "joint_pos": joint_pos_list[ep_idx][t, env_id].item(),
+                    "joint_pos_context": joint_pos_context_list[ep_idx][t, env_id].item(),
                 })
     pd.DataFrame(vel_context).to_csv(os.path.join(output_dir, "acord.csv"), index=False)
     

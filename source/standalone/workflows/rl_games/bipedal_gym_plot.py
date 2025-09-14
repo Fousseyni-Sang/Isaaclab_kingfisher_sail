@@ -37,98 +37,61 @@ num_episodes = len(ep_length_list)
 
 print(f"episode_length: {ep_length_list}")
 # --- Plot Speed vs Context ---
+
+def plot_state_vs(name:str, name_context:str="", vs_context=False):
+    for ep in df_vel_context["episode"].unique()[:num_episodes]:  
+        ep_length = ep_length_list[ep]
+        ep_vel_context = df_vel_context[df_vel_context["episode"] == ep]
+        for env_id in ep_vel_context["env_id"].unique():
+            env_vel_context = ep_vel_context[ep_vel_context["env_id"] == env_id]
+            if vs_context:
+                plt.scatter(env_vel_context[f"{name}"], env_vel_context[f"{name_context}"], alpha=0.1)
+            else:
+                plt.plot(np.arange(len(env_vel_context[f"{name}"])), env_vel_context[f"{name}"])
+
+    plt.title(f"{name} vs {name_context}") if vs_context else plt.title(f"{name}")
+    plt.xlabel(f"{name if vs_context else 'time_step'}")
+    plt.ylabel(f"{name_context}")
+    plt.grid()  
+    plt.legend(loc='upper right')
+
 plt.figure()
-plt.subplot(2, 1, 1)
-for ep in df_vel_context["episode"].unique()[:num_episodes]:  
-    ep_length = ep_length_list[ep]
-    ep_vel_context = df_vel_context[df_vel_context["episode"] == ep]
-    for env_id in ep_vel_context["env_id"].unique():
-        env_vel_context = ep_vel_context[ep_vel_context["env_id"] == env_id]
-        plt.scatter(env_vel_context["lin_vel_x"], env_vel_context["vel_context"], alpha=0.1)
+plt.subplot(2, 2, 1)
+plot_state_vs("lin_vel_x", "vel_context", True)
 
-plt.title("Velocity vs Context Trajectories")
-plt.xlabel("lin_vel_x")
-plt.ylabel("context ")
-plt.grid()  
-plt.legend(loc='upper right')
+plt.subplot(2, 2, 2)
+plot_state_vs("hull_angle", "hull_angle_context", True)
 
-plt.subplot(2, 1, 2)
-for ep in df_vel_context["episode"].unique()[:num_episodes]:  
-    ep_length = ep_length_list[ep]
-    ep_vel_context = df_vel_context[df_vel_context["episode"] == ep]
-    for env_id in ep_vel_context["env_id"].unique():
-        env_vel_context = ep_vel_context[ep_vel_context["env_id"] == env_id]
-        plt.scatter(env_vel_context["angle"], env_vel_context["angle_context"], alpha=0.1)
-
-plt.title("Velocity vs Context Trajectories")
-plt.xlabel("angle")
-plt.ylabel("context ")
-plt.grid()  
-plt.legend(loc='upper right')
+plt.subplot(2, 2, 3)
+plot_state_vs("joint_pos", "joint_pos_context", True)
 plt.savefig(os.path.join(latest_dir, "states_vs_contexts.png"))
 
 # --- Plot Speed ---
 plt.figure()
 plt.subplot(2, 1, 1)
-for ep in df_vel_context["episode"].unique()[:num_episodes]:  
-    ep_length = ep_length_list[ep]
-    ep_vel_context = df_vel_context[df_vel_context["episode"] == ep]
-    for env_id in ep_vel_context["env_id"].unique():
-        env_vel_context = ep_vel_context[ep_vel_context["env_id"] == env_id]
-        plt.plot(np.arange(len(env_vel_context["lin_vel_x"])), env_vel_context["lin_vel_x"], alpha=0.5)
-
-plt.title("Velocity")
-plt.xlabel("time step")
-plt.ylabel("lin_vel_x") 
-plt.grid()  
-plt.legend(loc='upper right')
+plot_state_vs("lin_vel_x")
 
 # --- Plot context ---
 plt.subplot(2, 1, 2)
-for ep in df_vel_context["episode"].unique()[:num_episodes]:  
-    ep_length = ep_length_list[ep]
-    ep_vel_context = df_vel_context[df_vel_context["episode"] == ep]
-    for env_id in ep_vel_context["env_id"].unique():
-        env_vel_context = ep_vel_context[ep_vel_context["env_id"] == env_id]
-        plt.plot(np.arange(len(env_vel_context["vel_context"])), env_vel_context["vel_context"], alpha=0.5)
-
-plt.title("Context")
-plt.xlabel("time step")
-plt.ylabel("context") 
-plt.grid()  
-plt.legend(loc='upper right')
+plot_state_vs("vel_context")
 plt.savefig(os.path.join(latest_dir, "vel_and_context.png"))
 
-# --- Plot Angle ---
+# --- Plot hull_Angle ---
 plt.figure()
 plt.subplot(2, 1, 1)
-for ep in df_vel_context["episode"].unique()[:num_episodes]:  
-    ep_length = ep_length_list[ep]
-    ep_vel_context = df_vel_context[df_vel_context["episode"] == ep]
-    for env_id in ep_vel_context["env_id"].unique():
-        env_vel_context = ep_vel_context[ep_vel_context["env_id"] == env_id]
-        plt.plot(np.arange(len(env_vel_context["angle"])), env_vel_context["angle"], alpha=0.5)
-
-plt.title("Angle")
-plt.xlabel("time step")
-plt.ylabel("angle") 
-plt.grid()  
-plt.legend(loc='upper right')
+plot_state_vs("hull_angle")
 
 # --- Plot context ---
 plt.subplot(2, 1, 2)
-for ep in df_vel_context["episode"].unique()[:num_episodes]:  
-    ep_length = ep_length_list[ep]
-    ep_vel_context = df_vel_context[df_vel_context["episode"] == ep]
-    for env_id in ep_vel_context["env_id"].unique():
-        env_vel_context = ep_vel_context[ep_vel_context["env_id"] == env_id]
-        plt.plot(np.arange(len(env_vel_context["angle_context"])), env_vel_context["angle_context"], alpha=0.5)
-
-plt.title("Context")
-plt.xlabel("time step")
-plt.ylabel("context") 
-plt.grid()  
-plt.legend(loc='upper right')
-plt.savefig(os.path.join(latest_dir, "angle_and_context.png"))
+plot_state_vs("hull_angle_context")
+plt.savefig(os.path.join(latest_dir, "hull_angle_and_context.png"))
         
+# --- Plot joint_pos ---
+plt.figure()
+plt.subplot(2, 1, 1)
+plot_state_vs("joint_pos")
 
+# --- Plot context ---
+plt.subplot(2, 1, 2)
+plot_state_vs("joint_pos_context")
+plt.savefig(os.path.join(latest_dir, "joint_pos_and_context.png"))

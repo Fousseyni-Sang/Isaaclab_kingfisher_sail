@@ -78,10 +78,10 @@ import rclpy
 from ros2_Node import RlAgentPublisher, RewardWeightSubscriber
 #import matplotlib.pyplot as plt
 
-
+log_dir=None
 def main():
     """Play with RL-Games agent."""
-        
+    global log_dir    
     # ---- Initialize ROS2 ----
     rclpy.init()
     ros_node = RlAgentPublisher(args_cli.num_envs)
@@ -331,7 +331,7 @@ def main():
             dones = dones.to(device=trajectories.device)
             step = env.unwrapped.episode_length_buf
             episode_length = step.max().item() + 1
-            if current_step%20==0:
+            if current_step%200==0:
                 #print(f"bearing: {bearing} next_wpt: {env.unwrapped.next_tack_wpt_idx}, goal: {goal_pos}, distance: {env.unwrapped.distance}")
                 print(f"\nforce_aero: {aero_force}\nlift: {lift} lift_coeff: {lift_coeff} \ndrag: {drag} drag_coeff: {drag_coeff}") 
                 print(f"rew_aero: {reward_aero} \nrew_prog: {rew_progress} \ncontext: {energy_context} \npredicted_context: {predicted_context}")
@@ -448,6 +448,9 @@ if __name__ == "__main__":
 
     # Create timestamped subfolder
     timestamp = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+    direct = log_dir.split("/")
+    #directory = ('/'.join(direct[:-3]) + "/acord/" + '/'.join(direct[-2:]))
+    #output_dir = os.path.join(f"eval_logs/{direct[-3]}/{direct[-2]}", direct[-1])
     output_dir = os.path.join("eval_logs/rl_games", timestamp)
     output_dir = output_dir + f"_{args_cli.wind_direction}_{args_cli.wind_speed}"
     os.makedirs(output_dir, exist_ok=True)
