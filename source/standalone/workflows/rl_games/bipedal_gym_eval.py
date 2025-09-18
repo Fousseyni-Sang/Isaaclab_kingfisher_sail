@@ -13,6 +13,8 @@ parser.add_argument("--video", action="store_true", default=False, help="Record 
 parser.add_argument("--video_length", type=int, default=200, help="Length of the recorded video (in steps).")
 parser.add_argument("--num_episode", type=int, default=2, help="number of episodes for evaluation.")
 parser.add_argument("--num_envs", type=int, default=1, help="Number of environments to simulate.")
+parser.add_argument("--seed", type=int, default=42, help="Seed used for the environment")
+parser.add_argument("--path", type=str, default=None, help="path to checkpoint")
 
 args_cli = parser.parse_args()
 # always enable cameras to record video
@@ -23,7 +25,7 @@ if args_cli.video:
 # Training config for rl_games PPO
 config = {
     "params": {
-        "seed": 42,
+        "seed": args_cli.seed,
         "algo": {
             "name": "a2c_continuous"
         },
@@ -163,8 +165,8 @@ def evaluate(agent_path:str, episodes=5, render=False, record_video=False):
             obs, r, done, _, _ = env.step(act.cpu().numpy())
             it+=1
 
-            vel_context = obs[-2]
             hull_angle_context = obs[-1]
+            vel_context = obs[-2]
             joint_pos_context = obs[-3]
 
             total_r += r
@@ -206,7 +208,7 @@ def evaluate(agent_path:str, episodes=5, render=False, record_video=False):
 if __name__ == "__main__":
     # run the main execution
     lin_vel_x_list, vel_context_list, episode_lengths_list, hull_angle_list, hull_angle_context_list, joint_pos_list, \
-    joint_pos_context_list = evaluate("runs/bipedal_walker_07-02-54-25/nn/last_bipedal_walker_ep_900_rew_281.6036.pth",
+    joint_pos_context_list = evaluate(f"{args_cli.path}",
          episodes=10, record_video=True, render=True)
 
     import pandas as pd

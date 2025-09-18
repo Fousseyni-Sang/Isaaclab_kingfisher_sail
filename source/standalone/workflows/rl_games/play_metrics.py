@@ -171,7 +171,7 @@ def main():
     # reset environment
     env.unwrapped.is_Training = False
     env.unwrapped.discr_checkpoint = checkpoint_name_acord
-    env.unwrapped.discriminator_energy.load_checkpoint(checkpoint_name_acord)
+    #env.unwrapped.discriminator_energy.load_checkpoint(checkpoint_name_acord)
     env.unwrapped.discriminator_energy.eval()
     if args_cli.episode_length is not None:
         env.unwrapped.cfg.episode_length_s = args_cli.episode_length

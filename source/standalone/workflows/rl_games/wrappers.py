@@ -5,7 +5,7 @@ import numpy as np
 from rl_games.common import env_configurations
 
 class ContextWrapper(gym.Wrapper):
-    def __init__(self, env, context_dim=2, resample_every=50, low=-1.0, high=1.0, device="cuda:0"):
+    def __init__(self, env, context_dim=3, resample_every=300, low=0, high=1.0, device="cuda:0"):
         super().__init__(env)
         self.context_dim = context_dim
         self.resample_every = resample_every
@@ -42,6 +42,7 @@ class ContextWrapper(gym.Wrapper):
         obs, reward, terminated, truncated, info = self.env.step(action)
         self.steps += 1
         if self.steps % self.resample_every == 0:
+            print(f"steps: {self.steps}")
             self._resample_context()
         obs = self._append_context(obs)
         return obs, reward, terminated, truncated, info
@@ -50,6 +51,7 @@ class ContextWrapper(gym.Wrapper):
         self.context = torch.empty(self.context_dim, device=self.device).uniform_(
             self.low, self.high
         )
+        print(f"context: {self.context}") 
 
     def _append_context(self, obs):
         if isinstance(obs, torch.Tensor):
