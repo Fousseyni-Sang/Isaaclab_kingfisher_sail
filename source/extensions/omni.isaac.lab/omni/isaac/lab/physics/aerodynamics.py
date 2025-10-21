@@ -44,7 +44,6 @@ class AerodynamicsCfg:
 
     air_density :float = MISSING # air density
 
-
 class Aerodynamics:
     def __init__(self, num_envs, device, cfg: AerodynamicsCfg):
 
@@ -667,7 +666,6 @@ class Aerodynamics:
                 self.Uw[env_ids][mask] = 0.0
 
         self.Beta_w[env_ids] = beta
-
 
 
     def update_wind(self, wind_direction:float | None = None, wind_speed:float | None = None, env_ids: torch.Tensor | None = None):
