@@ -61,8 +61,11 @@ class Aerodynamics:
         self.Beta_w = self.cfg.wind_direction*torch.ones(self.num_envs, device=self.device) # wind angle of 80 degrees = 80*pi/180 radian
         self.wind_force = torch.zeros((self.num_envs, 3), device=self.device)
 
-        self.lift_coeff = torch.zeros_like(self.Beta_w)
-        self.drag_coeff = torch.zeros_like(self.Beta_w)
+        self.lift_coeff = torch.zeros(self.num_envs, device=self.device)
+        self.drag_coeff = torch.zeros(self.num_envs, device=self.device)
+
+        self.lift_magnitude = torch.zeros(self.num_envs, device=self.device)
+        self.drag_magnitude = torch.zeros(self.num_envs, device=self.device)
         
         # lift and drag in the boat frame
         self.wind_lift_b = torch.zeros((self.num_envs, 3), device=self.device) 
@@ -272,7 +275,9 @@ class Aerodynamics:
 
         lift_L = 0.5 * density_p * aire_A * coeff_L * torch.square(wind_Vapp_ampl) #(wind_Vapp[:, 0]**2)
         drag_D = 0.5 * density_p * aire_A * coeff_D * torch.square(wind_Vapp_ampl) #(wind_Vapp[:, 1]**2)
-
+        
+        self.lift_magnitude = lift_L.clone()
+        self.drag_magnitude = drag_D.clone()
 
         # Cedric's code for boat forces -- Begin -->
         # build sail frame

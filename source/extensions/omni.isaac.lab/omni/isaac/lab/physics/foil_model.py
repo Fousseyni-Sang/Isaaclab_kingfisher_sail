@@ -43,6 +43,7 @@ class FoilDynamicsCfg:
 
     flow_density :float = MISSING # air density # kg/m^3
     flow_viscosity:float = MISSING # air viscosity # kg/(m.s)
+    Reynold:float = MISSING # Reynold number
 
 class FoilDynamics:
     def __init__(self, num_envs, device, cfg: FoilDynamicsCfg):
@@ -62,6 +63,9 @@ class FoilDynamics:
 
         self.lift_coeff = torch.zeros_like(self.Beta_w)
         self.drag_coeff = torch.zeros_like(self.Beta_w)
+        
+        self.lift_magnitude = torch.zeros(self.num_envs, device=self.device)
+        self.drag_magnitude = torch.zeros(self.num_envs, device=self.device)
         
         # lift and drag in the boat frame
         self.flow_lift_b = torch.zeros((self.num_envs, 3), device=self.device) 
@@ -92,8 +96,7 @@ class FoilDynamics:
 
     
     def compute_flow_effect(self, Uw:torch.Tensor, Beta_w:torch.Tensor, ship_heading_w:torch.Tensor,
-                                 ship_lin_vel2D, angle_of_attack:torch.Tensor, foil_angle:torch.Tensor,
-                                 update_appw_only=False)->torch.Tensor:
+                                 ship_lin_vel2D, angle_of_attack:torch.Tensor, foil_angle:torch.Tensor)->torch.Tensor:
         """ This function will be used to apply flow effect:
                 Parameters:
             - Uw: (true) flow speed for all environmenents
@@ -131,7 +134,7 @@ class FoilDynamics:
         lift_L, drag_D = self.generate_force(flow_Vapp=apparent_flow2D_b, angle_of_attack=angle_of_attack, foil_angle=foil_angle, 
                                              aire_A=foil_aire, coeff_L=coeff_L, coeff_D=coeff_D, density_p=density_p)
 
-        force = torch.zeros((self.num_envs, 3))
+        force = torch.zeros((self.num_envs, 3), device=self.device)
 
         #print(f"{rot_mat_app_to_boat.shape, lift_L.unsqueeze(2).shape}")
         self.flow_lift_b[:, :2] = lift_L.clone().detach()
@@ -233,6 +236,8 @@ class FoilDynamics:
         lift_L = 0.5 * density_p * aire_A * coeff_L * torch.square(flow_Vapp_ampl) #(flow_Vapp[:, 0]**2)
         drag_D = 0.5 * density_p * aire_A * coeff_D * torch.square(flow_Vapp_ampl) #(flow_Vapp[:, 1]**2)
 
+        self.lift_magnitude = lift_L.clone()
+        self.drag_magnitude = drag_D.clone()
 
         # Cedric's code for boat forces -- Begin -->
         # build foil frame
@@ -344,7 +349,7 @@ class FoilDynamics:
             Just give a np.ndarray type of angle of attacks in degree and they output the corresponding values of cl and cd
         """
             
-        self.xfoil.Re = 200000
+        self.xfoil.Re = self.cfg.Reynold
         self.xfoil.max_iter = 100
         a, cl, cd, cm, co = self.xfoil.aseq(-20, 20, 1)
 
@@ -355,7 +360,7 @@ class FoilDynamics:
         a_clean = torch.from_numpy(a[valid_mask])
         cl_clean = torch.from_numpy(cl[valid_mask])
         cd_clean = torch.from_numpy(cd[valid_mask])
-
+        
         self.max_cl_cd_ratio = torch.max(cl_clean/cd_clean)
         self.max_cl = torch.max(cl_clean)
 
@@ -396,7 +401,12 @@ class FoilDynamics:
         Cd_concatenate = torch.concatenate((CD_90_to_0.flip(dims=(0, )), CD_below_min_90, cd_clean[idx_min+1:idx_stall], CD_to_90, CD_90_to_0))
         total_alpha = torch.concatenate((alpha_n_90_to_180, alpha_below_min_90, a_clean[idx_min+1:idx_stall], alpha_to_90, alpha_p_90_to_180))
 
-
+        if Cl_concatenate.shape[0]> total_alpha.shape[0]:
+            Cl_concatenate = Cl_concatenate[:total_alpha.shape[0]]
+            Cd_concatenate = Cd_concatenate[:total_alpha.shape[0]]
+        elif Cl_concatenate.shape[0]< total_alpha.shape[0]:
+            total_alpha = total_alpha[:Cl_concatenate.shape[0]]
+        
         self.lift_coeff_interpolator = LinearInterpolation(total_alpha, Cl_concatenate, self.device)
         self.drag_coeff_interpolator = LinearInterpolation(total_alpha, Cd_concatenate, self.device)
 
