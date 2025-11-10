@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from omni.isaac.lab.physics.foil_model import FoilDynamicsCfg, FoilDynamics
+from omni.isaac.lab.physics.foil_dynamics import FoilDynamicsCfg, FoilDynamics
 import torch
 import matplotlib.pyplot as plt
 import numpy as np

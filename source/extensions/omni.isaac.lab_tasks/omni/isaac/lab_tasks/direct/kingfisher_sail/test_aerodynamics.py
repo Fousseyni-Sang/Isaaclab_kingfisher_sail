@@ -22,10 +22,10 @@ aerodynamics_cfg.angle_of_attack = 20*torch.pi/180
 device = 'cuda:0'
 
 
-min_aoa = -20
-max_aoa = 20
+min_aoa = -180
+max_aoa = 180
 num_envs = int(abs(min_aoa) + abs(max_aoa))
-aerodynamics = Aerodynamics(num_envs=num_envs, device=device, cfg=aerodynamics_cfg)
+aerodynamics = Aerodynamics(num_envs=num_envs, device=device, cfg=aerodynamics_cfg, naca_profile="0012")
 
 angle_of_attack_degree = torch.linspace(min_aoa, max_aoa, num_envs, device=device)
 angle_of_attack_radian = (torch.pi/180)*angle_of_attack_degree

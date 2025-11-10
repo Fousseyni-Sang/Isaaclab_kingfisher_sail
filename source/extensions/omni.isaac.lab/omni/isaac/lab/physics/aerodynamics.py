@@ -22,11 +22,17 @@ import pandas as pd
 
 # File path to the Naca profile downloaded from xfoil
 filepath = "/mnt/gpu_storage/zrr/fsangare/asv-sawasp-fousseyni/Usd/naca0018.csv"
+filepath1 = "/mnt/gpu_storage/zrr/fsangare/asv-sawasp-fousseyni/Usd/naca0012.csv"
+
 df = pd.read_csv(filepath, skiprows=8, nrows=201)
+df1 = pd.read_csv(filepath1, skiprows=8, nrows=201)
 #print(df.head)
 
-x_coords_naca = 1e-2*df[["X(mm)"]].values
-y_coords_naca = 1e-2*df[["Y(mm)"]].values
+x_coords_naca0018 = 1e-2*df[["X(mm)"]].values
+y_coords_naca0018 = 1e-2*df[["Y(mm)"]].values
+
+x_coords_naca0012 = 1e-2*df1[["X(mm)"]].values
+y_coords_naca0012 = 1e-2*df1[["Y(mm)"]].values
 
 @configclass
 class AerodynamicsCfg:
@@ -45,7 +51,7 @@ class AerodynamicsCfg:
     air_density :float = MISSING # air density
 
 class Aerodynamics:
-    def __init__(self, num_envs, device, cfg: AerodynamicsCfg):
+    def __init__(self, num_envs, device, cfg: AerodynamicsCfg, naca_profile: str = "0018"):
 
         self.num_envs = num_envs
         self.device = device
@@ -78,7 +84,7 @@ class Aerodynamics:
         self.xfoil = XFoil()
         self.xfoil.print = False
         self.airfoil_set = False
-        self.xfoil.airfoil = Airfoil(x_coords_naca, y_coords_naca)  # set later
+        self.xfoil.airfoil = Airfoil(x_coords_naca0018, y_coords_naca0018) if naca_profile=="0018" else Airfoil(x_coords_naca0012, y_coords_naca0012)
         
         self.xfoil.n_crit = 9
         self.max_cl_cd_ratio = 0
@@ -468,10 +474,14 @@ class Aerodynamics:
         Cd_concatenate = torch.concatenate((CD_90_to_0.flip(dims=(0, )), CD_below_min_90, cd_clean[idx_min+1:idx_stall], CD_to_90, CD_90_to_0))
         total_alpha = torch.concatenate((alpha_n_90_to_180, alpha_below_min_90, a_clean[idx_min+1:idx_stall], alpha_to_90, alpha_p_90_to_180))
 
+        if Cl_concatenate.shape[0] > total_alpha.shape[0]:
+            Cl_concatenate = Cl_concatenate[:total_alpha.shape[0]]
+            Cd_concatenate = Cd_concatenate[:total_alpha.shape[0]]
+        elif Cl_concatenate.shape[0]< total_alpha.shape[0]:
+            total_alpha = total_alpha[:Cl_concatenate.shape[0]]
 
         self.lift_coeff_interpolator = LinearInterpolation(total_alpha, Cl_concatenate, self.device)
         self.drag_coeff_interpolator = LinearInterpolation(total_alpha, Cd_concatenate, self.device)
-
 
     
     def generate_coeffs(self, angle_attack_alpha: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:

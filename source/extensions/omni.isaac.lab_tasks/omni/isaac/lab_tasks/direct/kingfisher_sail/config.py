@@ -1,4 +1,4 @@
-from omni.isaac.lab.physics.foil_model import FoilDynamicsCfg
+from omni.isaac.lab.physics.foil_dynamics import FoilDynamicsCfg
 from omni.isaac.lab.actuator_force.foil_actuator_force import FoilActuatorCfg
 from omni.isaac.lab.physics.hydrostatics import HydrostaticsCfg
 from omni.isaac.lab.physics.hydrodynamics import HydrodynamicsCfg
@@ -121,7 +121,7 @@ def rudder_actuator_config():
     cfg.command_rate = (cfg.cmd_upper_range - cfg.cmd_lower_range) / 2.0
     cfg.resolution = 1.8  # degrees
     cfg.precision = 0.01  # radians
-    cfg.scale_joint_pos = torch.pi/6  # radians per command unit
+    cfg.scale_joint_pos = torch.pi  # radians per command unit
     cfg.pos_from_com = (0.0, 0.0, 0.0)  # meters
     return cfg
 
@@ -133,7 +133,7 @@ def sail_actuator_config():
     cfg.command_rate = (cfg.cmd_upper_range - cfg.cmd_lower_range) / 2.0
     cfg.resolution = 1.8  # degrees
     cfg.precision = 0.01  # radians
-    cfg.scale_joint_pos = torch.pi/6  # radians per command unit
+    cfg.scale_joint_pos = torch.pi  # radians per command unit
     cfg.pos_from_com = (0.0, 0.0, 0.0)  # meters
     return cfg
 
@@ -145,6 +145,6 @@ def keel_actuator_config():
     cfg.command_rate = (cfg.cmd_upper_range - cfg.cmd_lower_range) / 2.0
     cfg.resolution = 1.8  # degrees
     cfg.precision = 0.01  # radians
-    cfg.scale_joint_pos = torch.pi/6  # radians per command unit
+    cfg.scale_joint_pos = torch.pi  # radians per command unit
     cfg.pos_from_com = (0.0, 0.0, 0.0)  # meters
     return cfg

@@ -7,14 +7,14 @@ import torch
 from dataclasses import MISSING
 
 from omni.isaac.lab.utils import configclass
-from omni.isaac.lab.physics.foil_model import FoilDynamics
+from omni.isaac.lab.physics.foil_dynamics import FoilDynamics
 
 @configclass
 class FoilActuatorCfg:
 
     cmd_lower_range: float = MISSING
     cmd_upper_range: float = MISSING
-    command_rate: float = MISSING  # Frequency of command updates in Hz
+    command_rate: float = MISSING  # Frequency of command updates in Hz / max speed of foil movement in rad/s
     resolution: float = MISSING  # min discrete step in degrees
     precision: float = MISSING  # Precision for force calculations
     scale_joint_pos: float = MISSING  # Scale factor to convert command to joint position (rads)
@@ -50,8 +50,9 @@ class FoilActuator:
         self.device = dynamics.device
         self.dt = dt
         self.precision = cfg.precision
-        self.resolution = cfg.resolution/180 # normalized resolution (e.g. 1.8°/step -> 0.01)
-        self.scale_joint_pos = cfg.scale_joint_pos - self.resolution #(rads) # - small value to avoid exactly pi radians
+        self.resolution = cfg.resolution*torch.pi/180 # normalized resolution (e.g. 1.8°/step)
+        self.step_accuracy = self.precision * (torch.pi*self.resolution/180)
+        self.scale_joint_pos = cfg.scale_joint_pos #(rads) # - small value to avoid exactly pi radians
         self.pos_from_com = torch.tensor(cfg.pos_from_com, device=self.device).repeat(self.num_envs,1)  # distance [dx, dy, dz] from foil to center of mass (m)
         # Constants
         self._max_cmd_delta = cfg.command_rate * dt
@@ -132,12 +133,12 @@ class FoilActuator:
         Returns:
             torch.Tensor: A tensor containing the foil angles for each environment.
         """
-        foil_angle = self._current_cmd * self.scale_joint_pos
-        foil_angle = torch.atan2(torch.sin(foil_angle), torch.cos(foil_angle))
+        #foil_angle = self._current_cmd * self.scale_joint_pos
+        foil_angle = torch.atan2(torch.sin(self._current_cmd), torch.cos(self._current_cmd))
 
         return foil_angle
     
-    def update_joint_cmd(self, command):
+    def update_joint_cmd(self, current_joint_pos:torch.Tensor, target_cmd:torch.Tensor):
         """
         Updates the current commands based on the target commands and maximum delta, and calculates the thruster forces.
 
@@ -151,12 +152,16 @@ class FoilActuator:
             torch.Tensor: The updated thruster forces.
         """
         # update the current command based on the target command and maximum delta and the resolution
-         
-        self._target_cmd = torch.round(command / self.resolution) * self.resolution
-        delta = torch.clamp(self._target_cmd - self._current_cmd, -self._max_cmd_delta, self._max_cmd_delta)
-        random_noise = torch.randn_like(self._current_cmd)*self.precision
-        self._current_cmd += (delta + random_noise*delta)
+        scaled_command = self.scale_joint_pos*target_cmd
+        self._current_cmd = torch.atan2(torch.sin(current_joint_pos.clone()), torch.cos(current_joint_pos.clone())) 
 
+        self._target_cmd = torch.round(scaled_command / self.resolution)*self.resolution
+        
+        delta = torch.clamp(self._target_cmd - self._current_cmd, -self._max_cmd_delta, self._max_cmd_delta)
+        step_error = (torch.rand_like(delta) * 2 - 1)*self.step_accuracy # random noise in range [-precision, precision]
+        step_error = step_error*(delta!=0)  # only add error if there is a movement
+        self._current_cmd += (delta + step_error)
+        
         return
 
     def update_forces(self, robot_heading_w, robot_lin_vel_b):
@@ -172,7 +177,8 @@ class FoilActuator:
         angle_of_attack = self.dynamics.get_angle_of_attack(self.dynamics.apparent_flow_angle,
                                         self.dynamics.foil_angle)
         self.dynamics.angle_of_attack = angle_of_attack.clone()
-        
+        rd = (180/torch.pi)
+        #print(f"aoa: {rd*angle_of_attack} foil_angle: {rd*self.dynamics.foil_angle} flow_angle: {rd*self.dynamics.apparent_flow_angle}")
         self.aero_forces = self.dynamics.compute_flow_effect(
             Uw=self.dynamics.Uw, Beta_w=self.dynamics.Beta_w, ship_heading_w=robot_heading_w,
             ship_lin_vel2D=robot_lin_vel_b[:, :2], foil_angle=self.dynamics.foil_angle, 
@@ -181,9 +187,9 @@ class FoilActuator:
         
         return
         
-    def reset(self):
-        self._current_cmd[:, :] = 0.0
-        self._target_cmd[:, :] = 0.0
+    def reset(self, env_ids=None):
+        self._current_cmd[env_ids, :] = 0.0
+        self._target_cmd[env_ids, :] = 0.0
 
 
 
