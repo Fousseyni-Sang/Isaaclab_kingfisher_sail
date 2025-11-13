@@ -21,7 +21,9 @@ from omni.isaac.lab.app import AppLauncher
 
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Tutorial on using the interactive scene interface.")
-parser.add_argument("--num_envs", type=int, default=4, help="Number of environments to spawn.")
+parser.add_argument("--num_envs", type=int, default=1, help="Number of environments to spawn.")
+parser.add_argument("--video", action="store_true", default=False, help="Record videos during training.")
+parser.add_argument("--video_length", type=int, default=200, help="Length of the recorded video (in steps).")
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
@@ -445,7 +447,7 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
 
     max_flow_speed = np.sqrt(sail_aerodynamics.cfg.flow_speed + max_speed)  # Maximum wind speed
     max_aero_force = sail_aerodynamics.get_max_aero_force(sail_aerodynamics.cfg.flow_speed)
-    target_cmds = torch.tensor([[1.0]], device=robot.device).repeat(scene.num_envs, 1)
+    target_cmds = torch.tensor([[0.9]], device=robot.device).repeat(scene.num_envs, 1)
 
     # Get the link ids
     base_link_id, _ = robot.find_bodies("base_link")
@@ -491,7 +493,7 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
         hydrostatic_force = hydrostatics.compute_archimedes_metacentric_local(robot_pos, robot_quat)
         hydrodynamic_force = hydrodynamics.ComputeHydrodynamicsEffects(robot_quat, robot_vel)
         
-        current_joint_pos = robot.data.joint_pos.clone()[:, wing_joint_dof_id]
+        current_joint_pos = sail_actuator.dynamics.foil_angle.reshape(scene.num_envs, -1).clone()
         sail_actuator.update_joint_cmd(current_joint_pos, target_cmds)
         sail_actuator.update_forces(robot.data.heading_w, robot.data.root_lin_vel_b)
         sail_aerodynamic_force_b[:, 0, :] = sail_actuator.get_forces()
@@ -504,6 +506,10 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
 
         force = combined_force[:, :3]
         torque = combined_force[:, 3:] 
+
+        force = force.unsqueeze(1).expand(-1, len(base_link_id), -1)
+        torque = torque.unsqueeze(1).expand(-1, len(base_link_id), -1)
+        robot.set_external_force_and_torque(force, torque, body_ids=base_link_id)
         
         # compute the desired bearing and distance to the next waypoint
         desired_pos_b_3d, _ = subtract_frame_transforms(
@@ -570,21 +576,21 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
         rad2deg = 180.0 / np.pi
         # Publish the sail position
         sail_publisher.publish(
-            current_pos=current_joint_pos[0].item()* rad2deg,
-            target_pos=foil_angle[0].item()* rad2deg,
-            actual_pos=joint_pos_target[0].item()* rad2deg,
+            current_pos=current_joint_pos[0].item()*rad2deg,
+            target_pos=torch.pi*target_cmds[0].item()*rad2deg,
+            actual_pos=joint_pos_target[0].item()*rad2deg,
             cl=sail_aerodynamics.lift_coeff[0].item(),
             cd=sail_aerodynamics.drag_coeff[0].item(),
-            aoa=sail_aerodynamics.angle_of_attack[0].item() * rad2deg, 
-            app_flow_angle=sail_aerodynamics.apparent_flow_angle[0].item() * rad2deg,
+            aoa=sail_aerodynamics.angle_of_attack[0].item()*rad2deg, 
+            app_flow_angle=sail_aerodynamics.apparent_flow_angle[0].item()*rad2deg,
             robot_pos=robot_pos,
             robot_vel=robot_vel,
             aero_force=sail_aerodynamic_force_b[0, 0, :],
-            target_aoa=target_angle_of_attack[0].item() * rad2deg,
+            target_aoa=target_angle_of_attack[0].item()*rad2deg,
             thruster_forces=thruster_forces[0, 0, :],
             goal_pos=_desired_pos_w,  
             thruster_cmds=thrust_cmds,  
-            bearing=bearing[0].item() * rad2deg,  
+            bearing=bearing[0].item()*rad2deg,  
             progress=progress,  
             projected_progress=projected_progress[0].item(),
             speed=robot_vel_b[0, 0].item(),  

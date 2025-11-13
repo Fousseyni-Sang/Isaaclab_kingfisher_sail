@@ -39,7 +39,7 @@ params:
   load_path: '' # path to the checkpoint to load
 
   config:
-    name: kingfisher_direct
+    name: kingfisher_direct_low_level
     env_name: rlgpu
     device: 'cuda:0'
     device_name: 'cuda:0'
