@@ -89,7 +89,6 @@ def main():
 
     acord_dir = log_dir.split("/")
     acord_dir_name = ('/'.join(acord_dir[:-3]) + "/acord/" + '/'.join(acord_dir[-2:]))
-    checkpoint_name_acord = acord_dir_name + "/nn/"
 
     # wrap around environment for rl-games
     rl_device = agent_cfg["params"]["config"]["device"]

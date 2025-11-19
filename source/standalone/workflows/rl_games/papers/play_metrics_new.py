@@ -26,6 +26,8 @@ parser.add_argument(
     action="store_true",
     help="When no checkpoint provided, use the last saved model. Otherwise use the best saved model.",
 )
+parser.add_argument("--num_episode", type=int, default=10, help="number of episodes for evaluation.")
+
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
@@ -40,13 +42,6 @@ simulation_app = app_launcher.app
 
 """Rest everything follows."""
 
-# import and enable ros2 extension
-import omni
-from omni.isaac.core.utils.extensions import enable_extension
-import rclpy
-
-# enable ROS2 bridge extension
-enable_extension("omni.isaac.ros2_bridge")
 
 import gymnasium as gym
 import math
@@ -65,22 +60,11 @@ import omni.isaac.lab_tasks  # noqa: F401
 from omni.isaac.lab_tasks.utils import get_checkpoint_path, load_cfg_from_registry, parse_env_cfg
 from omni.isaac.lab_tasks.utils.wrappers.rl_games import RlGamesGpuEnv, RlGamesVecEnvWrapper
 
-
-# Create Publisher Node
-import rclpy
-from ros2_Node import RlAgentPublisher, RewardWeightSubscriber
-
+log_dir = None
 
 def main():
+    global log_dir
     """Play with RL-Games agent."""
-        
-    # ---- Initialize ROS2 ----
-    rclpy.init()
-    ros_node = RlAgentPublisher(args_cli.num_envs)
-    slider_names = ['time', 'energy', 'goal', 'wind_direct', 'desired_speed', 'wind_speed']  # Must match the names you use in the publisher
-    slider_node = RewardWeightSubscriber(slider_names)
-    #rclpy.spin(slider_node)
-
     # parse env configuration
     env_cfg = parse_env_cfg(
         args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs, use_fabric=not args_cli.disable_fabric
@@ -106,6 +90,10 @@ def main():
     else:
         resume_path = retrieve_file_path(args_cli.checkpoint)
     log_dir = os.path.dirname(os.path.dirname(resume_path))
+
+    acord_dir = log_dir.split("/")
+    acord_dir_name = ('/'.join(acord_dir[:-3]) + "/acord/" + '/'.join(acord_dir[-2:]))
+    checkpoint_name_acord = acord_dir_name + "/nn/"
 
     # wrap around environment for rl-games
     rl_device = agent_cfg["params"]["config"]["device"]
@@ -156,8 +144,21 @@ def main():
     agent.restore(resume_path)
     agent.reset()
 
+    # ---- Evaluation Loop ----
+    episode_cntr = 0
+    num_episodes = args_cli.num_episode
+    max_episod_length = env.unwrapped.max_episode_length
+
+    lin_vel_x_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.unwrapped.device)
+    acord_prediction_logs = torch.zeros((max_episod_length, args_cli.num_envs, 3), device=env.unwrapped.device)
+    vel_context_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.unwrapped.device)
+
+    lin_vel_x_list = []
+    acord_prediction_list = []
+    vel_context_list = []
+    episode_lengths_list = []
+
     # reset environment
-    env.unwrapped.is_Training = False
     obs = env.reset()
     if isinstance(obs, dict):
         obs = obs["obs"]
@@ -171,73 +172,34 @@ def main():
     # note: We simplified the logic in rl-games player.py (:func:`BasePlayer.run()`) function in an
     #   attempt to have complete control over environment stepping. However, this removes other
     #   operations such as masking that is used for multi-agent learning by RL-Games.
-
-
-    while simulation_app.is_running():
-        rclpy.spin_once(slider_node, timeout_sec=0.0)
-        
-        time_context = slider_node.reward_weights["time"]
-        energy_context = slider_node.reward_weights["energy"]
-        reset_env = energy_context > 1.5 or time_context > 1.5
-        desired_speed = slider_node.reward_weights["desired_speed"]
-        wind_direc = slider_node.reward_weights["wind_direct"]*(torch.pi/180)
-        wind_speed = slider_node.reward_weights["wind_speed"] if slider_node.reward_weights["wind_speed"] else 1e-6
-        goal_pos = slider_node.reward_weights["goal"]
-        env.unwrapped.cfg.min_target_distance *= goal_pos
-        wind_modulo = (wind_direc + torch.pi)%(2*torch.pi) - torch.pi
-        env.unwrapped._sail_aerodynamics.update_wind(wind_direction=wind_modulo)
-        env.unwrapped.energy_context[:] = energy_context
-        env.unwrapped.time_context[:] = time_context
-        #env.unwrapped.desired_speed_b[:] = desired_speed
-        env.unwrapped.corridor_width[:] = desired_speed
-        env.unwrapped._sail_aerodynamics.update_wind(wind_speed=wind_speed)
+    current_step = 0
+    while simulation_app.is_running() and episode_cntr<num_episodes:
+        current_step += 1
         # run everything in inference mode
         with torch.inference_mode():
+            vel_context = env.unwrapped.context_vec
             # convert obs to agent format
-            #print(f"\nenergy: {env.unwrapped.energy_context} \ntime: {env.unwrapped.time_context} \nwind: {env.unwrapped._sail_aerodynamics.Beta_w}\n")
             obs = agent.obs_to_torch(obs)
             # agent stepping
             actions = agent.get_action(obs, is_deterministic=agent.is_deterministic)
-            
             # env stepping
-            obs, rew, dones, _ = env.step(actions)
-            aero_force = env.unwrapped._aerodynamic_force_b.squeeze(0)
-            thruster_force = env.unwrapped._thruster_forces.squeeze(0)
-            lin_speed = env.unwrapped._robot.data.root_lin_vel_b
-            aoa = (180/torch.pi)*env.unwrapped._sail_aerodynamics.angle_of_attack
-            app_angle = (180/torch.pi)*env.unwrapped._sail_aerodynamics.apparent_wind_angle # in degree
-            sail = (180/torch.pi)*env.unwrapped.sail_angle
-            head_w = (180/torch.pi)*env.unwrapped._robot.data.heading_w
-            head_wrt_wind = torch.abs(head_w - (180/torch.pi)*env.unwrapped._sail_aerodynamics.Beta_w)
-            lift = env.unwrapped._sail_aerodynamics.wind_lift_b
-            drag = env.unwrapped._sail_aerodynamics.wind_drag_b
-            ld_ratio = torch.norm(lift, dim=-1)/torch.norm(drag, dim=-1) #torch.abs(aero_force[:, 0]/(aero_force[:, 1]+1e-6))
-            robot_pos = env.unwrapped._robot.data.root_link_pos_w[:, :2]
-            goal_pos =  env.unwrapped._desired_pos_w[:, :2]
-            energy = env.unwrapped.energy
-            episode_energy = env.unwrapped.episode_energy
-            lift_coeff = env.unwrapped._sail_aerodynamics.lift_coeff
-            drag_coeff = env.unwrapped._sail_aerodynamics.drag_coeff
-            sum_angle = sail + app_angle + aoa
-            desired_pos = env.unwrapped.desired_pos_b
-            rew_progress = env.unwrapped.reward_progress
-            rew_bearing = env.unwrapped.reward_bearing
-            rew_energy = env.unwrapped.reward_energy
-            rew_backward = env.unwrapped.reward_backward
-            loss = env.unwrapped.loss_discrim_energy
-            #print(loss, rew_backward)
-            loss_disc = torch.tensor([loss.item()], device=rew_backward.device) if loss is not None else torch.zeros_like(rew_energy)
-            tack_wpts = env.unwrapped.tack_waypoints
+            obs, _, dones, _ = env.step(actions)
 
-            if reset_env:
-                env.reset()
+            step = env.unwrapped.episode_length_buf
+
+            if torch.any(dones) or current_step >= max_episod_length:
                 
+                episode_lengths_list.append(current_step)
+                print(f"episode: {episode_cntr} curr: {current_step} real_step: {step} dones: {dones}")
+                episode_cntr += 1
+                current_step = 0
 
-            ros_node.publish(obs, actions, rew, aero_force, thruster_force, lin_speed, aoa, app_angle, sail, 
-                            head_w, head_wrt_wind, ld_ratio, robot_pos, goal_pos, energy, episode_energy, lift, drag, 
-                            lift_coeff, drag_coeff, sum_angle, desired_pos, rew_progress, rew_bearing, rew_energy, 
-                            rew_backward, loss_disc, tack_wpts)
+                lin_vel_x_list.append(lin_vel_x_logs[:-1].clone())
+                vel_context_list.append(vel_context_logs[:-1].clone())
 
+            #print(f"obs: {obs.shape}")
+            lin_vel_x_logs[step] = obs[:, 0].clone().float()
+            vel_context_logs[step] = vel_context.clone().float()
 
             # perform operations for terminated episodes
             if len(dones) > 0:
@@ -251,20 +213,52 @@ def main():
             if timestep == args_cli.video_length:
                 break
 
-    
-    # Cleanup
-    ros_node.destroy_node()
-    slider_node.destroy_node()
-
-    rclpy.shutdown()
-
     # close the simulator
     env.close()
 
+    return lin_vel_x_list, vel_context_list, episode_lengths_list
+
 
 if __name__ == "__main__":
-    # run the main function
-    main()
+    # run the main execution
+    lin_vel_x_list, vel_context_list, episode_lengths_list = main()
+
+    import pandas as pd
+    import os
+    from datetime import datetime
+
+    # Create timestamped subfolder
+    timestamp = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+    direct = log_dir.split("/")
+    #directory = ('/'.join(direct[:-3]) + "/acord/" + '/'.join(direct[-2:]))
+    output_dir = os.path.join(f"eval_logs/{direct[-3]}/{direct[-2]}", direct[-1])
+    os.makedirs(output_dir, exist_ok=True)
+
+    print(f"Saving logs to: {output_dir}")
+
+    # --- Save lin_vel_x, vel_context ---
+    vel_context = []
+    for ep_idx, (lin_vel_x, context) in enumerate(zip(lin_vel_x_list, vel_context_list)):  # (T, N, 2)
+        for t in range(lin_vel_x.shape[0]):
+            for env_id in range(lin_vel_x.shape[1]):
+                vel_context.append({
+                    "episode": ep_idx,
+                    "time_step": t,
+                    "env_id": env_id,
+                    "lin_vel_x": lin_vel_x[t, env_id].item(),
+                    "context": context[t, env_id].item()
+                })
+    pd.DataFrame(vel_context).to_csv(os.path.join(output_dir, "context_vel_acord.csv"), index=False)
     
+     # --- Save episode length ---
+    episode_length_records = []
+    for ep_idx, length in enumerate(episode_lengths_list):
+
+        episode_length_records.append({
+            "episode":ep_idx, 
+            "ep_length": length
+        })
+    pd.DataFrame(episode_length_records).to_csv(os.path.join(output_dir, "ep_length.csv"), index=False)
+
     # close sim app
     simulation_app.close()

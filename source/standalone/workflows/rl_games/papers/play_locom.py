@@ -22,13 +22,13 @@ parser.add_argument("--ros", type=bool, default=False, help="publish ros topic i
 parser.add_argument("--num_envs", type=int, default=None, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
 parser.add_argument("--checkpoint", type=str, default=None, help="Path to model checkpoint.")
-parser.add_argument("--use_last_checkpoint", action="store_true",
+parser.add_argument(
+    "--use_last_checkpoint",
+    action="store_true",
     help="When no checkpoint provided, use the last saved model. Otherwise use the best saved model.",
 )
 parser.add_argument("--episode_length", type=int, default=None, help="length of the episode in second. " \
 "If None, use the default from the task config.")
-parser.add_argument("--wind_direction", type=float, default=180, help="direction of the true wind in degree.")
-parser.add_argument("--wind_speed", type=float, default=5, help="speed of the true wind in degree.")
 parser.add_argument("--num_episode", type=int, default=10, help="number of episodes for evaluation.")
 
 # append AppLauncher cli args
@@ -76,10 +76,10 @@ import rclpy
 from ros2_Node import RlAgentPublisher, RewardWeightSubscriber
 #import matplotlib.pyplot as plt
 
-log_dir=None
+
 def main():
     """Play with RL-Games agent."""
-    global log_dir    
+        
     # ---- Initialize ROS2 ----
     rclpy.init()
     ros_node = RlAgentPublisher(args_cli.num_envs)
@@ -169,7 +169,7 @@ def main():
     # reset environment
     env.unwrapped.is_Training = False
     env.unwrapped.discr_checkpoint = checkpoint_name_acord
-    #env.unwrapped.discriminator_energy.load_checkpoint(checkpoint_name_acord)
+    env.unwrapped.discriminator_energy.load_checkpoint(checkpoint_name_acord)
     env.unwrapped.discriminator_energy.eval()
     if args_cli.episode_length is not None:
         env.unwrapped.cfg.episode_length_s = args_cli.episode_length
@@ -177,8 +177,8 @@ def main():
     wind_direc = (args_cli.wind_direction*torch.pi/180)
     wind_speed = args_cli.wind_speed
     wind_modulo = (wind_direc + torch.pi)%(2*torch.pi) - torch.pi
-    #env.unwrapped._sail_aerodynamics.update_flow(flow_direction=wind_modulo)
-    #env.unwrapped._sail_aerodynamics.update_flow(flow_speed=wind_speed)
+    env.unwrapped._aerodynamics.update_wind(wind_direction=wind_modulo)
+    env.unwrapped._aerodynamics.update_wind(wind_speed=wind_speed)
         
     obs = env.reset()
     if isinstance(obs, dict):
@@ -218,7 +218,7 @@ def main():
     wind_direc_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.unwrapped.device)
     actions_logs = torch.zeros((max_episod_length, args_cli.num_envs, 3), device=env.unwrapped.device)
     sail_angle_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.unwrapped.device)
-    aero_force_logs = torch.zeros((max_episod_length, args_cli.num_envs, 6), device=env.unwrapped.device)
+    aero_force_logs = torch.zeros((max_episod_length, args_cli.num_envs, 3), device=env.unwrapped.device)
     max_aero_force_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.unwrapped.device)
     thruster_force_logs = torch.zeros((max_episod_length, args_cli.num_envs, 6), device=env.unwrapped.device)
     episode_energy_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.unwrapped.device)
@@ -273,7 +273,7 @@ def main():
             energy_context = env.unwrapped.energy_context
 
             # convert obs to agent format
-            #print(f"\nenergy: {env.unwrapped.energy_context} \ntime: {env.unwrapped.time_context} \nwind: {env.unwrapped._sail_aerodynamics.Beta_w}\n")
+            #print(f"\nenergy: {env.unwrapped.energy_context} \ntime: {env.unwrapped.time_context} \nwind: {env.unwrapped._aerodynamics.Beta_w}\n")
             obs = agent.obs_to_torch(obs)
             # agent stepping
             actions = agent.get_action(obs, is_deterministic=agent.is_deterministic)
@@ -288,16 +288,16 @@ def main():
             obs, rew, dones, _ = env.step(actions)
             if actions.shape[1]==2:
                 actions = torch.cat((actions, torch.zeros((1, 1), device=actions.device)), dim=-1)
-            aero_force = env.unwrapped._sail_aerodynamic_force_b.squeeze(0)
+            aero_force = env.unwrapped._aerodynamic_force_b.squeeze(0)
             thruster_force = env.unwrapped._thruster_forces.squeeze(0)
             lin_speed = env.unwrapped._robot.data.root_lin_vel_b
-            aoa = (180/torch.pi)*env.unwrapped._sail_aerodynamics.angle_of_attack
-            app_angle = (180/torch.pi)*env.unwrapped._sail_aerodynamics.apparent_flow_angle # in degree
-            sail = (180/torch.pi)*env.unwrapped._sail_aerodynamics.foil_angle
+            aoa = (180/torch.pi)*env.unwrapped._aerodynamics.angle_of_attack
+            app_angle = (180/torch.pi)*env.unwrapped._aerodynamics.apparent_wind_angle # in degree
+            sail = (180/torch.pi)*env.unwrapped._aerodynamics.sail_angle
             head_w = (180/torch.pi)*env.unwrapped._robot.data.heading_w
-            head_wrt_wind = torch.abs(head_w - (180/torch.pi)*env.unwrapped._sail_aerodynamics.Beta_w)
-            lift = env.unwrapped._sail_aerodynamics.flow_lift_b
-            drag = env.unwrapped._sail_aerodynamics.flow_drag_b
+            head_wrt_wind = torch.abs(head_w - (180/torch.pi)*env.unwrapped._aerodynamics.Beta_w)
+            lift = env.unwrapped._aerodynamics.wind_lift_b
+            drag = env.unwrapped._aerodynamics.wind_drag_b
             ld_ratio = torch.norm(lift, dim=-1)/torch.norm(drag, dim=-1) #torch.abs(aero_force[:, 0]/(aero_force[:, 1]+1e-6))
             robot_pos = env.unwrapped._robot.data.root_link_pos_w[:, :2]
             
@@ -305,8 +305,8 @@ def main():
             episode_energy = env.unwrapped.episode_energy
             max_available_energy = env.unwrapped.max_available_episode_energy
             ratio_energy_usage = env.unwrapped.ratio_energy_usage
-            lift_coeff = env.unwrapped._sail_aerodynamics.lift_coeff
-            drag_coeff = env.unwrapped._sail_aerodynamics.drag_coeff
+            lift_coeff = env.unwrapped._aerodynamics.lift_coeff
+            drag_coeff = env.unwrapped._aerodynamics.drag_coeff
             sum_angle = sail + app_angle + aoa
             desired_pos = env.unwrapped.desired_pos_b
             rew_progress = env.unwrapped.reward_progress
@@ -329,13 +329,12 @@ def main():
             dones = dones.to(device=trajectories.device)
             step = env.unwrapped.episode_length_buf
             episode_length = step.max().item() + 1
-            if current_step%200==0:
-                print(f"bearing: {bearing} goal: {goal_pos}, distance: {env.unwrapped.distance}")
-                #print(f"\nforce_aero: {aero_force}\nlift: {lift} lift_coeff: {lift_coeff} \ndrag: {drag} drag_coeff: {drag_coeff}") 
-                #print(f"rew_aero: {reward_aero} \nrew_prog: {rew_progress} \ncontext: {energy_context} \npredicted_context: {predicted_context}")
-                pass
+            if current_step%20==0:
+                #print(f"bearing: {bearing} next_wpt: {env.unwrapped.next_tack_wpt_idx}, goal: {goal_pos}, distance: {env.unwrapped.distance}")
+                print(f"\nforce_aero: {aero_force}\nlift: {lift} lift_coeff: {lift_coeff} \ndrag: {drag} drag_coeff: {drag_coeff}") 
+                print(f"rew_aero: {reward_aero} \nrew_prog: {rew_progress} \ncontext: {energy_context} \npredicted_context: {predicted_context}")
             if torch.any(dones) or current_step >= max_episod_length:
-                #print(f"tack_wpts: {tack_wpts}")
+                print(f"tack_wpts: {tack_wpts}")
                 
                 episode_lengths_list.append(current_step)
                 episode_metrics = env.unwrapped.extras["log"]
@@ -383,7 +382,7 @@ def main():
                 if isinstance(obs, dict):
                     obs = obs["obs"]
                 wind_modulo = (wind_direc + torch.pi)%(2*torch.pi) - torch.pi
-                #env.unwrapped._sail_aerodynamics.update_flow(flow_direction=wind_modulo)
+                env.unwrapped._aerodynamics.update_wind(wind_direction=wind_modulo)
 
             alive_envs = (~dones).nonzero(as_tuple=True)[0].to(device=trajectories.device)
             #print(f"traj: {trajectories.device} alive_envs: {alive_envs.device} step: {step.device} robot_pos: {robot_pos.device}")
@@ -447,9 +446,6 @@ if __name__ == "__main__":
 
     # Create timestamped subfolder
     timestamp = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
-    direct = log_dir.split("/")
-    #directory = ('/'.join(direct[:-3]) + "/acord/" + '/'.join(direct[-2:]))
-    #output_dir = os.path.join(f"eval_logs/{direct[-3]}/{direct[-2]}", direct[-1])
     output_dir = os.path.join("eval_logs/rl_games", timestamp)
     output_dir = output_dir + f"_{args_cli.wind_direction}_{args_cli.wind_speed}"
     os.makedirs(output_dir, exist_ok=True)

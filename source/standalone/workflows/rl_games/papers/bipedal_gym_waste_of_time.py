@@ -9,14 +9,14 @@
 
 import argparse
 import sys
-
+import omni
 from omni.isaac.lab.app import AppLauncher
 
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Train an RL agent with RL-Games.")
 parser.add_argument("--video", action="store_true", default=False, help="Record videos during training.")
-parser.add_argument("--video_length", type=int, default=1000, help="Length of the recorded video (in steps).")
-parser.add_argument("--video_interval", type=int, default=10_000_000, help="Interval between video recordings (in steps).")
+parser.add_argument("--video_length", type=int, default=200, help="Length of the recorded video (in steps).")
+parser.add_argument("--video_interval", type=int, default=2000, help="Interval between video recordings (in steps).")
 parser.add_argument("--num_envs", type=int, default=None, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
 parser.add_argument("--seed", type=int, default=None, help="Seed used for the environment")
@@ -40,7 +40,7 @@ sys.argv = [sys.argv[0]] + hydra_args
 
 # launch omniverse app
 app_launcher = AppLauncher(args_cli)
-simulation_app = app_launcher.app
+#simulation_app = app_launcher.app
 
 """Rest everything follows."""
 
@@ -69,13 +69,14 @@ import omni.isaac.lab_tasks  # noqa: F401
 from omni.isaac.lab_tasks.utils.hydra import hydra_task_config
 from omni.isaac.lab_tasks.utils.wrappers.rl_games import RlGamesGpuEnv, RlGamesVecEnvWrapper
 
+import os
+import gymnasium as gym
+import numpy as np
 
 @hydra_task_config(args_cli.task, "rl_games_cfg_entry_point")
-def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: dict):
+def main(env_cfg, agent_cfg: dict):
     """Train with RL-Games agent."""
     # override configurations with non-hydra CLI arguments
-    env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
-    env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
 
     # randomly sample a seed if seed = -1
     if args_cli.seed == -1:
@@ -99,11 +100,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         agent_cfg["params"]["config"]["device_name"] = f"cuda:{app_launcher.local_rank}"
         agent_cfg["params"]["config"]["multi_gpu"] = True
         # update env config device
-        env_cfg.sim.device = f"cuda:{app_launcher.local_rank}"
+        
 
     # set the environment seed (after multi-gpu config for updated rank from agent seed)
-    # note: certain randomizations occur in the environment initialization so we set the seed here
-    env_cfg.seed = agent_cfg["params"]["seed"]
 
     # specify directory for logging experiments
     log_root_path = os.path.join("logs", "rl_games", agent_cfg["params"]["config"]["name"])
@@ -117,22 +116,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     agent_cfg["params"]["config"]["full_experiment_name"] = log_dir
 
     # dump the configuration into log-directory
-    dump_yaml(os.path.join(log_root_path, log_dir, "params", "env.yaml"), env_cfg)
     dump_yaml(os.path.join(log_root_path, log_dir, "params", "agent.yaml"), agent_cfg)
-    dump_pickle(os.path.join(log_root_path, log_dir, "params", "env.pkl"), env_cfg)
     dump_pickle(os.path.join(log_root_path, log_dir, "params", "agent.pkl"), agent_cfg)
-
-    # read configurations about the agent-training
-    rl_device = agent_cfg["params"]["config"]["device"]
-    clip_obs = agent_cfg["params"]["env"].get("clip_observations", math.inf)
-    clip_actions = agent_cfg["params"]["env"].get("clip_actions", math.inf)
 
     # create isaac environment
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
-    
-    # convert to single-agent instance if required by the RL algorithm
-    if isinstance(env.unwrapped, DirectMARLEnv):
-        env = multi_agent_to_single_agent(env)
 
     # wrap for video recording
     if args_cli.video:
@@ -146,20 +134,16 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         print_dict(video_kwargs, nesting=4)
         env = gym.wrappers.RecordVideo(env, **video_kwargs)
 
-    # wrap around environment for rl-games
-    env = RlGamesVecEnvWrapper(env, rl_device, clip_obs, clip_actions)
 
     # register the environment to rl-games registry
     # note: in agents configuration: environment name must be "rlgpu"
     vecenv.register(
-        "IsaacRlgWrapper", lambda config_name, num_actors, **kwargs: RlGamesGpuEnv(config_name, num_actors, **kwargs)
+        "RAY", lambda config_name, num_actors, **kwargs: vecenv.RayVecEnv(config_name, num_actors, **kwargs)
     )
-    env_configurations.register("rlgpu", {"vecenv_type": "IsaacRlgWrapper", "env_creator": lambda **kwargs: env})
+    env_configurations.register("rlgpu", {"vecenv_type": "RAY", "env_creator": lambda **kwargs: env})
 
-    # set number of actors into agent config
-    agent_cfg["params"]["config"]["num_actors"] = env.unwrapped.num_envs
     # create runner from rl-games
-    runner = Runner(IsaacAlgoObserver())
+    runner = Runner()
     runner.load(agent_cfg)
 
     # reset the agent and env
@@ -178,4 +162,96 @@ if __name__ == "__main__":
     # run the main function
     main()
     # close sim app
-    simulation_app.close()
+    #simulation_app.close()
+
+
+
+
+
+
+
+
+
+
+# Call registration at the top, so it runs in every process (including Ray workers)
+#register_bipedal.register_bipedal()
+
+# Training config for rl_games PPO
+"""config = {
+    "params": {
+        "seed": 42,
+        "algo": {
+            "name": "a2c_continuous"
+        },
+        "model": {
+            "name": "continuous_a2c_logstd"
+        },
+        "network": {
+            "name": "actor_critic",
+            "separate": False,
+            "space": {
+                "continuous": {
+                    "mu_activation": "None",
+                    "sigma_activation": "None",
+                    "mu_init": {"name": "default"},
+                    "sigma_init": {"name": "const_initializer", "val": 0},
+                    "fixed_sigma": True,
+                }
+            },
+            "mlp": {
+                "units": [128, 128, 128],
+                "activation": "tanh",
+                "initializer": {"name": "default"}
+            }
+        },
+        "config": {
+            "name": "bipedal_walker",
+            "env_name": "BipedalWalkerCtx-v0",
+            "device": 'cuda:0',
+            "device_name": 'cuda:0',
+            "multi_gpu": False,
+            "ppo": True,
+            "reward_shaper":{'scale_value': 0.1},
+            "vecenv_type": "RAY",   
+            "normalize_input": True,
+            "normalize_value": True,
+            "max_epochs": 1600,
+            "save_best_after": 25,
+            "save_frequency": 100,
+            "gamma": 0.99,
+            "tau": 0.95,
+            "lr_schedule": "constant",
+            "kl_threshold": 0.02,
+            "score_to_win": 300,   # stop when solved
+            "max_epochs": 2000,
+            "num_actors": 128,
+            "horizon_length": 48,
+            "minibatch_size": 2048,
+            "mini_epochs": 4,
+            "e_clip": 0.2, #0.2
+            "clip_value": True,
+            "clip_param": 0.2,
+            "value_loss_coef": 2.0,
+            "entropy_coef": 0.0,
+            "learning_rate": 3e-4,
+            "normalize_advantage": True,
+            "critic_coef": 2,
+            "seq_length": 4,
+            "bounds_loss_coef": 0.0001,
+            "grad_norm": 1.0,
+            "truncate_grads": True,
+           
+        }
+    }
+}
+
+config['params']['config']['env_name'] = "BipedalWalkerCtx-v0"
+config['params']['config']['vecenv_type'] = "RAY"
+
+
+# ----------------------
+# Training Runner
+# ----------------------
+runner = Runner()
+runner.load(config)
+runner.run({"train": True})"""

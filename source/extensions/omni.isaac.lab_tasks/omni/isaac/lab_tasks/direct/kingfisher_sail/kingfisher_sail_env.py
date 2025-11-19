@@ -20,6 +20,7 @@ from omni.isaac.lab.physics.hydrostatics import Hydrostatics, HydrostaticsCfg
 from omni.isaac.lab.physics.foil_dynamics import FoilDynamics, FoilDynamicsCfg
 from omni.isaac.lab.scene import InteractiveSceneCfg
 from omni.isaac.lab.sim import SimulationCfg
+from omni.isaac.lab.sensors import TiledCamera, TiledCameraCfg
 from omni.isaac.lab.terrains import TerrainImporterCfg
 from omni.isaac.lab.utils import configclass
 from omni.isaac.lab.utils.math import subtract_frame_transforms, transform_points, quat_from_euler_xyz
@@ -60,7 +61,7 @@ class KingfisherSailEnvWindow(BaseEnvWindow):
 @configclass
 class KingfisherSailEnvCfg(DirectRLEnvCfg):
     # env
-    episode_length_s = 250.0 #30
+    episode_length_s = 70.0 #30
     physics_dt = 1 / 60.0  # 60 Hz
     decimation = 3
     step_dt = physics_dt * decimation  # 20 Hz
@@ -112,6 +113,18 @@ class KingfisherSailEnvCfg(DirectRLEnvCfg):
 
     )
 
+    # camera
+    tiled_camera: TiledCameraCfg = TiledCameraCfg(
+        prim_path="/World/envs/env_.*/Robot/base_link/Camera",
+        offset=TiledCameraCfg.OffsetCfg(pos=(-5.0, 0.0, 15.0), rot=(1.0, 0.0, 0.0, 0.0), convention="world"),
+        data_types=["rgb"],
+        spawn=sim_utils.PinholeCameraCfg(
+            focal_length=24.0, focus_distance=400.0, horizontal_aperture=20.955, clipping_range=(0.1, 20.0)
+        ),
+        width=80,
+        height=80,
+    )
+    
     sail_aerodyn_cfg: FoilDynamicsCfg = sail_config()
     rudder_hydrodyn_cfg: FoilDynamicsCfg = rudder_config()
     keel_hydrodyn_cfg: FoilDynamicsCfg = keel_config()
@@ -173,7 +186,7 @@ class KingfisherSailEnvCfg(DirectRLEnvCfg):
 
     # reward scales
     distance_reward_scale = 0.0
-    distance_progress_reward_scale = 1.3 #2 #0.5 #30 #5 # 6 too much
+    distance_progress_reward_scale = 1.4 #2 #0.5 #30 #5 # 6 too much
     bearing_progress_reward_scale = 0.0
 
     goal_reached_threshold = 0.1
@@ -181,7 +194,7 @@ class KingfisherSailEnvCfg(DirectRLEnvCfg):
 
     energy_penalty_scale = -1 #0.5 #0.5 #0.08  #-0.001
     backwards_penalty_scale = -0.5
-    time_penalty_scale = -0.1 #-0.008 #
+    time_penalty_scale = -1 #-0.008 #
     penalty_inefficient_sailing_scale = -0.1
     tack_penalty_scale = -10
     bearing_penalty_scale = 0.5
@@ -192,7 +205,7 @@ class KingfisherSailEnvCfg(DirectRLEnvCfg):
 
     # Environment
     min_target_distance = 5.0 
-    max_target_distance = 30.0
+    max_target_distance = 10.0
     min_target_bearing =  45*torch.pi/180 #-torch.pi / 2
     max_target_bearing = 120*torch.pi/180 #torch.pi / 2
     max_cross_track = 8.0
@@ -341,7 +354,7 @@ class KingfisherSailEnv(DirectRLEnv):
         self.disc_prediction_error = torch.zeros(self.num_envs, device=self.device)
         self.discr_checkpoint = ""
         self.energy_context = torch.ones_like(self.episode_number)
-        self.acord_prediction_logs = torch.ones(self.num_envs, 3) # prediction, mean, std
+        self.acord_prediction_logs = torch.ones((self.num_envs, 3), device=self.device) # prediction, mean, std
         self.time_context = torch.ones_like(self.episode_number)
         self.progress_context = torch.ones_like(self.episode_number)
 
@@ -397,7 +410,7 @@ class KingfisherSailEnv(DirectRLEnv):
 
         self.cone = RigidObject(self.cfg.cone_cfg)
         self.scene.rigid_objects["cone"] = self.cone
-
+        #self._tiled_camera = TiledCamera(self.cfg.tiled_camera)
         self.cfg.terrain.num_envs = self.scene.cfg.num_envs
         self.cfg.terrain.env_spacing = self.scene.cfg.env_spacing
         self._terrain = self.cfg.terrain.class_type(self.cfg.terrain)
@@ -407,6 +420,9 @@ class KingfisherSailEnv(DirectRLEnv):
         # add lights
         light_cfg = sim_utils.DomeLightCfg(intensity=2000.0, color=(0.75, 0.75, 0.75))
         light_cfg.func("/World/Light", light_cfg)
+
+        
+        #self.scene.sensors["tiled_camera"] = self._tiled_camera
 
         self.blue_marker = VisualizationMarkers(self.cfg.blue_marker_cfg)
         self.maroon_marker = VisualizationMarkers(self.cfg.maroon_marker_cfg)
@@ -424,6 +440,7 @@ class KingfisherSailEnv(DirectRLEnv):
     def _pre_physics_step(self, actions: torch.Tensor):
         
         self._actions = actions.clone().clamp(-1.0, 1.0)
+        self._actions[:, :2] = 0
         # Override the actions for debugging
         # self._actions[:,0] = 0.6
         # self._actions[:,1] = 0.6
@@ -446,6 +463,7 @@ class KingfisherSailEnv(DirectRLEnv):
         current_joint_pos = self._sail_actuator.dynamics.foil_angle.reshape(self.num_envs, -1)
         self._sail_actuator.update_joint_cmd(current_joint_pos, self._actions[:, 2:3])
         self._sail_actuator.update_forces(self._robot.data.heading_w, self._robot.data.root_lin_vel_b)
+        #print(f"")
         self._sail_aerodynamic_force_b[:, 0, :] = self._sail_actuator.get_forces()
         #print(f"SAIL FORCE: {self._sail_aerodynamic_force_b[:, 0, :]}")
         """self._rudder_actuator.update_joint_cmd(self._actions[:, 3:])
@@ -467,8 +485,8 @@ class KingfisherSailEnv(DirectRLEnv):
         combined[:, 0, :3] = combined[:, 0, :3] + self._sail_aerodynamic_force_b[:, 0, :3] #+ \
         #self._rudder_hydrodynamics_force_b[:, 0, :3] #+ self._keel_hydrodynamics_force_b[:, 0, :3]
 
-        combined[:, 0, 3:] = combined[:, 0, 3:] #+ self._sail_aerodynamic_force_b[:, 0, 3:] + \
-        self._rudder_hydrodynamics_force_b[:, 0, 3:] #+ self._keel_hydrodynamics_force_b[:, 0, 3:]
+        combined[:, 0, 3:] = combined[:, 0, 3:] + self._sail_aerodynamic_force_b[:, 0, 3:] #+ \
+        #self._rudder_hydrodynamics_force_b[:, 0, 3:] #+ self._keel_hydrodynamics_force_b[:, 0, 3:]
 
         self._robot.set_external_force_and_torque(combined[..., :3], combined[..., 3:], body_ids=self._base_link)
         
@@ -558,7 +576,7 @@ class KingfisherSailEnv(DirectRLEnv):
         ks = torch.atan2(torch.sin(ks), torch.cos(ks))
             
         # Energy
-        self.energy = torch.sum(torch.square(self._actions[:, :2]), dim=1)
+        self.energy = torch.sum(torch.square(self._actions[:, :2] + 0.05*torch.square(self._actions[:, 2:3])), dim=1)
         self.episode_energy += self.energy
         #-torch.sum(torch.square(self._actions[:, -1:]), dim=1)
         
@@ -646,12 +664,12 @@ class KingfisherSailEnv(DirectRLEnv):
         rewards = {  
             "1_distance_progress": distance_progress_reward,
             "2_goal_reached": goal_reward,
-            "3_energy": 0.2*energy_reward,
-            "4_backwards": backwards_penalty,
+            "3_energy": energy_reward,
+            "4_backwards": 0.1*backwards_penalty,
             "5_bearing_penalty": 0*bearing_penalty,
-            "6_time": time_reward,
+            "6_time": 1.5*time_reward,
             "7_tack_penalty": 0*reward_acord,
-            "8_lift_drag_ratio": reward_aero,
+            "8_lift_drag_ratio": 0*reward_aero,
         }
         #print(f"rewards: {rewards} rew_lift_drag_ratio: {lift_drag_ratio}\n")
         # #"6_time": time_reward
@@ -807,9 +825,9 @@ class KingfisherSailEnv(DirectRLEnv):
             """upwind = torch.any(torch.logical_and(self.episode_number[env_ids]>349, self.episode_number[env_ids]<400))
             random = torch.any(self.episode_number[env_ids]>400)"""
             
-            self._sail_aerodynamics.reset_flow_condition(env_ids=env_ids, randomize_direction=False, randomize_speed=False, 
+            """self._sail_aerodynamics.reset_flow_condition(env_ids=env_ids, randomize_direction=False, randomize_speed=False, 
                                                     upflow=False, downflow=True, beam=True, close=False, broad=True,
-                                                    fixed=True)
+                                                    fixed=True)"""
 
             self.thruster_left_randn[env_ids] = torch.zeros_like(self.thruster_left_randn[env_ids]).uniform_(0, 1)
             self.thruster_right_randn[env_ids] = torch.zeros_like(self.thruster_right_randn[env_ids]).uniform_(0, 1)
