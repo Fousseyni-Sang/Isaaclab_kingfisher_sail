@@ -56,10 +56,12 @@ def pre_process_actions(delta_pose: torch.Tensor) -> torch.Tensor:
 
     thrust_left = delta_pose[:, 2:3]
 
-    if delta_pose[:, 5:6]>=0.01:
+    if delta_pose[:, 5:6]>=0.05:
         sail_angle = delta_pose[:, 5:6] 
     else: 
         sail_angle = delta_pose[:, 1:2]
+    
+
     actions = torch.cat((thrust_right, thrust_left, sail_angle), dim=1)
     #print(delta_pose)
     return actions
@@ -122,11 +124,11 @@ def main():
     # reset environment
     env.reset()
     teleop_interface.reset()
-    wind_direction = 1
-    wind_speed = env.unwrapped._aerodynamics.cfg.wind_speed
-    is_wind_speed = True
+    flow_direction = 1
+    flow_speed = env.unwrapped._sail_aerodynamics.cfg.flow_speed
+    is_flow_speed = True
     env.unwrapped.is_Training = False
-    wind_modulo = env.unwrapped._aerodynamics.cfg.wind_direction
+    flow_modulo = env.unwrapped._sail_aerodynamics.cfg.flow_direction
     # simulate environment
     while simulation_app.is_running():
 
@@ -143,7 +145,7 @@ def main():
         with torch.inference_mode():
             # get keyboard command
             delta_pose, list_bool = teleop_interface.advance()
-            gripper_command, is_wind_speed = list_bool
+            gripper_command, is_flow_speed = list_bool
              
             delta_pose = delta_pose.astype("float32")
             if gripper_command:
@@ -153,44 +155,45 @@ def main():
             # convert to torch
             delta_pose = torch.tensor(delta_pose, device=env.unwrapped.device).repeat(env.unwrapped.num_envs, 1)
             # pre-process actions
-            if is_wind_speed:
-                wind_speed += 0.1*delta_pose[:, -1] if torch.abs(delta_pose[:, -1]) > 0.6 else 0
-                env.unwrapped._aerodynamics.update_wind(wind_speed=wind_speed)
+            if is_flow_speed:
+                flow_speed += 0.1*delta_pose[:, -1] if torch.abs(delta_pose[:, -1]) > 0.6 else 0
+                env.unwrapped._sail_aerodynamics.update_flow(flow_speed=flow_speed)
             else: 
-                wind_direction += 0.1*delta_pose[:, -1] if torch.abs(delta_pose[:, -1]) > 0.6 else 0
-                wind_modulo = (wind_direction + torch.pi)%(2*torch.pi) - torch.pi
-                env.unwrapped._aerodynamics.update_wind(wind_direction=wind_modulo)
+                flow_direction += 0.1*delta_pose[:, -1] if torch.abs(delta_pose[:, -1]) > 0.6 else 0
+                flow_modulo = (flow_direction + torch.pi)%(2*torch.pi) - torch.pi
+                env.unwrapped._sail_aerodynamics.update_flow(flow_direction=flow_modulo)
             
-            #print(f"delta: {delta_pose} \twind: {wind_speed} \twind_direc: {wind_direction}\n")
-            #wind_direction += 
+            #print(f"delta: {delta_pose} \tflow: {flow_speed} \tflow_direc: {flow_direction}\n")
+            #flow_direction += 
             actions = pre_process_actions(delta_pose)
-
+            #print(f"actions: {actions}")
+            
             #print(actions.shape, actions)
             # apply actions
             teleop_interface.add_callback("L", env.reset)
             # env stepping
-            obs, rew, dones, _, _ = env.step(actions[:, -1:])
+            obs, rew, dones, _, _ = env.step(actions)
             obs = obs['policy']
 
             env.unwrapped.desired_speed_b[:] = desired_speed
-            aero_force = env.unwrapped._aerodynamic_force_b.squeeze(0)
+            aero_force = env.unwrapped._sail_aerodynamic_force_b.squeeze(0)
             thruster_force = env.unwrapped._thruster_forces.squeeze(0)
             lin_speed = env.unwrapped._robot.data.root_lin_vel_b
-            aoa = (180/torch.pi)*env.unwrapped._aerodynamics.angle_of_attack
-            app_angle = (180/torch.pi)*env.unwrapped._aerodynamics.apparent_wind_angle # in degree
+            aoa = (180/torch.pi)*env.unwrapped._sail_aerodynamics.angle_of_attack
+            app_angle = (180/torch.pi)*env.unwrapped._sail_aerodynamics.apparent_flow_angle # in degree
             sail = (180/torch.pi)*env.unwrapped.joint_angle_mapped_pi
             head_w = (180/torch.pi)*env.unwrapped._robot.data.heading_w
-            head_wrt_wind = torch.abs(head_w - (180/torch.pi)*env.unwrapped._aerodynamics.Beta_w)
-            lift = env.unwrapped._aerodynamics.wind_lift_b
-            drag = env.unwrapped._aerodynamics.wind_drag_b
+            head_wrt_flow = torch.abs(head_w - (180/torch.pi)*env.unwrapped._sail_aerodynamics.Beta_w)
+            lift = env.unwrapped._sail_aerodynamics.flow_lift_b
+            drag = env.unwrapped._sail_aerodynamics.flow_drag_b
             ld_ratio = torch.norm(lift, dim=-1)/torch.norm(drag, dim=-1)
             #ld_ratio = torch.abs(aero_force[:, 0]/(aero_force[:, 1]+1e-6))
             robot_pos = env.unwrapped._robot.data.root_link_pos_w[:, :2]
             goal_pos =  env.unwrapped._desired_pos_w[:, :2]
             energy = env.unwrapped.energy
             episode_energy = env.unwrapped.episode_energy     
-            lift_coeff = env.unwrapped._aerodynamics.lift_coeff
-            drag_coeff = env.unwrapped._aerodynamics.drag_coeff
+            lift_coeff = env.unwrapped._sail_aerodynamics.lift_coeff
+            drag_coeff = env.unwrapped._sail_aerodynamics.drag_coeff
             sum_angle = sail + app_angle + aoa
             desired_pos = torch.abs(env.unwrapped.desired_pos_b)
             rew_progress = env.unwrapped.reward_progress
@@ -205,7 +208,7 @@ def main():
                 env.reset()
 
             ros_node.publish(obs, actions, rew, aero_force, thruster_force, lin_speed, aoa, app_angle, sail, 
-                             head_w, head_wrt_wind, ld_ratio, robot_pos, goal_pos, energy, episode_energy, lift, 
+                             head_w, head_wrt_flow, ld_ratio, robot_pos, goal_pos, energy, episode_energy, lift, 
                              drag, lift_coeff, drag_coeff, sum_angle, desired_pos, rew_progress, rew_bearing, rew_energy, 
                              rew_backward, loss_disc, tack_wpts)
             

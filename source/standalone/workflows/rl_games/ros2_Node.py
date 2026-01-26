@@ -4,6 +4,36 @@ from rclpy.node import Node
 from std_msgs.msg import Float32MultiArray, Float32
 import torch
 
+class DynamicsRlAgentPublisher(Node):
+
+    def __init__(self, num_agents):
+        super().__init__("rl_agent_publisher")
+        self.num_agents = num_agents
+        self.publisher_registry = {}
+
+    def get_publishers(self, var_name):
+        if var_name not in self.publisher_registry:
+            pubs = [
+                self.create_publisher(
+                    Float32MultiArray,
+                    f"rl_{var_name}_{i}",
+                    1
+                )
+                for i in range(self.num_agents)
+            ]
+            self.publisher_registry[var_name] = pubs
+        return self.publisher_registry[var_name]
+
+    def publish(self, **variables):
+        for var_name, data in variables.items():
+            pubs = self.get_publishers(var_name)
+
+            for i in range(self.num_agents):
+                msg = Float32MultiArray(
+                    data=data[i].cpu().numpy().flatten().tolist()
+                )
+                pubs[i].publish(msg)
+
 class RlAgentPublisher(rclpy.node.Node):
     def __init__(self, num_agents):
         super().__init__("rl_agent_publisher")
@@ -16,7 +46,10 @@ class RlAgentPublisher(rclpy.node.Node):
         self.speed_publisher =  [self.create_publisher(Float32MultiArray, f"rl_speed_{i}", 10) for i in range(num_agents)] 
         self.angle_of_attack_publisher =  [self.create_publisher(Float32MultiArray, f"rl_angle_of_attack_{i}", 10) for i in range(num_agents)]
         self.app_wind_angle_publisher =  [self.create_publisher(Float32MultiArray, f"rl_app_wind_angle_{i}", 10) for i in range(num_agents)]
+        self.true_wind_angle_publisher =  [self.create_publisher(Float32MultiArray, f"rl_true_wind_angle_{i}", 10) for i in range(num_agents)]
         self.sail_angle_publisher =  [self.create_publisher(Float32MultiArray, f"rl_sail_angle_{i}", 10) for i in range(num_agents)]
+        self.world_wind_direc_publisher =  [self.create_publisher(Float32MultiArray, f"rl_world_wind_angle_{i}", 10) for i in range(num_agents)]
+ 
         self.heading_publisher =  [self.create_publisher(Float32MultiArray, f"rl_sailboat_heading_w_{i}", 10) for i in range(num_agents)]
         self.head_wrt_wind_publisher =  [self.create_publisher(Float32MultiArray, f"rl_head_wrt_wind_{i}", 10) for i in range(num_agents)]
         self.lift_drag_ratio_publisher = [self.create_publisher(Float32MultiArray, f"rl_lift_drag_ratio_{i}", 10) for i in range(num_agents)]
@@ -38,10 +71,11 @@ class RlAgentPublisher(rclpy.node.Node):
         self.tack_wpts_publisher = [self.create_publisher(Float32MultiArray, f"rl_tack_wpts_{i}", 10) for i in range(num_agents)]
         self.energy_context_publisher = [self.create_publisher(Float32MultiArray, f"rl_energy_context_{i}", 10) for i in range(num_agents)]
         self.predicted_context_publisher =  [self.create_publisher(Float32MultiArray, f"rl_predicted_context_{i}", 10) for i in range(num_agents)]
+        self.norm_error_publisher =  [self.create_publisher(Float32MultiArray, f"rl_norm_error_{i}", 10) for i in range(num_agents)]
 
-    def publish(self, obs, act, rew, aero_force, thruster_force, speed, aoa, app_angle, sail_ang, head_w, head_wrt_wind, 
+    def publish(self, obs, act, rew, aero_force, thruster_force, speed, aoa, app_angle, true_angle, sail_ang, head_w, head_wrt_wind, 
                 ld_ratio, robot_pos, goal_pos, energy, episode_energy, lift, drag, lift_coeff, drag_coeff, sum_angle, desired_pos,
-                rew_progress, rew_bearing, rew_energy, rew_backward, loss_disc, tack_wpts, energy_context, predicted_context):
+                rew_progress, rew_bearing, rew_energy, rew_backward, loss_disc, tack_wpts, energy_context, predicted_context, norm_error, world_wind_direc):
         for i in range(self.num_agents):
             msg_obs = Float32MultiArray(data=obs[i].cpu().numpy().flatten().tolist())
             msg_act = Float32MultiArray(data=act[i].cpu().numpy().flatten().tolist())
@@ -51,6 +85,7 @@ class RlAgentPublisher(rclpy.node.Node):
             msg_speed = Float32MultiArray(data=speed[i].cpu().numpy().flatten().tolist())
             msg_angle_of_attack = Float32MultiArray(data=aoa[i].cpu().numpy().flatten().tolist())
             msg_app_wind_angle = Float32MultiArray(data=app_angle[i].cpu().numpy().flatten().tolist())
+            msg_true_wind_angle = Float32MultiArray(data=true_angle[i].cpu().numpy().flatten().tolist())
             msg_sail_angle = Float32MultiArray(data=sail_ang[i].cpu().numpy().flatten().tolist())
             msg_heading_w = Float32MultiArray(data=head_w[i].cpu().numpy().flatten().tolist())
             msg_head_wrt_wind = Float32MultiArray(data=head_wrt_wind[i].cpu().numpy().flatten().tolist())
@@ -73,6 +108,9 @@ class RlAgentPublisher(rclpy.node.Node):
             msg_tack_wpts = Float32MultiArray(data=tack_wpts[i].cpu().numpy().flatten().tolist())
             msg_energy_context = Float32MultiArray(data=energy_context[i].cpu().numpy().flatten().tolist())
             msg_predicted_context = Float32MultiArray(data=predicted_context[i].cpu().numpy().flatten().tolist())
+            msg_norm_error = Float32MultiArray(data=norm_error[i].cpu().numpy().flatten().tolist())
+            msg_world_wind_direc = Float32MultiArray(data=world_wind_direc[i].cpu().numpy().flatten().tolist())
+
 
             self.obs_publishers[i].publish(msg_obs)
             self.act_publishers[i].publish(msg_act)
@@ -82,6 +120,7 @@ class RlAgentPublisher(rclpy.node.Node):
             self.speed_publisher[i].publish(msg_speed)
             self.angle_of_attack_publisher[i].publish(msg_angle_of_attack)
             self.app_wind_angle_publisher[i].publish(msg_app_wind_angle)
+            self.true_wind_angle_publisher[i].publish(msg_true_wind_angle)
             self.sail_angle_publisher[i].publish(msg_sail_angle)
             self.heading_publisher[i].publish(msg_heading_w)
             self.head_wrt_wind_publisher[i].publish(msg_head_wrt_wind)
@@ -104,6 +143,8 @@ class RlAgentPublisher(rclpy.node.Node):
             self.tack_wpts_publisher[i].publish(msg_tack_wpts)
             self.energy_context_publisher[i].publish(msg_energy_context)
             self.predicted_context_publisher[i].publish(msg_predicted_context)
+            self.norm_error_publisher[i].publish(msg_norm_error)
+            self.world_wind_direc_publisher[i].publish(msg_world_wind_direc)
 
 
 class RewardWeightSubscriber(Node):

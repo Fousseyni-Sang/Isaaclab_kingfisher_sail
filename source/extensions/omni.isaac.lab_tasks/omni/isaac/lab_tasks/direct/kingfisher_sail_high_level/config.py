@@ -133,8 +133,8 @@ def sail_actuator_config():
     cfg.command_rate = (cfg.cmd_upper_range - cfg.cmd_lower_range) / 2.0
     cfg.resolution = 1.8  # degrees
     cfg.precision = 0.01  # radians
-    cfg.scale_joint_pos = 179*torch.pi/180  # radians per command unit
-    cfg.pos_from_com = (0., 0., 0.) #(0.6, 0.5, 0.5)  # meters
+    cfg.scale_joint_pos = torch.pi  # radians per command unit
+    cfg.pos_from_com = (0.0, 0.0, 0.0)  # meters
     return cfg
 
 def keel_actuator_config():

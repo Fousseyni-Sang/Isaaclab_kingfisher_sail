@@ -440,7 +440,7 @@ class KingfisherSailEnv(DirectRLEnv):
     def _pre_physics_step(self, actions: torch.Tensor):
         
         self._actions = actions.clone().clamp(-1.0, 1.0)
-        self._actions[:, :2] = 0
+        #self._actions[:, :2] = 0
         # Override the actions for debugging
         # self._actions[:,0] = 0.6
         # self._actions[:,1] = 0.6
@@ -479,7 +479,6 @@ class KingfisherSailEnv(DirectRLEnv):
         lft_thruster_force = self._thruster_forces[..., :3]
         rgt_thruster_force = self._thruster_forces[..., 3:] 
 
-        
         combined = self._hydrostatic_force + self._hydrodynamic_force
 
         combined[:, 0, :3] = combined[:, 0, :3] + self._sail_aerodynamic_force_b[:, 0, :3] #+ \

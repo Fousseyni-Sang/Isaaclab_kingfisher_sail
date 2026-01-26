@@ -55,7 +55,7 @@ class FoilDynamics:
         self.apparent_flow_angle = torch.zeros(self.num_envs, device=self.device)
         self.apparent_flow_speed_b = torch.zeros((self.num_envs, 2), device=self.device)
         self.true_flow_speed2D_b = torch.zeros((self.num_envs, 2), device=self.device)
-        
+        self.true_flow_angle = torch.zeros(self.num_envs, device=self.device)
         self.Uw = self.cfg.flow_speed*torch.ones(self.num_envs, device=self.device) # flow speed of 10 meters per second
         self.Beta_w = self.cfg.flow_direction*torch.ones(self.num_envs, device=self.device) # flow angle of 80 degrees = 80*pi/180 radian
         self.flow_force = torch.zeros((self.num_envs, 3), device=self.device)
@@ -113,7 +113,7 @@ class FoilDynamics:
 
         # True flow in foilboat frame
         self.true_flow_speed2D_b = self.generate_true_flow_components(Uw, Beta_w, ship_heading_w) # ok
-
+        self.true_flow_angle = self.get_true_flow_angle(self.true_flow_speed2D_b)
         apparent_flow2D_b = self.generate_apparent_flow_components(self.true_flow_speed2D_b, ship_lin_vel2D)
 
         self.apparent_flow_speed_b = apparent_flow2D_b.clone()
@@ -192,6 +192,18 @@ class FoilDynamics:
         - Apparent flow angles as a tensor of shape (num_envs,).
         """
         return torch.atan2(apparent_flow2D_b[:, 1], apparent_flow2D_b[:, 0])
+    
+    def get_true_flow_angle(self, true_flow2D_b: torch.Tensor) -> torch.Tensor:
+        """
+        Calculate the apparent flow angle for each environment.
+
+        Parameters:
+        - true_flow2D_b: Tensor of shape (num_envs, 2, 1) representing the apparent flow.
+
+        Returns:
+        - true flow angles as a tensor of shape (num_envs,).
+        """
+        return torch.atan2(true_flow2D_b[:, 1], true_flow2D_b[:, 0])
 
     def get_angle_of_attack(self, apparent_flow_angle: torch.Tensor, foil_angle: torch.Tensor) -> torch.Tensor:
         """

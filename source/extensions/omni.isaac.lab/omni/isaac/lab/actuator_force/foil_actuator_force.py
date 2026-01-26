@@ -157,9 +157,11 @@ class FoilActuator:
 
         self._target_cmd = torch.round(scaled_command / self.resolution)*self.resolution
         
+        
         delta = torch.clamp(self._target_cmd - self._current_cmd, -self._max_cmd_delta, self._max_cmd_delta)
         step_error = (torch.rand_like(delta) * 2 - 1)*self.step_accuracy # random noise in range [-precision, precision]
         step_error = step_error*(delta!=0)  # only add error if there is a movement
+        #print(f"self._current_cmd: {self._current_cmd} \ntarget_cmd: {self._target_cmd} \ndelta: {delta} \nstep_error:{step_error}")
         self._current_cmd += (delta + step_error)
         
         return

@@ -73,7 +73,7 @@ from omni.isaac.lab_tasks.utils.wrappers.rl_games import RlGamesGpuEnv, RlGamesV
 import numpy as np
 # Create Publisher Node
 import rclpy
-from ros2_Node import DynamicsRlAgentPublisher, RewardWeightSubscriber
+from ros2_Node import RewardWeightSubscriber, DynamicsRlAgentPublisher
 #import matplotlib.pyplot as plt
 
 log_dir=None
@@ -82,6 +82,7 @@ def main():
     global log_dir    
     # ---- Initialize ROS2 ----
     rclpy.init()
+    
     dyn_ros_node = DynamicsRlAgentPublisher(args_cli.num_envs)
     slider_names = ['time', 'energy', 'goal', 'wind_direct', 'desired_speed', 'wind_speed']  # Must match the names you use in the publisher
     slider_node = RewardWeightSubscriber(slider_names)
@@ -167,10 +168,10 @@ def main():
     agent.reset()
 
     # reset environment
-    env.unwrapped.is_Training = False
-    env.unwrapped.discr_checkpoint = checkpoint_name_acord
+    """env.unwrapped.is_Training = False
+    env.unwrapped.discr_checkpoint = checkpoint_name_acord"""
     #env.unwrapped.discriminator_energy.load_checkpoint(checkpoint_name_acord)
-    env.unwrapped.discriminator_energy.eval()
+    #env.unwrapped.discriminator_energy.eval()
     if args_cli.episode_length is not None:
         env.unwrapped.cfg.episode_length_s = args_cli.episode_length
     
@@ -215,7 +216,8 @@ def main():
     distance_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.unwrapped.device)
     reward_aero_force_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.unwrapped.device)
     aoa_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.unwrapped.device)
-    wind_direc_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.unwrapped.device)
+    app_wind_direc_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.unwrapped.device)
+    true_wind_direc_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.unwrapped.device)
     actions_logs = torch.zeros((max_episod_length, args_cli.num_envs, 3), device=env.unwrapped.device)
     sail_angle_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.unwrapped.device)
     aero_force_logs = torch.zeros((max_episod_length, args_cli.num_envs, 6), device=env.unwrapped.device)
@@ -226,6 +228,8 @@ def main():
     ratio_energy_usage_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.unwrapped.device)
     acord_prediction_logs_logs = torch.zeros((max_episod_length, args_cli.num_envs, 3), device=env.unwrapped.device)
     energy_context_logs = torch.zeros((max_episod_length, args_cli.num_envs, 3), device=env.unwrapped.device)
+    norm_error_logs = torch.zeros((max_episod_length, args_cli.num_envs, 2), device=env.unwrapped.device)
+    world_wind_direc_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.unwrapped.device)
 
     trajectories_list = []
     lift_coeff_list = []
@@ -245,7 +249,9 @@ def main():
     distance_list = []
     reward_aero_force_list = []
     aoa_list = []
-    wind_direc_list = []
+    app_wind_direc_list = []
+    true_wind_direc_list = []
+    world_wind_direc_list = []
     actions_list = []
     sail_angle_list = []
     aero_force_list = []
@@ -255,6 +261,9 @@ def main():
     max_available_energy_list = []
     ratio_energy_usage_list = []
     acord_prediction_logs_list = []
+
+    norm_error_ang_logs_list = []
+    norm_error_logs_list = []
 
     print(f"\n====================== Max EPISODE: {max_episod_length} ==================================\n")
     # store metrics per finished episode
@@ -270,7 +279,7 @@ def main():
         with torch.inference_mode():
             current_step += 1
             goal_pos =  env.unwrapped._desired_pos_w[:, :2]
-            energy_context = env.unwrapped.energy_context
+            energy_context = torch.zeros((args_cli.num_envs), device=env.unwrapped.device) #env.unwrapped.energy_context
 
             # convert obs to agent format
             #print(f"\nenergy: {env.unwrapped.energy_context} \ntime: {env.unwrapped.time_context} \nwind: {env.unwrapped._sail_aerodynamics.Beta_w}\n")
@@ -311,22 +320,32 @@ def main():
             sum_angle = sail + app_flow_angle + aoa
             desired_pos = env.unwrapped.desired_pos_b
             rew_progress = env.unwrapped.reward_progress
+            rew_goal = env.unwrapped.reward_goal
             rew_bearing = env.unwrapped.reward_bearing
             rew_energy = env.unwrapped.reward_energy
             rew_backward = env.unwrapped.reward_backward
             reward_aero = env.unwrapped.reward_aero
             reward_acord = env.unwrapped.reward_acord
-            loss = env.unwrapped.loss_discrim_energy
+            loss = torch.zeros_like(reward_acord) #env.unwrapped.loss_discrim_energy
             max_aero_force = env.unwrapped.max_aero_force.squeeze(0)
-            acord_prediction_logs = env.unwrapped.acord_prediction_logs
+            acord_prediction_logs = torch.zeros((args_cli.num_envs, 3), device=reward_acord.device) #env.unwrapped.acord_prediction_logs
             predicted_context = acord_prediction_logs[:, 0]
             world_wind_direc = env.unwrapped._sail_aerodynamics.Beta_w
 
+            desired_wrench_b = env.unwrapped.desired_wrench_b
+            ang_speed_b = env.unwrapped._robot.data.root_ang_vel_b
+            
             distance  = env.unwrapped.distance
             bearing = env.unwrapped.bearing
+
+            norm_error_lin = env.unwrapped.norm_error_lin.reshape(-1, 1)
+            norm_error_ang = env.unwrapped.norm_error_ang.reshape(-1, 1)
+            
+            norm_error_cat = torch.cat((norm_error_lin, norm_error_ang), dim=-1)
+
             #print(loss, rew_backward)
             loss_disc = torch.tensor([loss], device=rew_backward.device) if loss is not None else torch.zeros_like(rew_energy)
-            tack_wpts = env.unwrapped.tack_waypoints
+            
             #print(f"way_pts: {env.unwrapped.sailing_mode}, bearing: {(180/torch.pi)*env.unwrapped.bearing}")
             dones = dones.to(device=trajectories.device)
             step = env.unwrapped.episode_length_buf
@@ -359,7 +378,8 @@ def main():
                 bearing_list.append(bearing_logs[:-1].clone())
                 distance_list.append(distance_logs[:-1].clone())
                 aoa_list.append(aoa_logs[:-1].clone())
-                wind_direc_list.append(wind_direc_logs[:-1].clone())
+                app_wind_direc_list.append(app_wind_direc_logs[:-1].clone())
+                true_wind_direc_list.append(true_wind_direc_logs[:-1].clone())
                 actions_list.append(actions_logs[:-1].clone())
                 sail_angle_list.append(sail_angle_logs[:-1].clone())
                 aero_force_list.append(aero_force_logs[:-1].clone())
@@ -372,7 +392,9 @@ def main():
                 reward_aero_list.append(reward_aero_logs[:-1].clone())
                 acord_prediction_logs_list.append(acord_prediction_logs_logs[:-1].clone())
                 energy_context_list.append(energy_context_logs[:-1].clone())
-            
+                norm_error_logs_list.append(norm_error_logs[:-1].clone())
+                
+
 
                 # Reset buffers for next episode
                 trajectories.zero_()
@@ -390,15 +412,16 @@ def main():
             trajectories[step] = torch.where(~dones.unsqueeze(0), robot_pos.clone(), trajectories[step].clone())
             #lift_coeff_logs[alive_envs, step] = lift_coeff[alive_envs].float()
             
+            
+
             dyn_ros_node.publish(obs=obs, actions=actions, total_rew=rew, aero_force=aero_force, thruster_force=thruster_force, 
                             lin_vel_b=lin_speed, angle_of_attack=aoa, app_flow_angle=app_flow_angle, true_flow_angle=true_flow_angle, 
                             sail_angle=sail, heading_w=head_w, head_wrt_wind=head_wrt_wind, lift_drag_ratio=ld_ratio, robot_pos_w=robot_pos, 
-                            goal_pos_w=goal_pos, energy=energy, episode_energy=episode_energy, lift_vec=lift, drag_vec=drag, lift_coeff=lift_coeff, 
-                            drag_coeff=drag_coeff, sum_angle=sum_angle, desired_pos_b=desired_pos, rew_progress=rew_progress, rew_bearing=rew_bearing, 
-                            rew_energy=rew_energy, rew_backward=rew_backward, loss_disc=loss_disc, tack_wpts=tack_wpts, energy_context=energy_context, 
-                            predicted_context=predicted_context, world_wind_direc=world_wind_direc)
+                            energy=energy, episode_energy=episode_energy, lift_vec=lift, drag_vec=drag, lift_coeff=lift_coeff, 
+                            drag_coeff=drag_coeff, sum_angle=sum_angle, rew_progress=rew_progress, rew_energy=rew_energy,
+                            rew_backward=rew_backward, world_wind_direc=world_wind_direc, desired_wrench_b=desired_wrench_b,
+                            ang_speed_b=ang_speed_b, norm_error_cat=norm_error_cat, rew_goal=rew_goal, rew_aero=reward_aero, distance=distance)
             
-
             lift_coeff_logs[step] = lift_coeff.clone().float()
             drag_coeff_logs[step] = drag_coeff.clone().float()
             energy_logs[step] = energy.clone().float()
@@ -409,7 +432,8 @@ def main():
             bearing_logs[step] = bearing.clone().float()
             distance_logs[step] = distance.clone().float()
             aoa_logs[step] = aoa.clone().float()
-            wind_direc_logs[step] = app_flow_angle.clone().float()
+            app_wind_direc_logs[step] = app_flow_angle.clone().float()
+            true_wind_direc_logs[step] = true_flow_angle.clone().float()
             #print(f"actions: {actions.shape} actions_logs: {actions_logs[step, 0, :].shape}")
             actions_logs[step, 0, :] = torch.tensor([actions[0, 0].clone().float(), actions[0, 1].clone().float(), 
                                             actions[0, 2].clone().float() ], device=actions_logs.device)
@@ -424,7 +448,8 @@ def main():
             reward_acord_logs[step] = reward_acord.clone().float()
             acord_prediction_logs_logs[step] = acord_prediction_logs.clone().float()
             energy_context_logs[step] = energy_context.clone().float()
-        
+            norm_error_logs[step, 0, 0], norm_error_logs[step, 0, 1] = norm_error_lin.clone().float(), norm_error_ang.clone().float()
+            
     # Cleanup
     dyn_ros_node.destroy_node()
     slider_node.destroy_node()
@@ -433,16 +458,16 @@ def main():
 
     return all_metrics, trajectories_list, lift_coeff_list, drag_coeff_list, goal_pos_list, env, episode_lengths_list, \
                 energy_list, reward_progress_list, reward_energy_list, reward_backward_list, total_reward_list, bearing_list, \
-                distance_list, aoa_list, wind_direc_list, actions_list, sail_angle_list, aero_force_list, max_aero_force_list, \
+                distance_list, aoa_list, app_wind_direc_list, true_wind_direc_list, actions_list, sail_angle_list, aero_force_list, max_aero_force_list, \
                 thruster_force_list, episode_energy_list, max_available_energy_list, ratio_energy_usage_list, energy_context_list, \
-                reward_acord_list, reward_aero_list, acord_prediction_logs_list
+                reward_acord_list, reward_aero_list, acord_prediction_logs_list, norm_error_logs_list
    
 if __name__ == "__main__":
     metrics_list, trajectories_list, lift_coeff_list, drag_coeff_list, goal_pos_list, env, episode_lengths_list, energy_list, \
     reward_progress_list, reward_energy_list, reward_backward_list, total_reward_list, bearing_list, distance_list, aoa_list, \
-    wind_direc_list, actions_list, sail_angle_list, aero_force_list, max_aero_force_list, thruster_force_list, \
-         episode_energy_list, max_available_energy_list, ratio_energy_usage_list, energy_context_list, reward_acord_list, \
-            reward_aero_list, acord_prediction_logs_list = main()
+    app_wind_direc_list, true_wind_direc_list, actions_list, sail_angle_list, aero_force_list, max_aero_force_list, thruster_force_list, \
+    episode_energy_list, max_available_energy_list, ratio_energy_usage_list, energy_context_list, reward_acord_list, \
+    reward_aero_list, acord_prediction_logs_list, norm_error_logs_list = main()
 
     import pandas as pd
     import os
@@ -490,7 +515,7 @@ if __name__ == "__main__":
 
     # --- Save Aero data ---
     aero_records = []
-    for ep_idx, (lift, drag, aoa, app_wind_angle) in enumerate(zip(lift_coeff_list, drag_coeff_list, aoa_list, wind_direc_list)):
+    for ep_idx, (lift, drag, aoa, app_wind_angle, true_wind_angle) in enumerate(zip(lift_coeff_list, drag_coeff_list, aoa_list, app_wind_direc_list, true_wind_direc_list)):
         for t in range(lift.shape[0]):
             for env_id in range(lift.shape[1]):
                 aero_records.append({
@@ -501,9 +526,24 @@ if __name__ == "__main__":
                     "drag_coeff": drag[t, env_id].item(),
                     'aoa': aoa[t, env_id].item(),
                     'app_wind_angle': app_wind_angle[t, env_id].item(),
-                    "sail_angle": sail_angle_list[ep_idx][t, env_id].item()
+                    'true_wind_angle': true_wind_angle[t, env_id].item(),
+                    "sail_angle": sail_angle_list[ep_idx][t, env_id].item(),
                 })
     pd.DataFrame(aero_records).to_csv(os.path.join(output_dir, "aero_data.csv"), index=False)
+
+    # --- Save norm error  ---
+    norm_error = []
+    for ep_idx, norm in enumerate(norm_error_logs_list):
+        for t in range(norm.shape[0]):
+            for env_id in range(lift.shape[1]):
+                norm_error.append({
+                    "episode": ep_idx,
+                    "time_step": t,
+                    "env_id": env_id,
+                    "norm_error_lin": norm[t, env_id, 0].item(),   
+                    "norm_error_ang": norm[t, env_id, 1].item(),  
+                })
+    pd.DataFrame(norm_error).to_csv(os.path.join(output_dir, "norm_error.csv"), index=False)
 
     # --- Save episode length ---
     episode_length_records = []
@@ -549,9 +589,7 @@ if __name__ == "__main__":
     for ep_idx, m in enumerate(metrics_list):
         metric_records.append({
             "episode": ep_idx,
-            "final_distance_to_goal": m["Metrics/final_distance_to_goal"],
             "consumed_energy": m["Metrics/consumed_energy"],
-            "disc_prediction_mean": m["Contexts/disc_prediction_mean"]
         })
     pd.DataFrame(metric_records).to_csv(os.path.join(output_dir, "metrics.csv"), index=False)
 
@@ -585,8 +623,3 @@ if __name__ == "__main__":
                 
                 })
     pd.DataFrame(other_metrics_records).to_csv(os.path.join(output_dir, "other_metrics.csv"), index=False)
-
-
-    
-
-    
