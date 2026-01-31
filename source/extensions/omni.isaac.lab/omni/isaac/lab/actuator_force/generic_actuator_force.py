@@ -20,6 +20,7 @@ class ThrusterCfg:
     # If False: command can be negative (bidirectional)
     # If True: command is assumed >= 0 (or clamped)
     positive_only: bool = False
+    num_dim: int = 2 if holonomic else 1
 
     # Fixed direction for non-holonomic thrusters (unit vector in 3D)
     # Example: (1, 0, 0) for forward-only, (0, 1, 0) for lateral, etc.
@@ -27,23 +28,23 @@ class ThrusterCfg:
 
 
 @dataclass
-class PropellerActuatorCfg:
-    cmd_lower_range: float = -1.0
-    cmd_upper_range: float = 1.0
-    command_rate: float = 10.0  # Hz
+class GenPropellerActuatorCfg:
+    cmd_lower_range: float = MISSING
+    cmd_upper_range: float = MISSING
+    command_rate: float = MISSING  # Hz
 
     # List of thrusters, arbitrary number and types
     thrusters: List[ThrusterCfg] = field(default_factory=list)
+    num_thrusters: int = len(thrusters)
 
 
-class PropellerActuator:
-    def __init__(self, num_envs, device, dt, cfg: PropellerActuatorCfg):
+class GenPropellerActuator:
+    def __init__(self, num_envs, device, dt, cfg: GenPropellerActuatorCfg):
         self.num_envs = num_envs
         self.device = device
         self.dt = dt
         self.cfg = cfg
-
-        self.num_thrusters = len(cfg.thrusters)
+        self.num_thrusters = cfg.num_thrusters
         if self.num_thrusters == 0:
             raise ValueError("PropellerActuatorCfg.thrusters must contain at least one thruster.")
 
@@ -52,8 +53,9 @@ class PropellerActuator:
 
         # Per-thruster command dimensionality (1D or 2D)
         self._thruster_cmd_dims = [
-            (2 if thr_cfg.holonomic else 1) for thr_cfg in self.cfg.thrusters
+            thr_cfg.num_dim for thr_cfg in self.cfg.thrusters
         ]
+
         self.total_cmd_dim = sum(self._thruster_cmd_dims)
 
         # Flat command tensors: shape (num_envs, total_cmd_dim)

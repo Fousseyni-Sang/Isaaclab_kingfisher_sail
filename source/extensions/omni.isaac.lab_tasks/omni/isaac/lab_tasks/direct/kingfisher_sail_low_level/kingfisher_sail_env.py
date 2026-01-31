@@ -11,6 +11,7 @@ import torch
 import omni.isaac.lab.sim as sim_utils
 from omni.isaac.lab.actuator_force.foil_actuator_force import FoilActuator, FoilActuatorCfg
 from omni.isaac.lab.actuator_force.actuator_force import PropellerActuator, PropellerActuatorCfg
+from omni.isaac.lab.actuator_force.generic_actuator_force import GenPropellerActuatorCfg, GenPropellerActuator
 from omni.isaac.lab.assets import Articulation, ArticulationCfg, RigidObject, RigidObjectCfg
 from omni.isaac.lab.envs import DirectRLEnv, DirectRLEnvCfg
 from omni.isaac.lab.envs.ui import BaseEnvWindow
@@ -25,8 +26,11 @@ from omni.isaac.lab.utils import configclass
 from omni.isaac.lab.utils.math import subtract_frame_transforms, transform_points, quat_from_euler_xyz
 import numpy as np
 from .network import DiscriminatorNetwork
-from .config import (sail_config, rudder_config, keel_config, hydrostatics_config, hydrodynamics_config, propeller_config,
-                     sail_actuator_config, rudder_actuator_config, keel_actuator_config)
+from ...utils.my_config import (sail_config, rudder_config, keel_config, hydrostatics_config, hydrodynamics_config, 
+                                propeller_config, sail_actuator_config, rudder_actuator_config, keel_actuator_config, 
+                                kingfisher_propeller_config, jellyfish_propeller_config, vap2_propeller_config, 
+                                vap4_propeller_config)
+
 from .utils import sample_feasible_pairs_batch
 
 ##
@@ -62,12 +66,12 @@ class KingfisherSailEnvWindow(BaseEnvWindow):
 @configclass
 class KingfisherSailEnvCfg(DirectRLEnvCfg):
     # env
-    episode_length_s = 9
+    episode_length_s = 100 #9
     physics_dt = 1 / 60.0  # 60 Hz
     decimation = 3
     step_dt = physics_dt * decimation  # 20 Hz
-    action_space = 3
-    observation_space = 12
+    action_space = 2 #3
+    base_observation_space = 19 #12
     state_space = 0
     debug_vis = True
 
@@ -115,12 +119,17 @@ class KingfisherSailEnvCfg(DirectRLEnvCfg):
     )
 
     sail_aerodyn_cfg: FoilDynamicsCfg = sail_config()
+    sail_aerodyn_cfg.flow_speed = 8
     rudder_hydrodyn_cfg: FoilDynamicsCfg = rudder_config()
     keel_hydrodyn_cfg: FoilDynamicsCfg = keel_config()
 
     sail_actuator_cfg: FoilActuatorCfg = sail_actuator_config()
     rudder_actuator_cfg: FoilActuatorCfg = rudder_actuator_config()
     keel_actuator_cfg: FoilActuatorCfg = keel_actuator_config()
+
+    generique_actuator_cfg: GenPropellerActuatorCfg = jellyfish_propeller_config()
+    action_space = sum([thr_cfg.num_dim for thr_cfg in generique_actuator_cfg.thrusters])
+    observation_space = base_observation_space + action_space
     
     # Hydrostatics
     hydrostatics_cfg: HydrostaticsCfg = hydrostatics_config()
@@ -182,7 +191,7 @@ class KingfisherSailEnvCfg(DirectRLEnvCfg):
     goal_reached_scale =  800.0 #
 
     energy_penalty_scale = -1 
-    backwards_penalty_scale = -0.5
+    backwards_penalty_scale = -1
     time_penalty_scale = -1 #-0.008 #
 
     bearing_penalty_scale = 0.5
@@ -275,6 +284,10 @@ class KingfisherSailEnv(DirectRLEnv):
         self._keel_actuator = FoilActuator(
             num_envs=self.num_envs, dynamics=self._keel_hydrodynamics, dt=cfg.step_dt, cfg=self.cfg.keel_actuator_cfg
         )
+
+        self.generique_thruster_dynamics = GenPropellerActuator(
+            num_envs=self.num_envs, device=self.device, dt=cfg.step_dt, cfg=cfg.generique_actuator_cfg
+            )
 
         # Buffers
         self.distance = torch.zeros(self.num_envs, device=self.device)
@@ -401,13 +414,17 @@ class KingfisherSailEnv(DirectRLEnv):
 
         
     def _pre_physics_step(self, actions: torch.Tensor):
-        
+        if not torch.isfinite(actions).all():
+            print("🔥 NaN/Inf in LL obs", actions)
+            raise RuntimeError("Invalid HL observation")
         self._actions = actions.clone().clamp(-1.0, 1.0)
-        self._actions[:, 2] = 0
+        #self._actions[:, 2] = 0
         # Override the actions for debugging
         # self._actions[:,0] = 0.6
         # self._actions[:,1] = 0.6
-
+        if not torch.isfinite(self._actions).all():
+            print("🔥 NaN/Inf in LL obs", self._actions)
+            raise RuntimeError("Invalid HL observation")
         # Compute the thruster forces based on the actions.
         # thrust_cmds = torch.tensor([0.0, 1.0], dtype=torch.float32, device=self.device)
         
@@ -424,15 +441,22 @@ class KingfisherSailEnv(DirectRLEnv):
         self._hydrodynamic_force[:, 0, :] = self._hydrodynamics.ComputeHydrodynamicsEffects(robot_quat, robot_vel)
 
         current_joint_pos = self._sail_actuator.dynamics.foil_angle.reshape(self.num_envs, -1)
-        self._sail_actuator.update_joint_cmd(current_joint_pos, self._actions[:, 2:3])
+        self._sail_actuator.update_joint_cmd(current_joint_pos, self._actions[:, 1:2]) #2:3
         self._sail_actuator.update_forces(self._robot.data.heading_w, self._robot.data.root_lin_vel_b)
         self._sail_aerodynamic_force_b[:, 0, :] = self._sail_actuator.get_forces()
         #print(f"SAIL FORCE: {self._sail_aerodynamic_force_b[:, 0, :]}")
-        """self._rudder_actuator.update_joint_cmd(self._actions[:, 3:])
+
+        current_rudder_angle = self._rudder_actuator.dynamics.foil_angle.reshape(self.num_envs, -1)
+        self._rudder_actuator.update_joint_cmd(current_rudder_angle, self._actions[:, 0:1])
         self._rudder_actuator.update_forces(self._robot.data.heading_w, self._robot.data.root_lin_vel_b)
-        self._rudder_hydrodynamics_force_b[:, 0, :] = self._rudder_actuator.get_forces()"""
+        self._rudder_hydrodynamics_force_b[:, 0, :] = self._rudder_actuator.get_forces()
 
+        #current_keel_angle = self._keel_actuator.dynamics.foil_angle.reshape(self.num_envs, -1)
+        #self._keel_actuator.update_joint_cmd(current_keel_angle, self._actions[:, 1:2])
+        self._keel_actuator.update_forces(self._robot.data.heading_w, self._robot.data.root_lin_vel_b)
+        self._keel_hydrodynamics_force_b[:, 0, :] = self._keel_actuator.get_forces()
 
+        #print(f"\nkeel: {self._keel_hydrodynamics_force_b} \nrudder: {self._rudder_hydrodynamics_force_b}")
         #=====================================================================================================#
         
     
@@ -441,31 +465,51 @@ class KingfisherSailEnv(DirectRLEnv):
         lft_thruster_force = self._thruster_forces[..., :3]
         rgt_thruster_force = self._thruster_forces[..., 3:] 
 
-        
+        #self._hydrodynamic_force[:, 0, :] = self._keel_hydrodynamics_force_b[:, 0, :]
+        #print(self._hydrodynamic_force.shape, self._keel_hydrodynamics_force_b.shape)
         combined = self._hydrostatic_force + self._hydrodynamic_force
 
-        combined[:, 0, :3] = combined[:, 0, :3] #+ self._sail_aerodynamic_force_b[:, 0, :3] #+ \
-        #self._rudder_hydrodynamics_force_b[:, 0, :3] #+ self._keel_hydrodynamics_force_b[:, 0, :3]
+        combined[:, 0, :3] = combined[:, 0, :3] + self._sail_aerodynamic_force_b[:, 0, :3] + \
+        self._rudder_hydrodynamics_force_b[:, 0, :3] + self._keel_hydrodynamics_force_b[:, 0, :3]
 
-        combined[:, 0, 3:] = combined[:, 0, 3:] #+ self._sail_aerodynamic_force_b[:, 0, 3:] + \
-        #self._rudder_hydrodynamics_force_b[:, 0, 3:] #+ self._keel_hydrodynamics_force_b[:, 0, 3:]
+        combined[:, 0, 3:] = combined[:, 0, 3:] + self._sail_aerodynamic_force_b[:, 0, 3:] + \
+        self._rudder_hydrodynamics_force_b[:, 0, 3:] + self._keel_hydrodynamics_force_b[:, 0, 3:]
+
 
         self._robot.set_external_force_and_torque(combined[..., :3], combined[..., 3:], body_ids=self._base_link)
         
-        if lft_thruster_force.any():
+        """if lft_thruster_force.any():
             self._robot.set_external_force_and_torque(
                 lft_thruster_force, self._no_torque, body_ids=self._left_thruster_id
             )
         if rgt_thruster_force.any():
             self._robot.set_external_force_and_torque(
                 rgt_thruster_force, self._no_torque, body_ids=self._right_thruster_id
-            )
+            )"""
         self.joint_pos_target = self._sail_actuator.get_joint_positions()
         # Set psoition of the sail joint
         self._robot.set_joint_position_target(target=self.joint_pos_target.reshape(self.num_envs,-1), 
              joint_ids=self._wing_joint_dof_id
             )
+    def get_added_obs_couples(self, hydrodynamics:FoilDynamics, obs:torch.Tensor):
+        """ This function computes observation related to the foil which hydro-dynamics is given and 
+        concatenate that to the observation given as argument """
+
+        foil_obs = torch.cat([
+            obs, 
+            torch.cos(hydrodynamics.foil_angle.reshape(self.num_envs, -1)), # 1
+            torch.sin(hydrodynamics.foil_angle.reshape(self.num_envs, -1)), # 1
+            torch.cos(hydrodynamics.apparent_flow_angle).reshape(self.num_envs, -1), # 1
+            torch.sin(hydrodynamics.apparent_flow_angle).reshape(self.num_envs, -1), # 1
+            torch.norm(hydrodynamics.apparent_flow_speed_b, dim=-1).reshape(self.num_envs, -1), #1
+        ], dim=-1)
+
+        if not torch.isfinite(foil_obs).all():
+            print("🔥 NaN/Inf in <<get_added_obs_couples>>: ", foil_obs)
+            raise RuntimeError("<<get_added_obs_couples>>: Invalid HL observation")
         
+        return foil_obs.clone()
+    
     def _get_observations(self) -> dict:
 
         # Observations
@@ -510,11 +554,16 @@ class KingfisherSailEnv(DirectRLEnv):
             ],
             dim=1,
         )
-
+        
+        if not torch.isfinite(delta_ang_vel_b[:, 2]).all():
+            print("🔥 NaN/Inf in <<_get_observations>>: ", delta_ang_vel_b[:, 2])
+            raise RuntimeError("<<_get_observations>>: Invalid HL observation")
+        #print("before")
+        obs = self.get_added_obs_couples(self._rudder_hydrodynamics, obs)
+        #print("after")
+        obs = self.get_added_obs_couples(self._keel_hydrodynamics, obs)
+        
         observations = {"policy": obs}
-        '''
-        obs = {"agent 1": }
-        '''
 
         #print(f"\nprev: {self.prev_lin_vel_b} \ncurrent: {self._robot.data.root_lin_vel_b}  ")
         
@@ -539,7 +588,7 @@ class KingfisherSailEnv(DirectRLEnv):
         s = 1.0
         self.reward_goal = goal_reach.clone()
 
-        r1 = (torch.exp(-5*torch.norm(distance_to_target[:, 0:1], dim=-1)/s)-1) + (torch.exp(-5*torch.norm(distance_to_target[:, 5:], dim=-1)/s)-1)
+        r1 = 0.5*(torch.exp(-5*torch.norm(distance_to_target[:, 0:1], dim=-1)/s)-1) + 0.5*(torch.exp(-5*torch.norm(distance_to_target[:, 5:], dim=-1)/s)-1)
         self.reward_progress = r1.clone()
 
         dot_wrench = torch.sum(self.desired_wrench_b*self.current_wrench_b, dim=1)
@@ -554,11 +603,15 @@ class KingfisherSailEnv(DirectRLEnv):
         self.reward_backward = r2 #backwards_penalty.clone()
         self.episode_avg_speed += torch.norm(self._robot.data.root_lin_vel_b, dim=-1)
         
+        aerodynamic_force_b = self._sail_aerodynamics.flow_lift_b.clone().reshape_as(self._sail_aerodynamic_force_b[:, :, :3])
+        
+        reward_forward = self._sail_aerodynamic_force_b[:, 0, 0]/self.max_aero_force
+
         energy_norm = self.energy / self.cfg.max_energy
         #energy_reward = torch.zeros_like(energy_norm)
-        
-        energy_reward = self.cfg.energy_penalty_scale * energy_norm #* self.energy_context
-        self.reward_energy = 0.1*energy_reward.clone()
+        energy_coeff_aeroforce = torch.clip(reward_forward, min=0.2, max=1)**(-1)
+        energy_reward = 0.3*energy_coeff_aeroforce*self.cfg.energy_penalty_scale*energy_norm#* self.energy_context
+        self.reward_energy = 0.5*energy_reward.clone()
 
         lift_drag_ratio = 0.1*torch.max(torch.zeros_like(self._sail_aerodynamics.lift_coeff), self._sail_aerodynamics.lift_coeff/self._sail_aerodynamics.drag_coeff)
         lift_ratio = torch.abs(self._sail_aerodynamics.lift_coeff/self._sail_aerodynamics.max_cl)
@@ -567,16 +620,14 @@ class KingfisherSailEnv(DirectRLEnv):
         #reward_speed = self.cfg.speed_penalty_scale*(torch.square(root_lin_vel_b_x - self.desired_speed_b))*self.step_dt
         #self.reward_energy = reward_speed.clone()
 
-        aerodynamic_force_b = self._sail_aerodynamics.flow_lift_b.clone().reshape_as(self._sail_aerodynamic_force_b[:, :, :3])
         
-        reward_forward = 0.5*self._sail_aerodynamic_force_b[:, 0, 0]/self.max_aero_force
         lift_ratio = torch.abs(self._sail_aerodynamics.lift_coeff/self._sail_aerodynamics.max_cl)
         drag_coeff = self._sail_aerodynamics.drag_coeff
         
         reward_aero =   lift_ratio #0.5*lift_ratio
         
         self.reward_aero = reward_aero.clone()
-        time_reward = self.cfg.time_penalty_scale *goal_mask*self.step_dt
+        time_reward = self.cfg.time_penalty_scale*(~goal_mask)*self.step_dt
         rewards = {  
             "0_goal_reach": goal_reach,
             "1_distance_progress": self.reward_progress,
@@ -662,8 +713,10 @@ class KingfisherSailEnv(DirectRLEnv):
             self.episode_length_buf = torch.randint_like(self.episode_length_buf, high=int(self.max_episode_length))
 
         self._actions[env_ids] = 0.0
-        self.interval_between_goals[env_ids] = 108 #torch.randint_like(input=self.interval_between_goals[env_ids], low=20, high=51)
+        self.interval_between_goals[env_ids] = 300 #108 #torch.randint_like(input=self.interval_between_goals[env_ids], low=20, high=51)
         self._sail_actuator.reset(env_ids=env_ids)
+        self._rudder_actuator.reset(env_ids=env_ids)
+        self._keel_actuator.reset(env_ids=env_ids)
         
         self.reset_wrench_targets(env_ids=env_ids)
         

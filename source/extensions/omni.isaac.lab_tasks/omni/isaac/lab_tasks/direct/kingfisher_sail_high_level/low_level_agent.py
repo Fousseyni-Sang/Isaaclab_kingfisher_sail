@@ -35,6 +35,8 @@ import numpy as np
 class DummyLowLevelEnv:
     def __init__(self, act_dim:int=3, obs_dim:int=11):
         # must match the env used during training
+        self.obs_dim = obs_dim
+        self.act_dim = act_dim
         self.observation_space = spaces.Box(low=-1.0, high=1.0, shape=(obs_dim,), dtype=np.float32)
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(act_dim,), dtype=np.float32)
 
@@ -85,7 +87,7 @@ def get_low_level_agent(num_envs: int, checkpoint_path: str, task_name:str="Isaa
     agent.reset()
     agent.has_batch_dimension = True
 
-    return agent
+    return agent, env
 
 import torch.nn as nn
 import torch.nn.functional as F
