@@ -18,7 +18,8 @@ class FoilActuatorCfg:
     resolution: float = MISSING  # min discrete step in degrees
     precision: float = MISSING  # Precision for force calculations
     scale_joint_pos: float = MISSING  # Scale factor to convert command to joint position (rads)
-    pos_from_com:tuple = MISSING  # distance [dx, dy, dz] from foil to center of mass (m)
+    pos_from_com:tuple = MISSING  # position [dx, dy, dz] relative to center of mass (m)
+    foil_type: str = "generic" # Optional: label/type (sail, keel, rudder, etc.)
 
 
 class FoilActuator:
@@ -62,7 +63,7 @@ class FoilActuator:
         self._target_cmd = torch.zeros((self.num_envs, 1), dtype=torch.float32, device=self.device)
 
         self.aero_forces = torch.zeros((self.num_envs, 3), dtype=torch.float32, device=self.device)
-        self.joint_psoition = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
+        self.joint_position = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
 
         self.reset()
 
@@ -105,11 +106,11 @@ class FoilActuator:
         if position is not None:
             if randomize:
                 noise = (torch.rand((self.num_envs,3), device=self.device)-0.5)*0.1  # random noise in range [-0.05, 0.05]
-                self.pos_from_com = (torch.tensor(position, device=self.device).repeat(self.num_envs,1) + noise)
+                self.pos_from_com = torch.tensor(position, device=self.device).repeat(self.num_envs,1) + noise
             else:
                 self.pos_from_com = torch.tensor(position, device=self.device).repeat(self.num_envs,1)  
     
-    def get_forces(self):
+    def get_forces_and_torques(self):
         """
         Computes the forces and torques generated on the boat by the foil in boat body frame.
 
@@ -151,12 +152,13 @@ class FoilActuator:
         Returns:
             torch.Tensor: The updated thruster forces.
         """
+        if self.cfg.foil_type=="keel":
+            return
         # update the current command based on the target command and maximum delta and the resolution
         scaled_command = self.scale_joint_pos*target_cmd
         self._current_cmd = torch.atan2(torch.sin(current_joint_pos.clone()), torch.cos(current_joint_pos.clone())) 
 
         self._target_cmd = torch.round(scaled_command / self.resolution)*self.resolution
-        
         
         delta = torch.clamp(self._target_cmd - self._current_cmd, -self._max_cmd_delta, self._max_cmd_delta)
         step_error = (torch.rand_like(delta) * 2 - 1)*self.step_accuracy # random noise in range [-precision, precision]
@@ -190,8 +192,11 @@ class FoilActuator:
         return
         
     def reset(self, env_ids=None):
+        if env_ids is None:
+            env_ids = slice(None)
         self._current_cmd[env_ids, :] = 0.0
         self._target_cmd[env_ids, :] = 0.0
+        self.aero_forces[env_ids, :] = 0.0
 
 
 

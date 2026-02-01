@@ -55,7 +55,7 @@ from omni.isaac.lab_tasks.utils.wrappers.rsl_rl import (
     export_policy_as_jit,
     export_policy_as_onnx,
 )
-from ..rl_games.ros2_Node import RlAgentPublisher, RewardWeightSubscriber
+from ....extensions.omni.isaac.lab_tasks.omni.isaac.lab_tasks.utils.ros2_Node import RlAgentPublisher, RewardWeightSubscriber
 from omni.isaac.core.utils.extensions import enable_extension
 import rclpy
 

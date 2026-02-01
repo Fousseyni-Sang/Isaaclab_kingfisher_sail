@@ -20,11 +20,13 @@ class ThrusterCfg:
     # If False: command can be negative (bidirectional)
     # If True: command is assumed >= 0 (or clamped)
     positive_only: bool = False
-    num_dim: int = 2 if holonomic else 1
+    num_dim: int = 1
 
     # Fixed direction for non-holonomic thrusters (unit vector in 3D)
     # Example: (1, 0, 0) for forward-only, (0, 1, 0) for lateral, etc.
     direction: Tuple[float, float, float] = (1.0, 0.0, 0.0)
+    def __post_init__(self):
+        self.num_dim = 2 if self.holonomic else 1
 
 
 @dataclass
@@ -35,7 +37,10 @@ class GenPropellerActuatorCfg:
 
     # List of thrusters, arbitrary number and types
     thrusters: List[ThrusterCfg] = field(default_factory=list)
-    num_thrusters: int = len(thrusters)
+    num_thrusters: int = 0
+
+    def __post_init__(self): 
+        self.num_thrusters = len(self.thrusters)
 
 
 class GenPropellerActuator:
@@ -57,13 +62,13 @@ class GenPropellerActuator:
         ]
 
         self.total_cmd_dim = sum(self._thruster_cmd_dims)
-
+        
         # Flat command tensors: shape (num_envs, total_cmd_dim)
         self._current_cmds = torch.zeros(
             (self.num_envs, self.total_cmd_dim), dtype=torch.float32, device=self.device
         )
         self._target_cmds = torch.zeros_like(self._current_cmds)
-
+        self.idx = None
         # Precompute interpolation tables per thruster
         self._interp_forces = []
         for thr_cfg in self.cfg.thrusters:
@@ -85,6 +90,7 @@ class GenPropellerActuator:
         for dim in self._thruster_cmd_dims:
             self._cmd_offsets.append(offset)
             offset += dim
+
 
         self.reset()
 
@@ -111,12 +117,12 @@ class GenPropellerActuator:
             thruster_forces: (num_envs, num_thrusters, 3)
         """
         forces = torch.zeros_like(self.thruster_forces)
-
+        
         for i, thr_cfg in enumerate(self.cfg.thrusters):
             offset = self._cmd_offsets[i]
             dim = self._thruster_cmd_dims[i]
             interp = self._interp_forces[i]
-
+            
             if thr_cfg.holonomic:
                 # Command: [u, theta]
                 u = self._current_cmds[:, offset]       # magnitude command
@@ -124,10 +130,10 @@ class GenPropellerActuator:
 
                 if thr_cfg.positive_only:
                     u = torch.clamp(u, min=0.0)
-
+                
                 idx = self._cmd_to_index(u, thr_cfg)
                 mag = interp[idx]  # (num_envs,)
-
+                
                 # 2D force in plane (x, y), z = 0
                 fx = mag * torch.cos(theta)
                 fy = mag * torch.sin(theta)
@@ -143,18 +149,21 @@ class GenPropellerActuator:
 
                 if thr_cfg.positive_only:
                     u = torch.clamp(u, min=0.0)
-
+                
                 idx = self._cmd_to_index(u, thr_cfg)
+                
                 mag = interp[idx]  # (num_envs,)
-
+                
                 direction = torch.tensor(
                     thr_cfg.direction, dtype=torch.float32, device=self.device
                 )
+                
                 direction = direction / (direction.norm() + 1e-8)
 
                 forces[:, i, :] = mag.unsqueeze(-1) * direction
-
+        
         self.thruster_forces = forces
+        #print(f"mag values: {self.thruster_forces}")
         self._update_torques()
         return self.thruster_forces
 
@@ -172,7 +181,7 @@ class GenPropellerActuator:
             # Cross product r x F
             rxF = torch.cross(r.expand_as(F), F, dim=-1)
             torques[:, i, :] = rxF
-
+            
         self.thruster_torques = torques
 
     def update_forces(self) -> torch.Tensor:

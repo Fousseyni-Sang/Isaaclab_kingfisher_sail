@@ -319,10 +319,11 @@ class DirectRLEnv(gym.Env):
         # check if we need to do rendering within the physics loop
         # note: checked here once to avoid multiple checks within the loop
         is_rendering = self.sim.has_gui() or self.sim.has_rtx_sensors()
-
+        
         # perform physics stepping
         for _ in range(self.cfg.decimation):
             self._sim_step_counter += 1
+            
             # set actions into buffers
             self._apply_action()
             # set actions into simulator
@@ -336,7 +337,7 @@ class DirectRLEnv(gym.Env):
                 self.sim.render()
             # update buffers at sim dt
             self.scene.update(dt=self.physics_dt)
-
+        
         # post-step:
         # -- update env counters (used for curriculum generation)
         self.episode_length_buf += 1  # step in current episode (per env)

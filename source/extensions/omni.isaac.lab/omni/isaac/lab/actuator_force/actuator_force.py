@@ -72,6 +72,8 @@ class PropellerActuator:
         # Expand the forces vectors with linear interpolation
         self.interp_forces_left = self.linear_interpolate_1d(self.forces_left, self.cfg.interp_resolution)
         self.interp_forces_right = self.linear_interpolate_1d(self.forces_right, self.cfg.interp_resolution)
+        self.idx_tensor = torch.zeros((self.num_envs, 2), device=self.device)
+        self.magn_tensor = torch.zeros_like(self.idx_tensor)
         self.reset()
 
     def linear_interpolate_1d(self, x: torch.Tensor, size: int):
@@ -91,9 +93,12 @@ class PropellerActuator:
 
         idx_left = torch.round((self._current_cmds[:, 0] + 1) / 2 * (self.cfg.interp_resolution - 1)).to(torch.long)
         idx_right = torch.round((self._current_cmds[:, 1] + 1) / 2 * (self.cfg.interp_resolution - 1)).to(torch.long)
-
+        self.idx_tensor[:, 0] = idx_left
+        self.idx_tensor[:, 1] = idx_right
         # Using indices to gather interpolated forces for each thruster
-        return torch.stack((self.interp_forces_left[idx_left], self.interp_forces_right[idx_right]), dim=1)
+        result = torch.stack((self.interp_forces_left[idx_left], self.interp_forces_right[idx_right]), dim=1)
+        
+        return result
 
     def update_forces(self):
         """
@@ -114,7 +119,7 @@ class PropellerActuator:
         self._current_cmds += delta
 
         self.thruster_forces[:, [0, 3]] = self.get_forces()
-
+        #print(f"force_orig: {self.thruster_forces}")
         return self.thruster_forces
 
     def set_target_cmd(self, commands):
