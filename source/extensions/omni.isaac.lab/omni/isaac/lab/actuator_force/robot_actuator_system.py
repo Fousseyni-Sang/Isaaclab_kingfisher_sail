@@ -12,30 +12,32 @@ class RobotActuatorSystemCfg:
 
     # Foil subsystem
     foil_cfg: Optional[GenFoilActuatorCfg] = None
-    foil_dynamics: Optional[List] = None       # list of FoilDynamics
 
     # Optional: future actuators (winches, flaps, etc.)
     # winch_cfg: ...
     # winch_dynamics: ...
 
     # Sanity check
-    def validate(self):
-        
-        if self.foil_cfg is not None:
-            if self.foil_dynamics is None:
-                raise ValueError("foil_cfg provided but foil_dynamics missing")
-            if len(self.foil_cfg.foils) != len(self.foil_dynamics):
-                raise ValueError("foil_cfg.foils and foil_dynamics length mismatch")
+            
+    def __post_init__(self):
+        self.thrust_cmd_dim = sum([thr_cfg.num_dim for thr_cfg in self.thruster_cfg.thrusters]) if self.thruster_cfg else 0
+        if self.foil_cfg:
+            self.foil_cmd_dim = self.foil_cfg.num_foils-1 if "keel" in self.foil_cfg.foil_types else self.foil_cfg.num_foils
+        else:
+            self.foil_cmd_dim = 0
+        self.total_cmd_dim = self.thrust_cmd_dim + self.foil_cmd_dim
 
 
 class RobotActuatorSystem:
-    def __init__(self, num_envs, device, dt, cfg: RobotActuatorSystemCfg):
-        cfg.validate()
+    def __init__(self, num_envs, device, dt, cfg: RobotActuatorSystemCfg, foil_dynamics:Optional[List] = None):
 
         self.num_envs = num_envs
         self.device = device
         self.dt = dt
         self.cfg = cfg
+        self.foil_dynamics = foil_dynamics
+
+        self.validate()
 
         # ------------------------------------------------------------
         # Instantiate thruster subsystem
@@ -47,7 +49,7 @@ class RobotActuatorSystem:
                 dt=dt,
                 cfg=cfg.thruster_cfg,
             )
-            self.thruster_cmd_dim = self.thruster_actuator.total_cmd_dim
+            self.thruster_cmd_dim = cfg.thrust_cmd_dim
         else:
             self.thruster_actuator = None
             self.thruster_cmd_dim = 0
@@ -55,15 +57,15 @@ class RobotActuatorSystem:
         # ------------------------------------------------------------
         # Instantiate foil subsystem
         # ------------------------------------------------------------
-        if cfg.foil_cfg is not None:
+        if  not (cfg.foil_cfg is None or self.foil_dynamics is None):
             self.foil_actuator = GenFoilActuator(
                 num_envs=num_envs,
                 device=device,
                 dt=dt,
                 cfg=cfg.foil_cfg,
-                dynamics_list=cfg.foil_dynamics,
+                dynamics_list=self.foil_dynamics,
             )
-            self.foil_cmd_dim = self.foil_actuator.total_cmd_dim
+            self.foil_cmd_dim = cfg.foil_cmd_dim
         else:
             self.foil_actuator = None
             self.foil_cmd_dim = 0
@@ -71,13 +73,21 @@ class RobotActuatorSystem:
         # ------------------------------------------------------------
         # Total action dimension
         # ------------------------------------------------------------
-        self.total_cmd_dim = self.thruster_cmd_dim + self.foil_cmd_dim
+        self.total_cmd_dim = cfg.total_cmd_dim
 
         # Combined wrench
         self._combined_forces = torch.zeros(
             (num_envs, 6), dtype=torch.float32, device=device
         )
 
+    def validate(self):
+        
+        if self.cfg.foil_cfg is not None:
+            if self.foil_dynamics is None:
+                raise ValueError("foil_cfg provided but foil_dynamics missing")
+            if len(self.cfg.foil_cfg.foils) != len(self.foil_dynamics):
+                raise ValueError("foil_cfg.foils and foil_dynamics length mismatch")
+            
     # ------------------------------------------------------------
     # Set target commands
     # ------------------------------------------------------------
@@ -102,8 +112,10 @@ class RobotActuatorSystem:
         # Thrusters
         if self.thruster_actuator:
             self.thruster_forces = self.thruster_actuator.update_forces()
+            self.thruster_torques = self.thruster_actuator.thruster_torques.clone()
         else:
             self.thruster_forces = None
+            self.thruster_torques = None
 
         # Foils
         if self.foil_actuator:
@@ -122,8 +134,9 @@ class RobotActuatorSystem:
     def get_forces(self):
         F = torch.zeros_like(self._combined_forces)
 
-        if self.thruster_forces is not None:
-            F += self.thruster_forces.sum(dim=1)
+        if not(self.thruster_forces is None or self.thruster_torques is None):
+            F[:, :3] += self.thruster_forces.sum(dim=1)
+            F[:, 3:] += self.thruster_torques.sum(dim=1)
 
         if self.foil_forces is not None:
             F += self.foil_forces.sum(dim=1)

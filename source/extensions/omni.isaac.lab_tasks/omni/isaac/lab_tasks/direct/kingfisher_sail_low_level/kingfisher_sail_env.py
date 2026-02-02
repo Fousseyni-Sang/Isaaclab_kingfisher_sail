@@ -26,11 +26,10 @@ from omni.isaac.lab.terrains import TerrainImporterCfg
 from omni.isaac.lab.utils import configclass
 from omni.isaac.lab.utils.math import subtract_frame_transforms, transform_points, quat_from_euler_xyz
 import numpy as np
-from omni.isaac.lab.actuator_force.robot_actuator_system import RobotActuatorSystem
-from ...utils.boat_config import (sail_config, rudder_config, keel_config, hydrostatics_config, hydrodynamics_config, 
+from omni.isaac.lab.actuator_force.robot_actuator_system import RobotActuatorSystem, RobotActuatorSystemCfg
+from ...utils.my_config.boat_config import (sail_config, rudder_config, keel_config, hydrostatics_config, hydrodynamics_config, 
                                 propeller_config, sail_actuator_config, rudder_actuator_config, keel_actuator_config, 
-                                kingfisher_propeller_config, jellyfish_propeller_config, vap2_propeller_config, 
-                                vap4_propeller_config)
+                                kingfisher_roboat, jellyfish_roboat, vap2_roboat, vap4_roboat)
 
 from .utils import sample_feasible_pairs_batch
 
@@ -128,7 +127,7 @@ class KingfisherSailEnvCfg(DirectRLEnvCfg):
     rudder_actuator_cfg: FoilActuatorCfg = rudder_actuator_config()
     keel_actuator_cfg: FoilActuatorCfg = keel_actuator_config()
 
-    generic_actuator_cfg: GenPropellerActuatorCfg = vap2_propeller_config()
+    generic_actuator_cfg: RobotActuatorSystemCfg = vap2_roboat()
     generic_foil_actuator_cfg: GenFoilActuatorCfg = GenFoilActuatorCfg(
         foils=[
             rudder_actuator_cfg, 
@@ -136,7 +135,7 @@ class KingfisherSailEnvCfg(DirectRLEnvCfg):
         ]
     )
     
-    action_space = sum([thr_cfg.num_dim for thr_cfg in generic_actuator_cfg.thrusters])
+    action_space = generic_actuator_cfg.total_cmd_dim
     observation_space = base_observation_space + action_space
     
     # Hydrostatics
@@ -260,9 +259,7 @@ class KingfisherSailEnv(DirectRLEnv):
         self._keel_hydrodynamics_force_b = torch.zeros(self.num_envs, 1, 6, device=self.device)
         self._aerodynamic_force_wing = torch.zeros(self.num_envs, 1, 3, device=self.device)
         self._thruster_forces = torch.zeros(self.num_envs, 1, 6, device=self.device)
-        self.generic_thruster_forces = torch.zeros((self.num_envs, self.cfg.generic_actuator_cfg.num_thrusters, 3), 
-                                                     device=self.device)
-        self.generic_thruster_torques = torch.zeros_like(self.generic_thruster_forces)
+        self.robot_system_forces = torch.zeros((self.num_envs, 6), device=self.device)
 
         self._no_torque = torch.zeros(self.num_envs, 1, 3, device=self.device)
 
@@ -296,7 +293,7 @@ class KingfisherSailEnv(DirectRLEnv):
             num_envs=self.num_envs, dynamics=self._keel_hydrodynamics, dt=cfg.step_dt, cfg=self.cfg.keel_actuator_cfg
         )
 
-        self._generic_thruster_dynamics = GenPropellerActuator(
+        self._robot_system_dynamics = RobotActuatorSystem(
             num_envs=self.num_envs, device=self.device, dt=cfg.step_dt, cfg=cfg.generic_actuator_cfg
             )
 
@@ -443,16 +440,15 @@ class KingfisherSailEnv(DirectRLEnv):
         self._thruster_forces[:, 0, :] = self._thruster_dynamics.update_forces()
         
         # === THRUSTERS === 
-        thr_cmd_dim = self._generic_thruster_dynamics.total_cmd_dim 
-        thruster_actions = self._actions[:, :thr_cmd_dim] 
+        thr_cmd_dim = self._robot_system_dynamics.total_cmd_dim 
+        thruster_actions = self._actions 
         
-        self._generic_thruster_dynamics.set_target_cmd(thruster_actions) 
-        thruster_forces = self._generic_thruster_dynamics.update_forces() # (num_envs, num_thrusters, 3) 
-        thruster_torques = self._generic_thruster_dynamics.thruster_torques # (num_envs, num_thrusters, 3) 
+        self._robot_system_dynamics.set_target_cmd(thruster_actions) 
+        self._robot_system_dynamics.update(self._robot.data.heading_w, self._robot.data.root_lin_vel_b) # (num_envs, num_thrusters, 3) 
+        
         
         # Store for _apply_action 
-        self.generic_thruster_forces = thruster_forces 
-        self.generic_thruster_torques = thruster_torques
+        self.robot_system_forces = self._robot_system_dynamics.get_forces()
 
         # Compute the hydrostatic and hydrodynamic forces
         robot_pos = self._robot.data.root_pos_w.clone()
@@ -498,15 +494,16 @@ class KingfisherSailEnv(DirectRLEnv):
         combined[:, 0, 3:] = combined[:, 0, 3:] #+ self._sail_aerodynamic_force_b[:, 0, 3:] + \
         #self._rudder_hydrodynamics_force_b[:, 0, 3:] + self._keel_hydrodynamics_force_b[:, 0, 3:]
 
-        combined_thruster_forces = self.generic_thruster_forces.sum(dim=1)
-        combined_thruster_torques = self.generic_thruster_torques.sum(dim=1)
+        combined_thruster_forces = self.robot_system_forces[:, :3]
+        combined_thruster_torques = self.robot_system_forces[:, 3:]
+        #print(combined_thruster_torques)
 
         """print("idx: ", idx_gene==idx_orig)
         print("interp: ", inter_gene[0]==inter_orig)
         print("cmd: ", curr_cmd_orig==curr_cmd_gene)
         print("mag: ", mag_gene==mag_orig)
-        print(f"gene_thru_force: {self.generic_thruster_forces}")
-        print(f"gene_thru_force2: {self._generic_thruster_dynamics.thruster_forces}")
+        print(f"gene_thru_force: {self.robot_system_forces}")
+        print(f"gene_thru_force2: {self._robot_system_dynamics.thruster_forces}")
 """
         combined[:, 0, :3] += combined_thruster_forces
         combined[:, 0, 3:] += combined_thruster_torques
@@ -514,13 +511,13 @@ class KingfisherSailEnv(DirectRLEnv):
         #print(f"combined_force: {combined_thruster_forces}")
         self._robot.set_external_force_and_torque(combined[..., :3], combined[..., 3:], body_ids=self._base_link)
         
-        """if self.generic_thruster_forces[:, 0, :].any():
+        """if self.robot_system_forces[:, 0, :].any():
             self._robot.set_external_force_and_torque(
-                self.generic_thruster_forces[:, 0, :], self._no_torque, body_ids=self._left_thruster_id
+                self.robot_system_forces[:, 0, :], self._no_torque, body_ids=self._left_thruster_id
             )
-        if self.generic_thruster_forces[:, 1, :].any():
+        if self.robot_system_forces[:, 1, :].any():
             self._robot.set_external_force_and_torque(
-                self.generic_thruster_forces[:, 1, :], self._no_torque, body_ids=self._right_thruster_id
+                self.robot_system_forces[:, 1, :], self._no_torque, body_ids=self._right_thruster_id
             )"""
         self.joint_pos_target = self._sail_actuator.get_joint_positions()
         # Set psoition of the sail joint
