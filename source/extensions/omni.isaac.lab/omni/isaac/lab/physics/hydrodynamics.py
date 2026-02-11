@@ -43,7 +43,7 @@ class Hydrodynamics:
         self.linear_damping = torch.tensor([cfg.linear_damping] * self.num_envs, device=self.device)
         self.quadratic_damping = torch.tensor([cfg.quadratic_damping] * self.num_envs, device=self.device)
         self.linear_damping_forward_speed = torch.tensor(cfg.linear_damping_forward_speed, device=self.device)
-
+        
         # Initialize tensor for drag forces and torques
         self.drag = torch.zeros((self.num_envs, 6), dtype=torch.float32, device=self.device)
 
@@ -92,12 +92,13 @@ class Hydrodynamics:
             + self.cfg.offset_linear_damping
             - (self.linear_damping_forward_speed + self.cfg.offset_lin_forward_damping_speed)
         )
+        
         # print("lin_damp: ", lin_damp)
         quad_damp = ((self.quadratic_damping + self.cfg.offset_nonlin_damping).mT * torch.abs(vel.mT)).mT
         # print("quad_damp: ", quad_damp)
         # scaling and adding both matrices
         damping_matrix = (lin_damp + quad_damp) * self.cfg.scaling_damping
-        
+
         # print("damping_matrix: ", damping_matrix)
         return damping_matrix
 
@@ -112,5 +113,5 @@ class Hydrodynamics:
 
         # Damping forces and torques
         self.drag = -1 * damping_matrix * self.local_velocities
-
+        
         return self.drag

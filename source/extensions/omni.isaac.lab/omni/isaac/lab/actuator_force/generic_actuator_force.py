@@ -161,9 +161,10 @@ class GenPropellerActuator:
                 direction = direction / (direction.norm() + 1e-8)
 
                 forces[:, i, :] = mag.unsqueeze(-1) * direction
+                
         
         self.thruster_forces = forces
-        #print(f"mag values: {self.thruster_forces}")
+        
         self._update_torques()
         return self.thruster_forces
 
@@ -194,6 +195,7 @@ class GenPropellerActuator:
             self._max_cmd_delta,
         )
         self._current_cmds += delta
+    
         return self.get_forces()
 
     def set_target_cmd(self, commands: torch.Tensor):
@@ -205,6 +207,7 @@ class GenPropellerActuator:
                 f"Expected commands of shape {self._target_cmds.shape}, got {commands.shape}"
             )
         self._target_cmds = commands.to(self.device)
+        
 
     def reset(self):
         self._current_cmds.zero_()

@@ -130,9 +130,11 @@ class FoilDynamics:
         self.lift_coeff = coeff_L.clone()
         self.drag_coeff = coeff_D.clone()
 
+
         lift_L, drag_D = self.generate_force(flow_Vapp=apparent_flow2D_b, angle_of_attack=angle_of_attack, foil_angle=foil_angle, 
                                              aire_A=foil_aire, coeff_L=coeff_L, coeff_D=coeff_D, density_p=density_p)
 
+        
         force = torch.zeros((self.num_envs, 3), device=self.device)
 
         #print(f"{rot_mat_app_to_boat.shape, lift_L.unsqueeze(2).shape}")
@@ -250,6 +252,8 @@ class FoilDynamics:
         self.lift_magnitude = lift_L.clone()
         self.drag_magnitude = drag_D.clone()
 
+        #print(f"lift: {0.5 * density_p * aire_A * coeff_L} drag: {0.5 * density_p * aire_A * coeff_D} square: {torch.square(flow_Vapp_ampl)}")
+
         # Cedric's code for boat forces -- Begin -->
         # build foil frame
         foil_angle = foil_angle.clone().detach().reshape(-1, ) #self.get_foil_angle(self.apparent_flow_angle, self.angle_of_attack)
@@ -366,7 +370,7 @@ class FoilDynamics:
 
         # Assuming a, cl, cd are numpy arrays
         valid_mask = ~np.isnan(a) & ~np.isnan(cl) & ~np.isnan(cd)
-
+        
         # Filter all arrays accordingly
         a_clean = torch.from_numpy(a[valid_mask])
         cl_clean = torch.from_numpy(cl[valid_mask])
@@ -374,7 +378,7 @@ class FoilDynamics:
         
         self.max_cl_cd_ratio = torch.max(cl_clean/cd_clean)
         self.max_cl = torch.max(cl_clean)
-
+        
         idx_stall = torch.argmax(cl_clean)
         idx_min_Cl = torch.argmin(cl_clean)
         idx_min = torch.argmin(cl_clean)

@@ -73,7 +73,7 @@ from omni.isaac.lab_tasks.utils.wrappers.rl_games import RlGamesGpuEnv, RlGamesV
 import numpy as np
 # Create Publisher Node
 import rclpy
-from omni.isaac.lab_tasks.utils.my_config.ros2_Node import RlAgentPublisher, RewardWeightSubscriber
+from omni.isaac.lab_tasks.utils.my_utils.ros2_Node import RlAgentPublisher, RewardWeightSubscriber
 #import matplotlib.pyplot as plt
 
 log_dir=None

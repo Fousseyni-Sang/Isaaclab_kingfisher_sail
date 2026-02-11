@@ -73,7 +73,7 @@ from omni.isaac.lab_tasks.utils.wrappers.rl_games import RlGamesGpuEnv, RlGamesV
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Float32MultiArray
-from omni.isaac.lab_tasks.utils.my_config.ros2_Node import RlAgentPublisher
+from omni.isaac.lab_tasks.utils.my_utils.ros2_Node import RlAgentPublisher
 
 """class RlAgentPublisher(rclpy.node.Node):
     def __init__(self, num_agents):

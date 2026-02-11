@@ -41,7 +41,7 @@ if args_cli.video:
 
 # launch omniverse app
 app_launcher = AppLauncher(args_cli)
-#simulation_app = app_launcher.app
+simulation_app = app_launcher.app
 
 """Rest everything follows."""
 
@@ -73,7 +73,7 @@ from omni.isaac.lab_tasks.utils.wrappers.rl_games import RlGamesGpuEnv, RlGamesV
 import numpy as np
 # Create Publisher Node
 import rclpy
-from omni.isaac.lab_tasks.utils.my_config.ros2_Node import RewardWeightSubscriber, DynamicsRlAgentPublisher
+from omni.isaac.lab_tasks.utils.my_utils.ros2_Node import RewardWeightSubscriber, DynamicsRlAgentPublisher
 #import matplotlib.pyplot as plt
 
 log_dir=None
@@ -168,13 +168,13 @@ def main():
     agent.reset()
 
     # reset environment
-    """env.unwrapped.is_Training = False
+    """
     env.unwrapped.discr_checkpoint = checkpoint_name_acord"""
     #env.unwrapped.discriminator_energy.load_checkpoint(checkpoint_name_acord)
     #env.unwrapped.discriminator_energy.eval()
     if args_cli.episode_length is not None:
         env.unwrapped.cfg.episode_length_s = args_cli.episode_length
-    
+    env.unwrapped.is_Training = False
     wind_direc = (args_cli.wind_direction*torch.pi/180)
     wind_speed = args_cli.wind_speed
     wind_modulo = (wind_direc + torch.pi)%(2*torch.pi) - torch.pi
@@ -213,7 +213,7 @@ def main():
     reward_acord_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.unwrapped.device)  
     total_reward_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.unwrapped.device) 
     bearing_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.unwrapped.device)
-    distance_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.unwrapped.device)
+    distance_logs = torch.zeros((max_episod_length, args_cli.num_envs, 2), device=env.unwrapped.device)
     reward_aero_force_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.unwrapped.device)
     aoa_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.unwrapped.device)
     app_wind_direc_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.unwrapped.device)
@@ -228,7 +228,7 @@ def main():
     ratio_energy_usage_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.unwrapped.device)
     acord_prediction_logs_logs = torch.zeros((max_episod_length, args_cli.num_envs, 3), device=env.unwrapped.device)
     energy_context_logs = torch.zeros((max_episod_length, args_cli.num_envs, 3), device=env.unwrapped.device)
-    norm_error_logs = torch.zeros((max_episod_length, args_cli.num_envs, 2), device=env.unwrapped.device)
+    norm_error_logs = torch.zeros((max_episod_length, args_cli.num_envs, 3), device=env.unwrapped.device)
     world_wind_direc_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.unwrapped.device)
 
     trajectories_list = []
@@ -273,7 +273,7 @@ def main():
     #while simulation_app.is_running():
     current_step = 0
     
-    while episode_cntr<num_episodes:   
+    while simulation_app.is_running() and episode_cntr<num_episodes:   
         
         # run everything in inference mode
         with torch.inference_mode():
@@ -338,7 +338,7 @@ def main():
             distance  = env.unwrapped.distance
             bearing = env.unwrapped.bearing
 
-            norm_error_lin = env.unwrapped.norm_error_lin.reshape(-1, 1)
+            norm_error_lin = env.unwrapped.norm_error_lin.reshape(-1, 2)
             norm_error_ang = env.unwrapped.norm_error_ang.reshape(-1, 1)
             
             norm_error_cat = torch.cat((norm_error_lin, norm_error_ang), dim=-1)
@@ -430,7 +430,7 @@ def main():
             reward_backward_logs[step] = rew_backward.clone().float()
             total_reward_logs[step] = rew.clone().float()
             bearing_logs[step] = bearing.clone().float()
-            distance_logs[step] = distance.clone().float()
+            distance_logs[step] = 0 #distance.clone().float()
             aoa_logs[step] = aoa.clone().float()
             app_wind_direc_logs[step] = app_flow_angle.clone().float()
             true_wind_direc_logs[step] = true_flow_angle.clone().float()
@@ -448,13 +448,15 @@ def main():
             reward_acord_logs[step] = reward_acord.clone().float()
             acord_prediction_logs_logs[step] = acord_prediction_logs.clone().float()
             energy_context_logs[step] = energy_context.clone().float()
-            norm_error_logs[step, 0, 0], norm_error_logs[step, 0, 1] = norm_error_lin.clone().float(), norm_error_ang.clone().float()
+            norm_error_logs[step, 0, 0:2], norm_error_logs[step, 0, 2] = norm_error_lin.clone().float(), norm_error_ang.clone().float()
             
     # Cleanup
     dyn_ros_node.destroy_node()
     slider_node.destroy_node()
 
     rclpy.shutdown()
+
+    env.close()
 
     return all_metrics, trajectories_list, lift_coeff_list, drag_coeff_list, goal_pos_list, env, episode_lengths_list, \
                 energy_list, reward_progress_list, reward_energy_list, reward_backward_list, total_reward_list, bearing_list, \
@@ -468,6 +470,8 @@ if __name__ == "__main__":
     app_wind_direc_list, true_wind_direc_list, actions_list, sail_angle_list, aero_force_list, max_aero_force_list, thruster_force_list, \
     episode_energy_list, max_available_energy_list, ratio_energy_usage_list, energy_context_list, reward_acord_list, \
     reward_aero_list, acord_prediction_logs_list, norm_error_logs_list = main()
+
+    simulation_app.close()
 
     import pandas as pd
     import os
@@ -610,7 +614,7 @@ if __name__ == "__main__":
                     "reward_acord": reward_acord_list[ep_idx][t, env_id].item(),
                     "total_reward": total_reward_list[ep_idx][t, env_id].item(),
                     "bearing": bearing_list[ep_idx][t, env_id].item(),
-                    "distance": distance_list[ep_idx][t, env_id].item(),
+                    "distance": distance_list[ep_idx][t, env_id, 0].item(),
                     "max_aero_force": max_aero_force_list[ep_idx][t, env_id].item(),
                     "aero_force_x": aero_force_list[ep_idx][t, env_id, 0].item(),
                     "aero_force_y": aero_force_list[ep_idx][t, env_id, 1].item(),

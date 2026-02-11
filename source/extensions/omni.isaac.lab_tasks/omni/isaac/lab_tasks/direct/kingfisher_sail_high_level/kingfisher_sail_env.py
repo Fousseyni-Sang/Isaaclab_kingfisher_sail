@@ -24,11 +24,13 @@ from omni.isaac.lab.terrains import TerrainImporterCfg
 from omni.isaac.lab.utils import configclass
 from omni.isaac.lab.utils.math import subtract_frame_transforms, transform_points, quat_from_euler_xyz
 import numpy as np
+import random
 from .network import DiscriminatorNetwork
-from omni.isaac.lab_tasks.utils.boat_config import (sail_config, rudder_config, keel_config, hydrostatics_config, hydrodynamics_config, propeller_config,
-                     sail_actuator_config, rudder_actuator_config, keel_actuator_config)
+from omni.isaac.lab_tasks.utils.my_utils.boat_config import (sail_config, rudder_config, keel_config, hydrostatics_config, hydrodynamics_config, propeller_config,
+                     sail_actuator_config, rudder_actuator_config, keel_actuator_config, make_boat_model)
 from .low_level_agent import get_low_level_agent
-from omni.isaac.lab_tasks.utils.my_config.ros2_Node import DynamicsRlAgentPublisher
+from omni.isaac.lab_tasks.utils.my_utils.ros2_Node import DynamicsRlAgentPublisher
+from ...utils.my_utils.common import deterministic_split, load_ll_population_with_split
 ##
 # Pre-defined configs
 ##
@@ -122,6 +124,9 @@ class KingfisherSailEnvCfg(DirectRLEnvCfg):
     sail_actuator_cfg: FoilActuatorCfg = sail_actuator_config()
     rudder_actuator_cfg: FoilActuatorCfg = rudder_actuator_config()
     keel_actuator_cfg: FoilActuatorCfg = keel_actuator_config()
+
+    def __post_init__(self): 
+        self.train_models, self.eval_models = load_ll_population_with_split() 
     
     # Hydrostatics
     hydrostatics_cfg: HydrostaticsCfg = hydrostatics_config()
@@ -314,8 +319,10 @@ class KingfisherSailEnv(DirectRLEnv):
         self._low_level_agent, dummy_env = get_low_level_agent(num_envs=self.num_envs, 
         checkpoint_path="logs/rl_games/kingfisher_direct_low_level/2026-01-22_15-11-25_compromise_nosail/nn/last_kingfisher_direct_low_level_ep_300_rew_120.73284.pth", 
         device=self.device, act_dim=3, obs_dim=12)
-        self._low_level_agent.device = self.device
-        self._low_level_agent.device_name = self.device
+
+        self.ll_agent_cache = {}
+        self.feasibility_map = None
+        
         #self._low_level_agent = LowPPOAgent(10, 3, 64)
         
         self.low_lvl_actions = torch.zeros(self.num_envs, 3, device=self.device)
@@ -533,6 +540,20 @@ class KingfisherSailEnv(DirectRLEnv):
             pass
 
         return
+    
+    def update_low_level(self):
+
+        # Choose LL model based on training/eval mode 
+        if self.is_Training: 
+            model = random.choice(self.cfg.train_models) 
+        else: 
+            model = random.choice(self.cfg.eval_models) 
+
+        # Load morphology spec 
+        spec = model["spec"] 
+        self.generic_system_actuator_cfg = make_boat_model(spec) 
+        # Load LL controller 
+        self._low_level_agent = get_low_level_agent( checkpoint_path=model["checkpoint"], num_envs=self.num_envs, device=self.device, act_dim=3, obs_dim=12, ) # Reset LL action buffer self.low_lvl_actions = torch.zeros(self.num_envs, 3, device=self.device) # Store feasibility map if needed self.feas_map = model["feasibility"] 
 
     def _pre_physics_step(self, actions: torch.Tensor):
         actions = actions.clamp(-1.0, 1.0)
@@ -578,7 +599,7 @@ class KingfisherSailEnv(DirectRLEnv):
         current_joint_pos = self._sail_actuator.dynamics.foil_angle.reshape(self.num_envs, -1)
         self._sail_actuator.update_joint_cmd(current_joint_pos, self.low_lvl_actions[:, 2:3])
         self._sail_actuator.update_forces(self._robot.data.heading_w, self._robot.data.root_lin_vel_b)
-        self._sail_aerodynamic_force_b[:, 0, :] = self._sail_actuator.get_forces()
+        self._sail_aerodynamic_force_b[:, 0, :] = self._sail_actuator.get_forces_and_torques()
         #print(f"SAIL FORCE: {self._sail_aerodynamic_force_b[:, 0, :]}")
         """self._rudder_actuator.update_joint_cmd(self._actions[:, 3:])
         self._rudder_actuator.update_forces(self._robot.data.heading_w, self._robot.data.root_lin_vel_b)

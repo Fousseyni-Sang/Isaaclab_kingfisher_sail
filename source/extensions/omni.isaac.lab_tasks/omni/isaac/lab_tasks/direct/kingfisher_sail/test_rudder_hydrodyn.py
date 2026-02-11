@@ -4,15 +4,30 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 from __future__ import annotations
-
+import omni
 from omni.isaac.lab.physics.foil_dynamics import FoilDynamicsCfg, FoilDynamics
 import torch
 import matplotlib.pyplot as plt
 import numpy as np
 
+def rudder_config():
+    
+    # Rudder Hydrodynamics
+    cfg: FoilDynamicsCfg = FoilDynamicsCfg()
+    cfg.flow_density = 997.0
+    cfg.foil_span = 1
+    cfg.foil_chord = 0.2
+    cfg.flow_direction = 30*torch.pi/180
+    cfg.flow_speed = 0.05
+    cfg.angle_of_attack = 20*torch.pi/180
+    cfg.min_upflow_angle = 45*torch.pi/180
+    cfg.max_downflow_angle = 140*torch.pi/180
+    cfg.Reynold = 500000  # based on flow_speed, chord, density and viscosity
+    return cfg
+
 # Rudder Hydrodynamics: flow is the water
-rudder_hydrodyn_cfg: FoilDynamicsCfg = FoilDynamicsCfg()
-rudder_hydrodyn_cfg.flow_density = 997.0 # water density kg/m^3
+rudder_hydrodyn_cfg: FoilDynamicsCfg = rudder_config()
+"""rudder_hydrodyn_cfg.flow_density = 997.0 # water density kg/m^3
 rudder_hydrodyn_cfg.foil_span = 1
 rudder_hydrodyn_cfg.foil_chord = 0.2
 rudder_hydrodyn_cfg.flow_direction = -179*torch.pi/180
@@ -20,8 +35,9 @@ rudder_hydrodyn_cfg.flow_speed = 0.5
 rudder_hydrodyn_cfg.angle_of_attack = 20*torch.pi/180
 rudder_hydrodyn_cfg.min_upflow_angle = 45*torch.pi/180
 rudder_hydrodyn_cfg.max_downflow_angle = 140*torch.pi/180
-rudder_hydrodyn_cfg.Reynold = 1000000  # based on flow_speed, chord, density and viscosity
+rudder_hydrodyn_cfg.Reynold = 1000000  # based on flow_speed, chord, density and viscosity"""
 device = 'cpu'
+
 
 min_aoa = -180
 max_aoa = 180
@@ -118,3 +134,5 @@ plt.ylabel("forces (N)")
 plt.legend()
 plt.title("Magnitude of lift and drag")
 plt.savefig(dir+prefix+"magn_lift_drag_aoa.png")
+
+print(f"FIGURE SAVED IN {(dir+prefix).upper()}")

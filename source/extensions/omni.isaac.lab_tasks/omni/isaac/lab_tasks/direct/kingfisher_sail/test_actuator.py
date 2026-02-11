@@ -17,7 +17,7 @@ import os
 os.makedirs(dir, exist_ok=True)
 #=====================================================================================================================#
 # Rudder Hydrodynamics: flow is the water
-rudder_hydrodyn_cfg: FoilDynamicsCfg = FoilDynamicsCfg()
+"""rudder_hydrodyn_cfg: FoilDynamicsCfg = FoilDynamicsCfg()
 rudder_hydrodyn_cfg.flow_density = 997.0 # water density kg/m^3
 rudder_hydrodyn_cfg.foil_span = 1
 rudder_hydrodyn_cfg.foil_chord = 0.2
@@ -26,7 +26,23 @@ rudder_hydrodyn_cfg.flow_speed = 0.5
 rudder_hydrodyn_cfg.angle_of_attack = 20*torch.pi/180
 rudder_hydrodyn_cfg.min_upflow_angle = 45*torch.pi/180
 rudder_hydrodyn_cfg.max_downflow_angle = 140*torch.pi/180
-rudder_hydrodyn_cfg.Reynold = 1000000  # based on flow_speed, chord, density and viscosity
+rudder_hydrodyn_cfg.Reynold = 1000000  # based on flow_speed, chord, density and viscosity"""
+def rudder_config():
+    
+    # Rudder Hydrodynamics
+    cfg: FoilDynamicsCfg = FoilDynamicsCfg()
+    cfg.flow_density = 997.0
+    cfg.foil_span = 0.2
+    cfg.foil_chord = 0.021
+    cfg.flow_direction = 30*torch.pi/180
+    cfg.flow_speed = 0.05
+    cfg.angle_of_attack = 20*torch.pi/180
+    cfg.min_upflow_angle = 45*torch.pi/180
+    cfg.max_downflow_angle = 140*torch.pi/180
+    cfg.Reynold = 1000000  # based on flow_speed, chord, density and viscosity
+    return cfg
+
+rudder_hydrodyn_cfg: FoilDynamicsCfg = rudder_config()
 device = 'cpu'
 
 actuator_cfg: FoilActuatorCfg = FoilActuatorCfg()
@@ -36,7 +52,7 @@ actuator_cfg.command_rate = (actuator_cfg.cmd_upper_range - actuator_cfg.cmd_low
 actuator_cfg.resolution = 1.8  # degrees
 actuator_cfg.precision = 0.05  # radians
 actuator_cfg.scale_joint_pos = torch.pi  # radians per command unit
-actuator_cfg.pos_from_com = (0.0, 0.0, 0.0)  # meters
+actuator_cfg.pos_from_com = (-1.0, 0.0, -0.16)  # meters
 
 num_envs = 1
 #=====================================================================================================================#
@@ -45,7 +61,7 @@ rudder_actuator = FoilActuator(num_envs=num_envs, dynamics=rudder_hydrodyn, dt=0
 
 target_cmds = torch.tensor([[1.0]], device=device)  
 robot_heading = torch.tensor([[0.0]], device=device)
-robot_vel_b = torch.tensor([[0.0, 0.0, 0.0]], device=device)  # moving forward at 0.5 m/s
+robot_vel_b = torch.tensor([[1.5, 0.0, 0.0]], device=device)  # moving forward at 0.5 m/s
 rudder_hydrodyn.init_flow_vector(
     robot_vel_b[:, 0:2], robot_heading
 )
@@ -60,7 +76,7 @@ while rudder_actuator.current_cmd.abs() < torch.pi*target_cmds.abs():
     rudder_actuator.update_joint_cmd(current_joint_pos, target_cmds)
     rudder_actuator.update_forces(robot_heading, robot_vel_b)
     rudder_angle = rudder_actuator.get_joint_positions()
-    forces_torques = rudder_actuator.get_forces()
+    forces_torques = rudder_actuator.get_forces_and_torques()
 
     cmd_list.append(rudder_actuator.current_cmd.item())
     forces_list.append((forces_torques[0,0].item(), forces_torques[0,1].item(), forces_torques[0,2].item()))
@@ -79,16 +95,27 @@ while rudder_actuator.current_cmd.abs() < torch.pi*target_cmds.abs():
 print("Rudder Actuator Test Completed.")
 #print(cmd_list)
 # Plot Rudder Actuator Response
-forces_x, forces_y, forces_z = zip(*forces_list)
+force_x, force_y, force_z = zip(*forces_list)
 plt.figure()
-plt.scatter(aoa_list, forces_x, label='Force X')
-plt.scatter(aoa_list, forces_y, label='Force Y')
-plt.plot(aoa_list, forces_z, label='Force Z')
+plt.scatter(aoa_list, force_x, label='Force X')
+plt.scatter(aoa_list, force_y, label='Force Y')
+plt.plot(aoa_list, force_z, label='Force Z')
 plt.xlabel('angle of attack (radian)')
 plt.ylabel('Forces (N)')
 plt.title('Rudder Actuator Forces vs aoa')
 plt.legend()
 plt.savefig(dir+prefix+"forces_vs_aoa.png")
+
+torque_x, torque_y, torque_z = zip(*torque_list)
+plt.figure()
+plt.scatter(aoa_list, torque_x, label='torque X')
+plt.scatter(aoa_list, torque_y, label='torque Y')
+plt.plot(aoa_list, torque_z, label='torque Z')
+plt.xlabel('angle of attack (radian)')
+plt.ylabel('Torque (N.m)')
+plt.title('Rudder Actuator torques vs aoa')
+plt.legend()
+plt.savefig(dir+prefix+"torques_vs_aoa.png")
 
 plt.figure()
 plt.plot(cmd_list, label='Rudder cmd')

@@ -1,5 +1,6 @@
 from omni.isaac.lab.actuator_force.generic_actuator_force import GenPropellerActuatorCfg, GenPropellerActuator
 from omni.isaac.lab.actuator_force.generic_foil_actuator_force import GenFoilActuatorCfg, GenFoilActuator
+from omni.isaac.lab.physics.hydrodynamics import HydrodynamicsCfg, Hydrodynamics
 import torch
 
 from dataclasses import dataclass, field
@@ -13,6 +14,9 @@ class RobotActuatorSystemCfg:
     # Foil subsystem
     foil_cfg: Optional[GenFoilActuatorCfg] = None
 
+    # hydrodynamics 
+    hydrodynamics_cfg: Optional[HydrodynamicsCfg] = None
+    model_spec: Optional[dict] = None
     # Optional: future actuators (winches, flaps, etc.)
     # winch_cfg: ...
     # winch_dynamics: ...
@@ -99,11 +103,12 @@ class RobotActuatorSystem:
         if self.thruster_actuator:
             thr_cmds = actions[:, :self.thruster_cmd_dim]
             self.thruster_actuator.set_target_cmd(thr_cmds)
-
+            
         # Foils
         if self.foil_actuator:
             foil_cmds = actions[:, self.thruster_cmd_dim:]
             self.foil_actuator.set_target_cmd(foil_cmds)
+            
 
     # ------------------------------------------------------------
     # Update all actuators
@@ -137,8 +142,10 @@ class RobotActuatorSystem:
         if not(self.thruster_forces is None or self.thruster_torques is None):
             F[:, :3] += self.thruster_forces.sum(dim=1)
             F[:, 3:] += self.thruster_torques.sum(dim=1)
+            
 
         if self.foil_forces is not None:
+
             F += self.foil_forces.sum(dim=1)
 
         self._combined_forces = F

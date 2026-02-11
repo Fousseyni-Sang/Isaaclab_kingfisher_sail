@@ -25,9 +25,9 @@ from omni.isaac.lab.utils import configclass
 from omni.isaac.lab.utils.math import subtract_frame_transforms, transform_points, quat_from_euler_xyz
 import numpy as np
 from .network import DiscriminatorNetwork
-from ...utils.my_config.boat_config import (sail_config, rudder_config, keel_config, hydrostatics_config, hydrodynamics_config, propeller_config,
+from ...utils.my_utils.boat_config import (sail_config, rudder_config, keel_config, hydrostatics_config, hydrodynamics_config, propeller_config,
                      sail_actuator_config, rudder_actuator_config, keel_actuator_config)
-from .utils import sample_feasible_pairs_batch
+from ...utils.my_utils.common import sample_feasible_pairs_batch
 
 ##
 # Pre-defined configs

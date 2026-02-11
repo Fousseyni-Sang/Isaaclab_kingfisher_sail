@@ -82,10 +82,12 @@ def get_low_level_agent(num_envs: int, checkpoint_path: str, task_name:str="Isaa
     runner.load(agent_cfg)
     # obtain the agent from the runner
     agent: BasePlayer = runner.create_player()
-    agent.device=device
+    
     agent.restore(resume_path)
     agent.reset()
     agent.has_batch_dimension = True
+    agent.device=device
+    agent.device_name = device
 
     return agent, env
 

@@ -21,7 +21,6 @@ aerodynamics_cfg.wind_speed = 5
 aerodynamics_cfg.angle_of_attack = 20*torch.pi/180
 device = 'cuda:0'
 
-
 min_aoa = -180
 max_aoa = 180
 num_envs = int(abs(min_aoa) + abs(max_aoa))

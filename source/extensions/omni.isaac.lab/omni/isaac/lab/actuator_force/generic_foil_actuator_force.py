@@ -75,13 +75,13 @@ class GenFoilActuator:
         """
         current_joint_positions: list of tensors, one per foil, each (num_envs, 1)
         """
-        for i, foil_act in enumerate(self.foil_actuators):
-            # Since foil_actuators might contain "keel" actuator so make sure the index doesn't exceed 
-            # Even when the update is called in case of "keel", inside, the function doesn't update the joint command anyway
-            
-            offset = self._cmd_offsets[min(i, self.total_cmd_dim-1)] 
-            cmd_slice = self._target_cmds[:, offset:offset+1]
-            foil_act.update_joint_cmd(current_joint_positions[i], cmd_slice)
+        if self.total_cmd_dim>0:
+            for i, foil_act in enumerate(self.foil_actuators):
+                # Since foil_actuators might contain "keel" actuator so make sure the index doesn't exceed 
+                # Even when the update is called in case of "keel", inside, the function doesn't update the joint command anyway
+                offset = self._cmd_offsets[min(i, self.total_cmd_dim-1)] 
+                cmd_slice = self._target_cmds[:, offset:offset+1]
+                foil_act.update_joint_cmd(current_joint_positions[i], cmd_slice)
 
     def update_forces(self, robot_heading_w, robot_lin_vel_b):
         """
