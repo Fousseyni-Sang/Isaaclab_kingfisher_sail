@@ -264,6 +264,43 @@ def load_ll_population_with_split(
 
     return train_set, eval_set
 
+def compute_act_dim(spec):
+        # Thrusters
+        num_thrusters = spec.get("num_thrusters", 0)
+
+        # Foils: count all foils except keel
+        num_foils = 0
+        if spec["has_rudder"]==True:
+            num_foils += 1
+        if spec["has_sail"]==True:
+            num_foils += 1
+
+        return num_thrusters + num_foils
+
+def compute_obs_dim(spec):
+        # Thrusters
+
+        # Foils: count all foils except keel
+        num_obs = 0
+        # cos, sin and speed norm
+        if spec["has_sail"]==True:
+            num_obs += 3
+
+        # cos, sin
+        if spec["has_keel"]==True:
+            num_obs += 2
+
+        # cos, sin
+        if spec["has_rudder"]==True:
+            num_obs += 2
+
+        # add +1 dim for the norm of the speed of the flow (water)
+        if spec["has_rudder"]==True or spec["has_keel"]==True:  
+            num_obs += 1
+        
+
+        return num_obs
+
 if __name__=="__main__":
 
     train_set, eval_set = load_ll_population_with_split()

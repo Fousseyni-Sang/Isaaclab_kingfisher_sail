@@ -516,10 +516,9 @@ class KingfisherSailEnv(DirectRLEnv):
         if self.foil_cfg is not None:
             foil_joint_positions = []
             foil_types = self.foil_cfg.foil_types
-            current_sail_joint_pos   = self._sail_actuator.dynamics.foil_angle.reshape(self.num_envs, 1)
-            current_keel_joint_pos   = self._keel_actuator.dynamics.foil_angle.reshape(self.num_envs, 1)
-            current_rudder_joint_pos = self._rudder_actuator.dynamics.foil_angle.reshape(self.num_envs, 1)
-
+            current_sail_joint_pos   = self._sail_aerodynamics.foil_angle.reshape(self.num_envs, 1)
+            current_keel_joint_pos   = self._keel_hydrodynamics.foil_angle.reshape(self.num_envs, 1)
+            current_rudder_joint_pos = self._rudder_hydrodynamics.foil_angle.reshape(self.num_envs, 1)
             if "rudder" in foil_types:
                 foil_joint_positions.append(current_rudder_joint_pos)
             if "keel" in foil_types:
@@ -530,7 +529,6 @@ class KingfisherSailEnv(DirectRLEnv):
             foil_joint_positions = None
 
            
-        # Without foil actuator
         self._robot_system_dynamics.set_target_cmd(self._actions) 
         self._robot_system_dynamics.update(self._robot.data.heading_w, self._robot.data.root_lin_vel_b, foil_joint_positions=foil_joint_positions) 
         # Store for _apply_action 

@@ -18,6 +18,7 @@ from omni.isaac.lab.markers import VisualizationMarkers
 from omni.isaac.lab.physics.hydrodynamics import Hydrodynamics, HydrodynamicsCfg
 from omni.isaac.lab.physics.hydrostatics import Hydrostatics, HydrostaticsCfg
 from omni.isaac.lab.physics.foil_dynamics import FoilDynamics, FoilDynamicsCfg
+from omni.isaac.lab.actuator_force.robot_actuator_system import RobotActuatorSystem, RobotActuatorSystemCfg
 from omni.isaac.lab.scene import InteractiveSceneCfg
 from omni.isaac.lab.sim import SimulationCfg
 from omni.isaac.lab.terrains import TerrainImporterCfg
@@ -26,11 +27,11 @@ from omni.isaac.lab.utils.math import subtract_frame_transforms, transform_point
 import numpy as np
 import random
 from .network import DiscriminatorNetwork
-from omni.isaac.lab_tasks.utils.my_utils.boat_config import (sail_config, rudder_config, keel_config, hydrostatics_config, hydrodynamics_config, propeller_config,
-                     sail_actuator_config, rudder_actuator_config, keel_actuator_config, make_boat_model)
+from omni.isaac.lab_tasks.utils.my_utils.boat_config import *
+                     
 from .low_level_agent import get_low_level_agent
 from omni.isaac.lab_tasks.utils.my_utils.ros2_Node import DynamicsRlAgentPublisher
-from ...utils.my_utils.common import deterministic_split, load_ll_population_with_split
+from ...utils.my_utils.common import deterministic_split, load_ll_population_with_split, compute_act_dim, compute_obs_dim
 ##
 # Pre-defined configs
 ##
@@ -127,11 +128,16 @@ class KingfisherSailEnvCfg(DirectRLEnvCfg):
 
     def __post_init__(self): 
         self.train_models, self.eval_models = load_ll_population_with_split() 
+
+        spec = random.choice(self.train_models)
+        self.generic_system_actuator_cfg: RobotActuatorSystemCfg = make_boat_model(spec)
+        self.roboat_hydrodyn_cfg = self.generic_system_actuator_cfg.hydrodynamics_cfg
+        
+        # Hydrdynamics
+        self.hydrodynamics_cfg: HydrodynamicsCfg = hydrodynamics_config() if self.roboat_hydrodyn_cfg is None else self.roboat_hydrodyn_cfg
     
     # Hydrostatics
     hydrostatics_cfg: HydrostaticsCfg = hydrostatics_config()
-    # Hydrdynamics
-    hydrodynamics_cfg: HydrodynamicsCfg = hydrodynamics_config()
     # Thruster dynamics
     propeller_cfg: PropellerActuatorCfg = propeller_config()
 
@@ -278,7 +284,8 @@ class KingfisherSailEnv(DirectRLEnv):
         self._keel_hydrodynamics_force_b = torch.zeros(self.num_envs, 1, 6, device=self.device)
         self._aerodynamic_force_wing = torch.zeros(self.num_envs, 1, 3, device=self.device)
         self._thruster_forces = torch.zeros(self.num_envs, 1, 6, device=self.device)
-        
+        self.robot_system_forces = torch.zeros((self.num_envs, 6), device=self.device)
+
         self._no_torque = torch.zeros(self.num_envs, 1, 3, device=self.device)
 
         self._hydrostatics = Hydrostatics(num_envs=self.num_envs, device=self.device, cfg=self.cfg.hydrostatics_cfg)
@@ -311,10 +318,24 @@ class KingfisherSailEnv(DirectRLEnv):
             num_envs=self.num_envs, dynamics=self._keel_hydrodynamics, dt=cfg.step_dt, cfg=self.cfg.keel_actuator_cfg
         )
 
-        self.couples_actuators = [
-                                ("sail", "sail"), ("sail", "rudder"), ("sail", "rudder", "keel"), 
-                                ("sail", "vap"), ("sail", "thrusters"), ("sail", "thruster", "keel")
-                            ]
+        foil_dynamics = []
+        self.foil_cfg = self.cfg.generic_system_actuator_cfg.foil_cfg
+        if self.foil_cfg is not None:
+            for typ in self.foil_cfg.foil_types:
+                if typ=="rudder":
+                    foil_dynamics.append(self._rudder_hydrodynamics)
+                if typ=="keel":
+                    foil_dynamics.append(self._keel_hydrodynamics)
+                if typ=="sail":
+                    foil_dynamics.append(self._sail_aerodynamics)
+        else:
+            foil_dynamics = None
+
+        self._robot_system_dynamics = RobotActuatorSystem(
+            num_envs=self.num_envs, device=self.device, dt=cfg.step_dt, cfg=cfg.generic_system_actuator_cfg, 
+            foil_dynamics=foil_dynamics
+            )
+
         # Low-level RL agent for sail control
         self._low_level_agent, dummy_env = get_low_level_agent(num_envs=self.num_envs, 
         checkpoint_path="logs/rl_games/kingfisher_direct_low_level/2026-01-22_15-11-25_compromise_nosail/nn/last_kingfisher_direct_low_level_ep_300_rew_120.73284.pth", 
@@ -322,6 +343,7 @@ class KingfisherSailEnv(DirectRLEnv):
 
         self.ll_agent_cache = {}
         self.feasibility_map = None
+        self.current_spec = None
         
         #self._low_level_agent = LowPPOAgent(10, 3, 64)
         
@@ -492,54 +514,71 @@ class KingfisherSailEnv(DirectRLEnv):
     
     def _get_low_level_obs(self):
 
-        self.lin_target_wrench = self.cfg.lin_wrench_scale*self._actions[:, 0].abs()
-        self.ang_target_wrench = self.cfg.ang_wrench_scale*self._actions[:, 1].abs()
-        
-        error_lin = self.lin_target_wrench.view(-1)-self._robot.data.root_lin_vel_b[:, 0]
+        # --- Base signals (always present) ---
+        self.lin_target_wrench = self.cfg.lin_wrench_scale * self._actions[:, 0].abs()
+        self.ang_target_wrench = self.cfg.ang_wrench_scale * self._actions[:, 1].abs()
+
+        error_lin = self.lin_target_wrench.view(-1) - self._robot.data.root_lin_vel_b[:, 0]
         self.norm_error_lin = torch.abs(error_lin)
 
-        error_ang = self.ang_target_wrench.view(-1)-self._robot.data.root_ang_vel_b[:, 2]
+        error_ang = self.ang_target_wrench.view(-1) - self._robot.data.root_ang_vel_b[:, 2]
         self.norm_error_ang = torch.abs(error_ang)
 
-        delta_vel_lin_b = (self._robot.data.root_lin_vel_b-self.prev_lin_vel_b)
-        delta_ang_vel_b = (self._robot.data.root_ang_vel_b-self.prev_ang_vel_b)
+        delta_vel_lin_b = self._robot.data.root_lin_vel_b - self.prev_lin_vel_b
+        delta_ang_vel_b = self._robot.data.root_ang_vel_b - self.prev_ang_vel_b
 
-        obs_low_lvl = torch.cat(
-            [
-                self.low_lvl_actions,  # 3
-                torch.cos(self._sail_aerodynamics.foil_angle.reshape(self.num_envs, -1)), # 1
-                torch.sin(self._sail_aerodynamics.foil_angle.reshape(self.num_envs, -1)), # 1
-                torch.cos(self._sail_aerodynamics.apparent_flow_angle).reshape(self.num_envs, -1), # 1
-                torch.sin(self._sail_aerodynamics.apparent_flow_angle).reshape(self.num_envs, -1), # 1
-                torch.norm(self._sail_aerodynamics.apparent_flow_speed_b, dim=-1).reshape(self.num_envs, -1), #1 
-                error_lin.reshape(self.num_envs, -1), # 1
-                delta_vel_lin_b[:, 0].reshape(self.num_envs, -1), # 1
-                error_ang.reshape(self.num_envs, -1), # 1
-                delta_ang_vel_b[:, 2].reshape(self.num_envs, -1), # 1
-                #((self.episode_length_buf%self.interval_between_goals)/self.interval_between_goals).reshape(self.num_envs, -1) #1
-                
-            ],
-            dim=1,
-        )
+        # Start building observation list
+        obs_parts = [
+            self.low_lvl_actions,  # shape: (N, act_dim)
+            error_lin.reshape(self.num_envs, -1),
+            delta_vel_lin_b[:, 0].reshape(self.num_envs, -1),
+            error_ang.reshape(self.num_envs, -1),
+            delta_ang_vel_b[:, 2].reshape(self.num_envs, -1),
+        ]
+
+        # --- Rudder block (only if rudder exists) ---
+        if self.current_spec.get("has_rudder", False):
+            obs_parts.extend([
+                torch.cos(self._rudder_hydrodynamics.foil_angle.reshape(self.num_envs, -1)),
+                torch.sin(self._rudder_hydrodynamics.foil_angle.reshape(self.num_envs, -1)),
+            ])
+
+        # --- Keel block (only if keel exists) ---
+        if self.current_spec.get("has_keel", False):
+            obs_parts.extend([
+                torch.cos(self._keel_hydrodynamics.foil_angle.reshape(self.num_envs, -1)),
+                torch.sin(self._keel_hydrodynamics.foil_angle.reshape(self.num_envs, -1)),
+            ])
+
+        if self.current_spec.get("has_keel", False) or self.current_spec.get("has_rudder", False): 
+            obs_parts.extend([
+                torch.norm(self._keel_hydrodynamics.apparent_flow_speed_b, dim=-1).reshape(self.num_envs, -1),
+            ])
+
+        # --- Sail block (only if sail exists) ---
+        if self.current_spec.get("has_sail", False):
+            obs_parts.extend([
+                torch.cos(self._sail_aerodynamics.foil_angle.reshape(self.num_envs, -1)),
+                torch.sin(self._sail_aerodynamics.foil_angle.reshape(self.num_envs, -1)),
+                torch.norm(self._sail_aerodynamics.apparent_flow_speed_b, dim=-1).reshape(self.num_envs, -1),
+            ])
+
+        
+        
+        # Concatenate everything
+        obs_low_lvl = torch.cat(obs_parts, dim=1)
+
+        # Safety check
         if not torch.isfinite(obs_low_lvl).all():
             print("🔥 NaN/Inf in LL obs", obs_low_lvl)
             raise RuntimeError("Invalid HL observation")
 
-        # agent stepping
+        # Convert to LL agent format
         obs_low_lvl = self._low_level_agent.obs_to_torch(obs_low_lvl)
-    
+
         return obs_low_lvl.clone()
 
-    def _get_actuators_forces(self, actuator_set:tuple):
 
-        """ This function will take as input different combination of actuator and will output their 
-        combined force that will be added to the combined force of hydrostatic and hydrodynamique force
-        to be applied to be base link body """
-
-        for i in range(len(actuator_set)):
-            pass
-
-        return
     
     def update_low_level(self):
 
@@ -548,12 +587,80 @@ class KingfisherSailEnv(DirectRLEnv):
             model = random.choice(self.cfg.train_models) 
         else: 
             model = random.choice(self.cfg.eval_models) 
-
+        base_obs = 4
         # Load morphology spec 
-        spec = model["spec"] 
-        self.generic_system_actuator_cfg = make_boat_model(spec) 
+        self.current_spec = model["spec"] 
+
+        self.update_roboat_system()
+    
+        action_dim = compute_act_dim(self.current_spec)
+        foil_obs_dim = compute_obs_dim(self.current_spec)
+
+        ll_obs_dim = foil_obs_dim + base_obs + action_dim
+
         # Load LL controller 
-        self._low_level_agent = get_low_level_agent( checkpoint_path=model["checkpoint"], num_envs=self.num_envs, device=self.device, act_dim=3, obs_dim=12, ) # Reset LL action buffer self.low_lvl_actions = torch.zeros(self.num_envs, 3, device=self.device) # Store feasibility map if needed self.feas_map = model["feasibility"] 
+        self._low_level_agent = get_low_level_agent(checkpoint_path=model["checkpoint"], num_envs=self.num_envs, 
+                                                    device=self.device, act_dim=action_dim, obs_dim=ll_obs_dim) 
+        # Reset LL action buffer 
+        self.low_lvl_actions = torch.zeros(self.num_envs, action_dim, device=self.device) 
+        # Store feasibility map if needed 
+        self.feasibility_map = model["feasibility"] 
+
+
+    def update_roboat_system(self):
+
+        """ After creating a new roboat system, update all existing classes """
+
+        self.cfg.generic_system_actuator_cfg = make_boat_model(self.current_spec) 
+        self.cfg.roboat_hydrodyn_cfg = self.cfg.generic_system_actuator_cfg.hydrodynamics_cfg
+        
+        # Hydrdynamics
+        self.hydrodynamics_cfg: HydrodynamicsCfg = hydrodynamics_config() if self.cfg.roboat_hydrodyn_cfg is None else self.cfg.roboat_hydrodyn_cfg
+        self._hydrodynamics = Hydrodynamics(num_envs=self.num_envs, device=self.device, cfg=self.cfg.hydrodynamics_cfg)
+
+        self._sail_aerodynamics = FoilDynamics(num_envs=self.num_envs, device=self.device, cfg=self.cfg.sail_aerodyn_cfg)
+        self._sail_aerodynamics.init_flow_vector(
+            self._robot.data.root_lin_vel_b[:, 0:2], self._robot.data.heading_w
+        )
+        self._rudder_hydrodynamics = FoilDynamics(num_envs=self.num_envs, device=self.device, cfg=self.cfg.rudder_hydrodyn_cfg)
+        self._rudder_hydrodynamics.init_flow_vector(
+            self._robot.data.root_lin_vel_b[:, 0:2], self._robot.data.heading_w
+        )
+        self._keel_hydrodynamics = FoilDynamics(num_envs=self.num_envs, device=self.device, cfg=self.cfg.keel_hydrodyn_cfg)
+        self._keel_hydrodynamics.init_flow_vector(
+            self._robot.data.root_lin_vel_b[:, 0:2], self._robot.data.heading_w
+        )
+        
+        self._thruster_dynamics = PropellerActuator(
+            num_envs=self.num_envs, device=self.device, dt=self.cfg.step_dt, cfg=self.cfg.propeller_cfg
+        )
+        self._sail_actuator = FoilActuator(
+            num_envs=self.num_envs, dt=self.cfg.step_dt, dynamics=self._sail_aerodynamics, cfg=self.cfg.sail_actuator_cfg
+        )
+        self._rudder_actuator = FoilActuator(
+            num_envs=self.num_envs, dynamics=self._rudder_hydrodynamics, dt=self.cfg.step_dt, cfg=self.cfg.rudder_actuator_cfg
+        )
+        self._keel_actuator = FoilActuator(
+            num_envs=self.num_envs, dynamics=self._keel_hydrodynamics, dt=self.cfg.step_dt, cfg=self.cfg.keel_actuator_cfg
+        )
+
+        foil_dynamics = []
+        self.foil_cfg = self.cfg.generic_system_actuator_cfg.foil_cfg
+        if self.foil_cfg is not None:
+            for typ in self.foil_cfg.foil_types:
+                if typ=="rudder":
+                    foil_dynamics.append(self._rudder_hydrodynamics)
+                if typ=="keel":
+                    foil_dynamics.append(self._keel_hydrodynamics)
+                if typ=="sail":
+                    foil_dynamics.append(self._sail_aerodynamics)
+        else:
+            foil_dynamics = None
+
+        self._robot_system_dynamics = RobotActuatorSystem(
+            num_envs=self.num_envs, device=self.device, dt=self.cfg.step_dt, cfg=self.cfg.generic_system_actuator_cfg, 
+            foil_dynamics=foil_dynamics
+            )
 
     def _pre_physics_step(self, actions: torch.Tensor):
         actions = actions.clamp(-1.0, 1.0)
@@ -564,17 +671,35 @@ class KingfisherSailEnv(DirectRLEnv):
         self._actions = actions.clone()
 
         obs_low_lvl = self._get_low_level_obs()
-        actions = self._low_level_agent.get_action(obs_low_lvl.clone(), is_deterministic=self._low_level_agent.is_deterministic)
-        actions[:, 2] = 0
+        ll_actions = self._low_level_agent.get_action(obs_low_lvl.clone(), is_deterministic=self._low_level_agent.is_deterministic)
+        ll_actions[:, 2] = 0
 
-        self.low_lvl_actions = actions.clone()
+        self.low_lvl_actions = ll_actions.clone()
         
         # Compute the thruster forces based on the actions.
         # thrust_cmds = torch.tensor([0.0, 1.0], dtype=torch.float32, device=self.device)
         
-        self._thruster_dynamics.set_target_cmd(self.low_lvl_actions[:, :2])
-        self._thruster_forces[:, 0, :] = self._thruster_dynamics.update_forces()
-        
+        if self.foil_cfg is not None:
+            foil_joint_positions = []
+            foil_types = self.foil_cfg.foil_types
+            current_sail_joint_pos   = self._sail_aerodynamics.foil_angle.reshape(self.num_envs, 1)
+            current_keel_joint_pos   = self._keel_hydrodynamics.foil_angle.reshape(self.num_envs, 1)
+            current_rudder_joint_pos = self._rudder_hydrodynamics.foil_angle.reshape(self.num_envs, 1)
+
+            if "rudder" in foil_types:
+                foil_joint_positions.append(current_rudder_joint_pos)
+            if "keel" in foil_types:
+                foil_joint_positions.append(current_keel_joint_pos)
+            if "sail" in foil_types:
+                foil_joint_positions.append(current_sail_joint_pos)
+        else:
+            foil_joint_positions = None
+
+        self._robot_system_dynamics.set_target_cmd(self.low_lvl_actions) 
+        self._robot_system_dynamics.update(self._robot.data.heading_w, self._robot.data.root_lin_vel_b, foil_joint_positions=foil_joint_positions) 
+        # Store for _apply_action 
+        self.robot_system_forces = self._robot_system_dynamics.get_forces()
+
         # Compute the hydrostatic and hydrodynamic forces
         robot_pos = self._robot.data.root_pos_w.clone()
         robot_quat = self._robot.data.root_quat_w.clone()
@@ -596,11 +721,11 @@ class KingfisherSailEnv(DirectRLEnv):
         """print(f"\nthrust: {self._thruster_forces}")
         print(f"hydrodyn {self._hydrodynamic_force}")
         print(f"hydrostats: {self._hydrostatic_force}")"""
-        current_joint_pos = self._sail_actuator.dynamics.foil_angle.reshape(self.num_envs, -1)
+        """current_joint_pos = self._sail_actuator.dynamics.foil_angle.reshape(self.num_envs, -1)
         self._sail_actuator.update_joint_cmd(current_joint_pos, self.low_lvl_actions[:, 2:3])
         self._sail_actuator.update_forces(self._robot.data.heading_w, self._robot.data.root_lin_vel_b)
         self._sail_aerodynamic_force_b[:, 0, :] = self._sail_actuator.get_forces_and_torques()
-        #print(f"SAIL FORCE: {self._sail_aerodynamic_force_b[:, 0, :]}")
+        """#print(f"SAIL FORCE: {self._sail_aerodynamic_force_b[:, 0, :]}")
         """self._rudder_actuator.update_joint_cmd(self._actions[:, 3:])
         self._rudder_actuator.update_forces(self._robot.data.heading_w, self._robot.data.root_lin_vel_b)
         self._rudder_hydrodynamics_force_b[:, 0, :] = self._rudder_actuator.get_forces()"""
@@ -617,37 +742,34 @@ class KingfisherSailEnv(DirectRLEnv):
         self.decimation_counter += 1
         combined = self._hydrostatic_force + self._hydrodynamic_force
 
-        combined[:, 0, :3] = combined[:, 0, :3] #+ self._sail_aerodynamic_force_b[:, 0, :3] #+ \
-        #self._rudder_hydrodynamics_force_b[:, 0, :3] #+ self._keel_hydrodynamics_force_b[:, 0, :3]
-
-        combined[:, 0, 3:] = combined[:, 0, 3:] #+ self._sail_aerodynamic_force_b[:, 0, 3:] + \
-        #self._rudder_hydrodynamics_force_b[:, 0, 3:] #+ self._keel_hydrodynamics_force_b[:, 0, 3:]
+        combined_thruster_forces = self.robot_system_forces[:, :3]
+        combined_thruster_torques = self.robot_system_forces[:, 3:]
+        
+        
+        combined[:, 0, :3] += combined_thruster_forces
+        combined[:, 0, 3:] += combined_thruster_torques
 
         self._robot.set_external_force_and_torque(combined[..., :3], combined[..., 3:], body_ids=self._base_link)
         
-        if lft_thruster_force.any():
+        """if lft_thruster_force.any():
             self._robot.set_external_force_and_torque(
                 lft_thruster_force, self._no_torque, body_ids=self._left_thruster_id
             )
         if rgt_thruster_force.any():
             self._robot.set_external_force_and_torque(
                 rgt_thruster_force, self._no_torque, body_ids=self._right_thruster_id
-            )
+            )"""
         self.joint_pos_target = self._sail_actuator.get_joint_positions()
         # Set psoition of the sail joint
-        self._robot.set_joint_position_target(target=self.joint_pos_target.reshape(self.num_envs,-1), 
+        
+        """self._robot.set_joint_position_target(target=self.joint_pos_target.reshape(self.num_envs,-1), 
              joint_ids=self._wing_joint_dof_id
-            )
-        """print(f"\ndecimation: {self.decimation_counter} \nspeed_b: {self._robot.data.root_lin_vel_b}")
-        print(f"ang_b: {self._robot.data.root_ang_vel_b}")
-        print(f"head_w: {self._robot.data.heading_w}")
-        print(f"pos_w: {self._robot.data.root_pos_w}")"""
+            )"""
 
 
         if self.decimation_counter%self.cfg.decimation_low_level==0:
             self.decimation_counter=0
-            #print(f"\nactions: {self._actions} \nlin_target: {self.lin_target_wrench}")
-            #print(f"ang_target: {self.ang_target_wrench}")
+        
             self._pre_physics_step(self._actions) # high level actions remain the same until it's handed back
         
     def _get_observations(self) -> dict:
