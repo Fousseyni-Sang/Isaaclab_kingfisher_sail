@@ -32,7 +32,7 @@ def launch_ll_play():
     for model_id, model_dir in enumerate(model_dirs):
 
         run_name = os.path.basename(model_dir)
-
+        
         # ---------------------------------------------------------
         # 1. Environment variables for the LL env
         # ---------------------------------------------------------
@@ -55,19 +55,24 @@ def launch_ll_play():
         # 3. Launch the play script
         # ---------------------------------------------------------
         cmd = [
-            "./isaaclab.sh",
-            "-p",
+            "/mnt/gpu_storage/zrr/fsangare/isaaclab/bin/python",
             "source/standalone/workflows/rl_games/play_low_level_optimized.py",
             "--task", "Isaac-KingfisherSail-Direct-Low-v0",
             "--headless",
-            "--num_envs", "10",
+            "--num_envs", "300",
             "--device", "cuda:1",
-            "--num_episode", "10"
+            "--num_episode", "400"
         ]
 
         print(f"\n=== Launching PLAY for {run_name} ===")
         subprocess.run(cmd, env=env, check=True)
+        subprocess.run(["./kill_isaac.sh", 
+                        "Direct"], check=True
+                        )
 
 
 if __name__ == "__main__":
     launch_ll_play()
+    subprocess.run(["./kill_isaac.sh", 
+                        "launch_play_ll"], check=True
+                        )

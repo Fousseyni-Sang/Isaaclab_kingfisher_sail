@@ -20,7 +20,6 @@ class ThrusterCfg:
     # If False: command can be negative (bidirectional)
     # If True: command is assumed >= 0 (or clamped)
     positive_only: bool = False
-    num_dim: int = 1
 
     # Fixed direction for non-holonomic thrusters (unit vector in 3D)
     # Example: (1, 0, 0) for forward-only, (0, 1, 0) for lateral, etc.
@@ -93,6 +92,10 @@ class GenPropellerActuator:
 
 
         self.reset()
+
+    @property
+    def current_cmds(self):
+        return self._current_cmds
 
     def linear_interpolate_1d(self, x: torch.Tensor, size: int) -> torch.Tensor:
         return torch.nn.functional.interpolate(
@@ -195,7 +198,7 @@ class GenPropellerActuator:
             self._max_cmd_delta,
         )
         self._current_cmds += delta
-    
+        #print(f"[LOG] max_delta: {self._max_cmd_delta} delta: {delta} target: {self._target_cmds} current: {self._current_cmds}")
         return self.get_forces()
 
     def set_target_cmd(self, commands: torch.Tensor):
@@ -209,8 +212,10 @@ class GenPropellerActuator:
         self._target_cmds = commands.to(self.device)
         
 
-    def reset(self):
-        self._current_cmds.zero_()
-        self._target_cmds.zero_()
-        self.thruster_forces.zero_()
-        self.thruster_torques.zero_()
+    def reset(self, env_ids=None):
+        if env_ids is None:
+            env_ids = torch.arange(self._current_cmds.shape[0], device=self.device)
+        self._current_cmds[env_ids].zero_()
+        self._target_cmds[env_ids].zero_()
+        self.thruster_forces[env_ids].zero_()
+        self.thruster_torques[env_ids].zero_()

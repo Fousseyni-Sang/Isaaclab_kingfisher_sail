@@ -110,8 +110,9 @@ class Hydrodynamics:
 
         # Update damping matrix
         damping_matrix = self.ComputeDampingMatrix(self.local_velocities)
-
+        
         # Damping forces and torques
         self.drag = -1 * damping_matrix * self.local_velocities
+        #print(f"\nvelocities: {self.local_velocities} \ndrag: {self.drag}")
         
         return self.drag

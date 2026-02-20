@@ -4,6 +4,7 @@ import os
 import yaml
 import glob
 import pandas as pd
+import shutil
 
 def sample_pairs_batch(env_ids, params, device="cpu"):
     """
@@ -113,6 +114,9 @@ def sample_feasible_pairs_batch(env_ids, params, device="cpu", batch_factor=10):
 
     return torch.stack([V_res, w_res], dim=-1)
 
+def make_checkpoint_path(ckpt_file_name:str, model_id:str):
+
+    return
 
 def load_ll_population(
     spec_root="outputs/ll",
@@ -164,10 +168,11 @@ def load_ll_population(
 
         # Find .pth file
         ckpt_files = [ f for f in os.listdir(ckpt_dir) if re.match(r".*\.pth$", f) ]
+        
         if not ckpt_files:
             continue
         ckpt_files.sort(key=lambda m: extract_episode(m))
-        checkpoint = ckpt_files[-1]
+        checkpoint = os.path.join(ckpt_dir, ckpt_files[-1])
 
         # ---------------------------------------------------------
         # Feasibility map:
@@ -191,22 +196,45 @@ def load_ll_population(
         })
 
     return population
-
+import random
 def deterministic_split(population, train_ratio=0.7):
     # Sort by model ID (string or int both work)
     population = sorted(population, key=lambda m: int(m["id"]))
 
     n = len(population)
     k = int(train_ratio * n)
-
+    
+    random.shuffle(population)
+    
     train_set = population[:k]
     eval_set  = population[k:]
 
     return train_set, eval_set
 
+def clear_hl_split(split_root="outputs/hl_split", ll_model_root="outputs/ll", 
+                   ll_ckpt_root="logs/rl_games"):
+    train_file = os.path.join(split_root, "train_ids.txt")
+    eval_file = os.path.join(split_root, "eval_ids.txt")
+
+    if os.path.exists(train_file):
+        os.remove(train_file)
+    if os.path.exists(eval_file):
+        os.remove(eval_file)
+
+    for name in os.listdir(ll_model_root): 
+        full = os.path.join(ll_model_root, name) 
+        if os.path.isdir(full) and name.startswith("model_"): 
+            shutil.rmtree(full)
+
+    for name in os.listdir(ll_ckpt_root): 
+        full = os.path.join(ll_ckpt_root, name) 
+        if os.path.isdir(full) and "ll_model_" in name: 
+            shutil.rmtree(full)
+
 def save_split(train_ids, eval_ids, root="outputs/hl_split"): 
 
     os.makedirs(root, exist_ok=True) 
+    #clear_hl_split()
 
     with open(os.path.join(root, "train_ids.txt"), "w") as f: 
         for mid in train_ids: 
@@ -264,9 +292,13 @@ def load_ll_population_with_split(
 
     return train_set, eval_set
 
+
 def compute_act_dim(spec):
         # Thrusters
         num_thrusters = spec.get("num_thrusters", 0)
+        for boolean in spec["holonomic"]:
+            if boolean==True:
+                num_thrusters += 1
 
         # Foils: count all foils except keel
         num_foils = 0

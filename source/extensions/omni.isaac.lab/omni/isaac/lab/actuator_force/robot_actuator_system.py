@@ -25,6 +25,7 @@ class RobotActuatorSystemCfg:
             
     def __post_init__(self):
         self.thrust_cmd_dim = sum([thr_cfg.num_dim for thr_cfg in self.thruster_cfg.thrusters]) if self.thruster_cfg else 0
+        
         if self.foil_cfg:
             self.foil_cmd_dim = self.foil_cfg.num_foils-1 if "keel" in self.foil_cfg.foil_types else self.foil_cfg.num_foils
         else:

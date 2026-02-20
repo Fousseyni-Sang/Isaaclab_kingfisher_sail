@@ -286,11 +286,13 @@ class RlGamesVecEnvWrapper(IVecEnv):
         """
         # process policy obs
         obs = obs_dict["policy"]
+        feas = obs_dict.get("feas", None)
         # clip the observations
         obs = torch.clamp(obs, -self._clip_obs, self._clip_obs)
         # move the buffer to rl-device
         obs = obs.to(device=self._rl_device).clone()
-
+        if feas is not None:
+            feas = feas.to(device=self._rl_device).clone()
         # check if asymmetric actor-critic or not
         if self.rlg_num_states > 0:
             # acquire states from the environment if it exists
@@ -305,7 +307,7 @@ class RlGamesVecEnvWrapper(IVecEnv):
             # convert to dictionary
             return {"obs": obs, "states": states}
         else:
-            return obs
+            return {"obs": obs, "feasibility_map": feas} if feas is not None else {"obs": obs}
 
 
 """

@@ -11,6 +11,8 @@ import random
 from .constant import *
 import os
 import yaml
+import copy
+import numpy as np
 
 #------------------------------------------------------------
 # FOIL DYNAMIC CONFIG
@@ -396,7 +398,11 @@ def get_layout(thruster_layout:str):
         raise ValueError(f"{thruster_layout} not in {'asymmetric', 'symmetric'}")
     
 
-def load_spec():
+def load_spec(spec_path:str|None=None):
+    if spec_path is not None:
+        with open(spec_path, "r") as f:
+            return yaml.safe_load(f)
+        
     spec_path = os.environ.get("LL_OUTPUT_DIR")
     if spec_path is None:
         raise RuntimeError("LL_OUTPUT_DIR not set")
@@ -444,7 +450,7 @@ def make_boat_model(model_spec):
     foil_cfg = GenFoilActuatorCfg(foils=foils) if foils else None
 
     # 3. Hydrodynamics
-    hydro_cfg = hydrodynamics_config(coeff_lateral_drag=model_spec["hydro_lateral_drag"])
+    hydro_cfg = hydrodynamics_config() #(coeff_lateral_drag=model_spec["hydro_lateral_drag"]
     
     # 4. Final robot system
     return RobotActuatorSystemCfg(
@@ -464,7 +470,7 @@ def generate_boat_specs(num_specs=50):
         # Add variations
         spec["thruster_curve_scale"] = random.uniform(0.5, 2.0)
         spec["thruster_curve_bias"] = random.uniform(-2.0, 2.0)
-        spec["hydro_lateral_drag"] = random.uniform(0.05, 0.5)
+        spec["hydro_lateral_drag"] = random.uniform(0.5, 1.)
 
         # Randomly toggle holonomic / positive_only
         for j in range(spec["num_thrusters"]):
@@ -474,7 +480,54 @@ def generate_boat_specs(num_specs=50):
         specs.append(spec)
 
     return specs
-    
+
+def parametric_kingfisher(d):
+    spec = copy.deepcopy(SPEC_KINGFISHER)
+    x = -0.53
+    z = -0.16
+    spec["thruster_positions"] = [(x, +d, z), (x, -d, z)]
+    return spec
+
+def parametric_vap2(d):
+    spec = copy.deepcopy(SPEC_VAP2)
+    x = 0.0
+    z = -0.16
+    spec["thruster_positions"] = [(x, +d, z), (x, -d, z)]
+    return spec
+
+def parametric_jellyfish(d):
+    spec = copy.deepcopy(SPEC_JELLIFISH)
+    z1 = -0.16
+    # two lateral thrusters at y = ±d
+    spec["thruster_positions"][0] = (0.0, +d, z1)
+    # keep the others as-is (or you can also parametrize them later)
+    return spec
+
+def generate_structured_boat_specs_per_type( base_type, num_steps=5, d_max=0.5, ): 
+    specs = [] 
+    ds = np.linspace(d_max, 0.0, num_steps) 
+    for i, d in enumerate(ds): 
+        d = float(d)
+        if base_type == "kingfisher": 
+            spec = parametric_kingfisher(d) 
+        elif base_type == "vap2": 
+            spec = parametric_vap2(d) 
+        elif base_type == "jellyfish": 
+            spec = parametric_jellyfish(d) 
+        else: 
+            raise ValueError(f"Unsupported base type: {base_type}") 
+        spec["id"] = f"{base_type}_d_{i:02d}" 
+        spec["spacing"] = float(d) 
+        specs.append(spec) 
+    return specs
+
+def generate_structured_boat_specs():
+    all_specs = []
+    for base in ["kingfisher", "vap2", "jellyfish"]:
+        all_specs.extend(generate_structured_boat_specs_per_type(base))
+    return all_specs
+
+
 def jellyfish_roboat_cfg():
 
     """cfg = RobotActuatorSystemCfg(

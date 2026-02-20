@@ -12,7 +12,7 @@ params:
     name: continuous_a2c_logstd
 
   network:
-    name: actor_critic
+    name: hrl_actor_critic
     separate: False
     space:
       continuous:
@@ -34,15 +34,19 @@ params:
         name: default
       regularizer:
         name: None
+      
+    hrl_embbeding:
+      out_size: 32
+      in_size: 11
 
   load_checkpoint: False # flag which sets whether to load the checkpoint
   load_path: '' # path to the checkpoint to load
 
   config:
-    name: kingfisher_direct
+    name: kingfisher_direct_high_level
     env_name: rlgpu
-    device: 'cuda:0'
-    device_name: 'cuda:0'
+    device: 'cuda:1'
+    device_name: 'cuda:1'
     multi_gpu: False
     ppo: True
     normalize_input: True
@@ -59,7 +63,7 @@ params:
     schedule_type: legacy
     kl_threshold: 0.016
     score_to_win: 20000000
-    max_epochs: 450
+    max_epochs: 230
     save_best_after: 25
     save_frequency: 50
     grad_norm: 1.0
@@ -71,5 +75,5 @@ params:
     mini_epochs: 5 
     critic_coef: 2
     clip_value: True
-    seq_length: 10 #4
+    seq_length: 4
     bounds_loss_coef: 0.0001

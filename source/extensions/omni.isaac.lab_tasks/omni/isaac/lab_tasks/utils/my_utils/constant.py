@@ -51,10 +51,10 @@ JELLYFISH_THRUSTER_EXPERIMENT_VALUES = [
 BASE_TYPES = [
     "kingfisher",
     "vap2",
-    "vap4",
     "jellyfish",
-    "single_motor",
 ]
+# "single_motor", "vap4",
+#
 #"single_motor_sailboat"
 LATERAL_DRAG_COEF = 0.7
 
@@ -66,7 +66,7 @@ SPEC_JELLIFISH = {
         "hydro_lateral_drag": 0.7,
         "num_thrusters": 3,
         "holonomic": [False, False, False],
-        "thruster_positions": [(0.0, +0.37765, -0.16), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)],
+        "thruster_positions": [(0.0, +0.37765, -0.16), (0.0, -0.37765, -0.16), (0.0, 0.0, -0.16)],
         "thruster_directions": [(1.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)],
         "positive_only": [False, False, False],
         "has_rudder": False,
@@ -75,7 +75,7 @@ SPEC_JELLIFISH = {
         }
 
 SPEC_KINGFISHER = ({
-        "type": "jellyfish",          # or "vap2", "vap4", "kingfisher", "single_motor", etc.
+        "type": "kingfisher",          # or "vap2", "vap4", "kingfisher", "single_motor", etc.
         "thruster_layout": ["asymmetric", "asymmetric"],
         "thruster_curve_scale": 1.,
         "thruster_curve_bias": 0.,
@@ -144,7 +144,7 @@ SPEC_VAP4 = ({
         "thruster_curve_scale": 1.,
         "thruster_curve_bias": 0.,
         "hydro_lateral_drag": 0.7,
-        "num_thrusters": 2,
+        "num_thrusters": 4,
         "holonomic": [True, True, True, True],
         "thruster_positions": [(-0.53, 0.37765, -0.16), (-0.53, -0.37765, -0.16), (0.53, 0.37765, -0.16), (0.53, -0.37765, -0.16)],
         "thruster_directions": [(1.0, 1.0, 0.0), (1.0, 1.0, 0.0), (1.0, 1.0, 0.0), (1.0, 1.0, 0.0)], # useless if holonomic=True

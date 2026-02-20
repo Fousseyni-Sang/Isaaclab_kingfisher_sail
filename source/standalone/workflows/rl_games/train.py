@@ -26,6 +26,8 @@ parser.add_argument(
 parser.add_argument("--checkpoint", type=str, default=None, help="Path to model checkpoint.")
 parser.add_argument("--sigma", type=str, default=None, help="The policy's initial standard deviation.")
 parser.add_argument("--max_iterations", type=int, default=None, help="RL Policy training iterations.")
+parser.add_argument("--model_id", type=str, default=None, help="low level model to run")
+parser.add_argument("--feas_map", action="store_true", default=False, help="whether add or not the feasibility map.")
 
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
@@ -69,7 +71,12 @@ import omni.isaac.lab_tasks  # noqa: F401
 from omni.isaac.lab_tasks.utils.hydra import hydra_task_config
 from omni.isaac.lab_tasks.utils.wrappers.rl_games import RlGamesGpuEnv, RlGamesVecEnvWrapper
 
-
+# parse env configuration
+spec_path = os.environ.get("LL_OUTPUT_DIR", None)
+temp = spec_path
+if spec_path==None and args_cli.model_id is not None:
+    spec_path = f"outputs/ll/ll_model_{args_cli.model_id}" 
+    os.environ["LL_OUTPUT_DIR"] = spec_path
 
 @hydra_task_config(args_cli.task, "rl_games_cfg_entry_point")
 def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: dict):
@@ -82,10 +89,19 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     if args_cli.seed == -1:
         args_cli.seed = random.randint(0, 10000)
 
+    
+    if temp==None and args_cli.model_id is not None:
+        agent_cfg["params"]["config"]["name"] = f"kingfisher_direct_low_level_ll_model_{args_cli.model_id}"
+    
     agent_cfg["params"]["seed"] = args_cli.seed if args_cli.seed is not None else agent_cfg["params"]["seed"]
     agent_cfg["params"]["config"]["max_epochs"] = (
         args_cli.max_iterations if args_cli.max_iterations is not None else agent_cfg["params"]["config"]["max_epochs"]
     )
+
+    if args_cli.feas_map:
+        agent_cfg["params"]["config"]["name"] += "_feas"
+        agent_cfg["params"]["network"]["name"] = "hrl_"+agent_cfg["params"]["network"]["name"]
+
     if args_cli.checkpoint is not None:
         resume_path = retrieve_file_path(args_cli.checkpoint)
         agent_cfg["params"]["load_checkpoint"] = True

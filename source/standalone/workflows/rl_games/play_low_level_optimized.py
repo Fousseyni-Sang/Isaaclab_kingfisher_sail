@@ -31,6 +31,7 @@ parser.add_argument("--wind_direction", type=float, default=180.0, help="True wi
 parser.add_argument("--wind_speed", type=float, default=5.0, help="True wind speed.") 
 parser.add_argument("--num_episode", type=int, default=10, help="Number of episodes for evaluation.") 
 parser.add_argument("--ros_publish_interval", type=int, default=10, help="ROS publish interval in steps.") 
+parser.add_argument("--model_id", type=str, default="000", help="low level model to run") 
 
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
@@ -72,7 +73,7 @@ import pandas as pd
 
 def main():
     """Play with RL-Games agent."""
-
+    
     # ROS init (optional) 
     if args_cli.ros: 
         rclpy.init() 
@@ -84,11 +85,21 @@ def main():
         slider_node = None 
 
     # parse env configuration
+    spec_path = os.environ.get("LL_OUTPUT_DIR", None)
+    temp = spec_path
+    if spec_path==None:
+        spec_path = f"outputs/ll/ll_model_{args_cli.model_id}" 
+        os.environ["LL_OUTPUT_DIR"] = spec_path
+
     env_cfg = parse_env_cfg(
         args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs, use_fabric=not args_cli.disable_fabric
     )
+    
     agent_cfg = load_cfg_from_registry(args_cli.task, "rl_games_cfg_entry_point")
 
+    if temp==None:
+        agent_cfg["params"]["config"]["name"] = f"kingfisher_direct_low_level_ll_model_{args_cli.model_id}"
+        print(f'===============++++++++++> Helllo : {agent_cfg["params"]["config"]["name"]}')
     # specify directory for logging experiments
     log_root_path = os.path.join("logs", "rl_games", agent_cfg["params"]["config"]["name"])
     log_root_path = os.path.abspath(log_root_path)

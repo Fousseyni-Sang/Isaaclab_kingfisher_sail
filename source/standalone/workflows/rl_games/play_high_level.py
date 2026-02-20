@@ -30,6 +30,7 @@ parser.add_argument("--episode_length", type=int, default=None, help="length of 
 parser.add_argument("--wind_direction", type=float, default=180, help="direction of the true wind in degree.")
 parser.add_argument("--wind_speed", type=float, default=5, help="speed of the true wind in degree.")
 parser.add_argument("--num_episode", type=int, default=10, help="number of episodes for evaluation.")
+parser.add_argument("--feas_map", action="store_true", default=False, help="whether add or not the feasibility map.")
 
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
@@ -93,7 +94,9 @@ def main():
         args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs, use_fabric=not args_cli.disable_fabric
     )
     agent_cfg = load_cfg_from_registry(args_cli.task, "rl_games_cfg_entry_point")
-
+    if args_cli.feas_map:
+        agent_cfg["params"]["config"]["name"] += "_feas"
+        agent_cfg["params"]["network"]["name"] = "hrl_" + agent_cfg["params"]["network"]["name"]
     # specify directory for logging experiments
     log_root_path = os.path.join("logs", "rl_games", agent_cfg["params"]["config"]["name"])
     log_root_path = os.path.abspath(log_root_path)
@@ -182,10 +185,12 @@ def main():
     #env.unwrapped._sail_aerodynamics.update_flow(flow_speed=wind_speed)
         
     obs = env.reset()
-    if isinstance(obs, dict):
-        obs = obs["obs"]
+    feas = obs.get("feasibility_map", None)
     timestep = 0
     # required: enables the flag for batched observations
+    if isinstance(obs, dict):
+        obs = obs['obs']
+    
     _ = agent.get_batch_size(obs, 1)
     # initialize RNN states if used
     if agent.is_rnn:
@@ -228,7 +233,7 @@ def main():
     ratio_energy_usage_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.unwrapped.device)
     acord_prediction_logs_logs = torch.zeros((max_episod_length, args_cli.num_envs, 3), device=env.unwrapped.device)
     energy_context_logs = torch.zeros((max_episod_length, args_cli.num_envs, 3), device=env.unwrapped.device)
-    norm_error_logs = torch.zeros((max_episod_length, args_cli.num_envs, 2), device=env.unwrapped.device)
+    norm_error_logs = torch.zeros((max_episod_length, args_cli.num_envs, 3), device=env.unwrapped.device)
     world_wind_direc_logs = torch.zeros((max_episod_length, args_cli.num_envs), device=env.unwrapped.device)
 
     trajectories_list = []
@@ -285,8 +290,8 @@ def main():
             #print(f"\nenergy: {env.unwrapped.energy_context} \ntime: {env.unwrapped.time_context} \nwind: {env.unwrapped._sail_aerodynamics.Beta_w}\n")
             obs = agent.obs_to_torch(obs)
             # agent stepping
-
-            actions = agent.get_action(obs, is_deterministic=agent.is_deterministic)
+            
+            actions = agent.get_action(obs, is_deterministic=agent.is_deterministic, feas=feas)
 
             if not any(torch.equal(goal_pos, x) for x in goal_pos_list):
                 goal_pos_list.append(goal_pos.clone())
@@ -337,7 +342,7 @@ def main():
             distance  = env.unwrapped.distance
             bearing = env.unwrapped.bearing
 
-            norm_error_lin = env.unwrapped.norm_error_lin.reshape(-1, 1)
+            norm_error_lin = env.unwrapped.norm_error_lin
             norm_error_ang = env.unwrapped.norm_error_ang.reshape(-1, 1)
             send_goal =  env.unwrapped.send_goals.clone().float()
             norm_error_cat = torch.cat((norm_error_lin, norm_error_ang), dim=-1)
@@ -348,9 +353,9 @@ def main():
             loss_disc = torch.tensor([loss], device=rew_backward.device) if loss is not None else torch.zeros_like(rew_energy)
             tack_wpts = env.unwrapped.tack_waypoints
 
-            ll_lvl_pos_w = env.unwrapped.ll_exp_buf.rb_pos_w.clone()
+            """ll_lvl_pos_w = env.unwrapped.ll_exp_buf.rb_pos_w.clone()
             ll_lvl_lin_ang_vel_b = env.unwrapped.ll_exp_buf.rb_lin_ang_vel_b.clone()
-            ll_lvl_obs = env.unwrapped.ll_exp_buf.obs_buffer.clone()
+            ll_lvl_obs = env.unwrapped.ll_exp_buf.obs_buffer.clone()"""
 
             #print(f"way_pts: {env.unwrapped.sailing_mode}, bearing: {(180/torch.pi)*env.unwrapped.bearing}")
             dones = dones.to(device=trajectories.device)
@@ -407,6 +412,7 @@ def main():
 
                 obs = env.reset()
                 if isinstance(obs, dict):
+                    feas = obs.get("feasibility_map", None)
                     obs = obs["obs"]
                 wind_modulo = (wind_direc + torch.pi)%(2*torch.pi) - torch.pi
                 #env.unwrapped._sail_aerodynamics.update_flow(flow_direction=wind_modulo)
@@ -415,7 +421,9 @@ def main():
             #print(f"traj: {trajectories.device} alive_envs: {alive_envs.device} step: {step.device} robot_pos: {robot_pos.device}")
             trajectories[step] = torch.where(~dones.unsqueeze(0), robot_pos.clone(), trajectories[step].clone())
             #lift_coeff_logs[alive_envs, step] = lift_coeff[alive_envs].float()
-
+            if isinstance(obs, dict):
+                feas = obs.get("feasibility_map", None)
+                obs = obs["obs"]
             dyn_ros_node.publish(obs=obs, actions=actions, total_rew=rew, aero_force=aero_force, thruster_force=thruster_force, 
                             lin_vel_b=lin_speed, ang_vel_b=ang_speed, angle_of_attack=aoa, app_flow_angle=app_flow_angle, true_flow_angle=true_flow_angle, 
                             sail_angle=sail, heading_w=head_w, head_wrt_wind=head_wrt_wind, lift_drag_ratio=ld_ratio, robot_pos_w=robot_pos, 
@@ -451,7 +459,7 @@ def main():
             reward_acord_logs[step] = reward_acord.clone().float()
             acord_prediction_logs_logs[step] = acord_prediction_logs.clone().float()
             energy_context_logs[step] = energy_context.clone().float()
-            norm_error_logs[step, 0, 0], norm_error_logs[step, 0, 1] = norm_error_lin.clone().float(), norm_error_ang.clone().float()
+            norm_error_logs[step, 0, 0:2], norm_error_logs[step, 0, 2] = norm_error_lin.clone().float(), norm_error_ang.clone().float()
             
     # Cleanup
     dyn_ros_node.destroy_node()
@@ -543,8 +551,9 @@ if __name__ == "__main__":
                     "episode": ep_idx,
                     "time_step": t,
                     "env_id": env_id,
-                    "norm_error_lin": norm[t, env_id, 0].item(),   
-                    "norm_error_ang": norm[t, env_id, 1].item(),  
+                    "norm_error_lin_vx": norm[t, env_id, 0].item(),   
+                    "norm_error_lin_vy": norm[t, env_id, 1].item(), 
+                    "norm_error_ang": norm[t, env_id, 2].item(),  
                 })
     pd.DataFrame(norm_error).to_csv(os.path.join(output_dir, "norm_error.csv"), index=False)
 

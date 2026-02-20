@@ -3,21 +3,34 @@ from omni.isaac.lab.app import AppLauncher
 app_launcher = AppLauncher() 
 simulation_app = app_launcher.app 
 
-from omni.isaac.lab_tasks.utils.my_utils.boat_config import generate_boat_specs
+from omni.isaac.lab_tasks.utils.my_utils.boat_config import generate_boat_specs, generate_structured_boat_specs
+from omni.isaac.lab_tasks.utils.my_utils.common import clear_hl_split
 import os
 import yaml
 import subprocess
+import argparse
 
 AGENTCFG = "source/extensions/omni.isaac.lab_tasks/omni/isaac/lab_tasks/direct/kingfisher_sail_low_level/agents/rl_games_ppo_cfg.yaml"
+parser = argparse.ArgumentParser(description="Launch training of arbitrary number of LL RL agent from RL-Games.")
+parser.add_argument("--num_models", type=int, default=5, help="number of low level agent to be trained.")
+args_cli = parser.parse_args()
+
 
 def save_spec(spec, path):
+    # Delete existing spec before creating a new one
+
+    if os.path.exists(path):
+        os.remove(path)
+        
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w") as f:
         yaml.safe_dump(spec, f)
 
 def launch_ll_sweep(num_models=50):
     # Generate all boat specifications
-    boat_specs = generate_boat_specs(num_models)
+    boat_specs = generate_structured_boat_specs() #generate_boat_specs(num_models)
+    clear_hl_split()
+    
 
     for model_id, spec in enumerate(boat_specs):
 
@@ -28,6 +41,7 @@ def launch_ll_sweep(num_models=50):
         out_dir = f"outputs/ll/{run_name}"
         os.makedirs(out_dir, exist_ok=True)
 
+        print(spec)
         # Save the boat specification for this model
         save_spec(spec, f"{out_dir}/spec.yaml")
 
@@ -42,6 +56,10 @@ def launch_ll_sweep(num_models=50):
         with open(AGENTCFG, "r") as f:
             cfg = yaml.safe_load(f)
 
+        if spec["has_keel"] or spec["has_rudder"] or spec["has_sail"]:
+            cfg["params"]["config"]["max_epochs"] = 1000
+        else:
+            cfg["params"]["config"]["max_epochs"] = 300
         # Unique agent name → unique checkpoint filename
         cfg["params"]["config"]["name"] = f"kingfisher_direct_low_level_{run_name}"
 
@@ -53,8 +71,7 @@ def launch_ll_sweep(num_models=50):
         # 3. Launch training
         # ---------------------------------------------------------
         cmd = [
-            "./isaaclab.sh",
-            "-p",
+            "/mnt/gpu_storage/zrr/fsangare/isaaclab/bin/python",
             "source/standalone/workflows/rl_games/train.py",
             "--task", "Isaac-KingfisherSail-Direct-Low-v0",
             "--headless",
@@ -62,17 +79,36 @@ def launch_ll_sweep(num_models=50):
             "--device", "cuda:1"
         ]
 
-
-        
-
-
         print(f"Launching LL model {model_id} ({run_name})…")
         subprocess.run(cmd, env=env, check=True)
 
+    subprocess.run(["./kill_isaac.sh"], check=True)
+
+    # Launch the eval process
+    subprocess.run([
+        "./isaaclab.sh",
+        "-p",
+        "source/standalone/workflows/rl_games/launch_play_ll.py",
+    ], check=True)
+
+    subprocess.run(["./kill_isaac.sh", "Direct"], check=True)
+
+    # Launch the HL training 
+    cmd = [
+            "./isaaclab.sh",
+            "-p",
+            "source/standalone/workflows/rl_games/train.py",
+            "--task", "Isaac-KingfisherSail-Direct-High-v0",
+            "--headless",
+            "--num_envs", "1024",
+            "--device", "cuda:1"
+        ]
+    #subprocess.run(cmd, check=True)
+    subprocess.run(["./kill_isaac.sh"], check=True)
 
 if __name__ == "__main__":
-    launch_ll_sweep(3)
-
+    launch_ll_sweep(args_cli.num_models)
+    subprocess.run(["./kill_isaac.sh", "launch_training_ll"], check=True)
 
 
 
