@@ -12,3 +12,18 @@ run this command when miniconda is activated
 conda config --set auto_activate_base false
 
 or undo that automation with: conda init --reverse $SHELL
+
+
+To modify TMPDIR and PIP_CACHE_DIR for isaaclab installation when there is no space in /tmps disk:
+
+export TMPDIR=/mnt/gpu_storage/zrr/fsangare/tmp
+mkdir -p $TMPDIR
+
+export PIP_CACHE_DIR=/mnt/gpu_storage/zrr/fsangare/pip_cache
+mkdir -p $PIP_CACHE_DIR
+
+raise RuntimeError(f"Failed to create stream on device {device}")
+RuntimeError: Failed to create stream on device cuda:0.0
+CUDA_VISIBLE_DEVICES=1 LIVESTREAM=2 ENABLE_CAMERA=1 ./isaaclab.sh -p source/standalone/my_standalone/test_hrl_zeroshot.py
+
+this makes only GPU 1 visible to cuda or pytorch but then you should use cuda:0 to refer to GPU 1 

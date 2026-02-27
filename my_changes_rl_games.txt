@@ -1,0 +1,24 @@
+/mnt/gpu_storage/zrr/fsangare/isaaclab/lib/python3.10/site-packages/rl_games/common/a2c_common.py
+
+Changes are: 
+- Added the discriminator codes from the network.py file. 
+- Function write_stats ---> line 576 ---> added paramters discr_losses=[] and a line in writer.add_scalar
+
+The culprit why my discriminator was not learning: with torch.no_grads play_steps ---> line 1394
+
+Line 969 ---> Addding discriminator predictions
+
+/mnt/gpu_storage/zrr/fsangare/isaaclab/lib/python3.10/site-packages/rl_games/algos_torch/a2c_continuous.py
+
+Changes are:
+line 141 ---> discriminator learning and gradient step inside the calc_gradients function of the continuous A2CAgents
+
+In /mnt/gpu_storage/zrr/fsangare/isaaclab/lib/python3.10/site-packages/rl_games/common/experience.py
+line 337 ---> added the loss_mask key as part of the buffers
+
+
+In /mnt/gpu_storage/zrr/fsangare/isaaclab/lib/python3.10/site-packages/rl_games/common/a2c_common.py
+line 1179 ---> also added loss_mask in the tensor list
+
+In /mnt/gpu_storage/zrr/fsangare/isaaclab/lib/python3.10/site-packages/rl_games/common/a2c_common.py
+line 755 ---> added the loss_mask buffer in the batch dict inside the play_steps() function
