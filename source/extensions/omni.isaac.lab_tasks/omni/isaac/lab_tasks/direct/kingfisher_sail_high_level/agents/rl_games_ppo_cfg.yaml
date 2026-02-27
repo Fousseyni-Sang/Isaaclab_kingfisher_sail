@@ -12,7 +12,7 @@ params:
     name: continuous_a2c_logstd
 
   network:
-    name: hrl_actor_critic
+    name: actor_critic
     separate: False
     space:
       continuous:
@@ -26,7 +26,7 @@ params:
           val: 0
         fixed_sigma: True
     mlp:
-      units: [64, 64]
+      units: [128, 128]
       activation: elu
       d2rl: False
 
@@ -36,8 +36,9 @@ params:
         name: None
       
     hrl_embbeding:
-      out_size: 32
-      in_size: 11
+      out_size: 16
+      in_size: 1
+      dim_feasibility_map: 2
 
   load_checkpoint: False # flag which sets whether to load the checkpoint
   load_path: '' # path to the checkpoint to load
@@ -63,7 +64,7 @@ params:
     schedule_type: legacy
     kl_threshold: 0.016
     score_to_win: 20000000
-    max_epochs: 230
+    max_epochs: 600
     save_best_after: 25
     save_frequency: 50
     grad_norm: 1.0

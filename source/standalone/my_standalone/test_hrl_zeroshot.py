@@ -180,6 +180,39 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
 
         return feas.bool()
 
+    def generate_binary_polar_map(N=10):
+        """
+        Returns a (N, N) binary feasibility map over normalized (vx, vy).
+        Values are exactly 0 or 1.
+        """
+        xs = torch.linspace(-1, 1, N)
+        ys = torch.linspace(-1, 1, N)
+        X, Y = torch.meshgrid(xs, ys, indexing='ij')
+
+        angle = torch.atan2(Y, X)  # [-pi, pi]
+
+        # --- Define angular sectors (binary) ---
+        # No-go zone around 0° (upwind)
+        no_go = (angle.abs() < torch.deg2rad(torch.tensor(30)))  # boolean mask
+
+        # Two reach lobes (45° and -45°)
+        reach1 = (angle > torch.deg2rad(torch.tensor(30))) & (angle < torch.deg2rad(torch.tensor(70)))
+        reach2 = (angle < torch.deg2rad(torch.tensor(-30))) & (angle > torch.deg2rad(torch.tensor(-70)))
+
+        # Downwind sector (broad)
+        downwind = (angle.abs() > torch.deg2rad(torch.tensor(130)))
+
+        # Combine sectors
+        feas = torch.zeros_like(X, dtype=torch.float32)
+
+        # Assign 1 to feasible sectors
+        feas[reach1] = 1.0
+        feas[reach2] = 1.0
+        feas[downwind] = 1.0
+
+        # Everything else stays 0
+        return feas
+
 
     def set_debug_vis_impl(debug_vis: bool):
         nonlocal goal_pos_visualizer

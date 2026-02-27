@@ -410,6 +410,16 @@ def load_spec(spec_path:str|None=None):
     with open(spec_file, "r") as f:
         return yaml.safe_load(f)
 
+def load_existing_specs(model_dirs:str="outputs/ll", n:int|None=15):
+    specs = []
+    for md_dir in sorted(os.listdir(model_dirs)):
+        spec_path = os.path.join(model_dirs, md_dir, "spec.yaml")
+        if os.path.isfile(spec_path):
+            with open(spec_path, "r") as f:
+                specs.append(yaml.safe_load(f))
+        if n is not None and len(specs) >= n:
+            break
+    return specs, len(specs)>0
 
 def make_boat_model(model_spec):
     # 1. Thrusters
@@ -485,27 +495,39 @@ def parametric_kingfisher(d):
     spec = copy.deepcopy(SPEC_KINGFISHER)
     x = -0.53
     z = -0.16
-    spec["thruster_positions"] = [(x, +d, z), (x, -d, z)]
+    #spec["thruster_positions"] = [(x, +d, z), (x, -d, z)]
+    spec["thruster_positions"][0][1] *= d #[(x, +d, z), (x, -d, z)]
+    spec["thruster_positions"][1][1] *= d
     return spec
 
 def parametric_vap2(d):
     spec = copy.deepcopy(SPEC_VAP2)
     x = 0.0
     z = -0.16
-    spec["thruster_positions"] = [(x, +d, z), (x, -d, z)]
+    spec["thruster_positions"][0][1] *= d #[(x, +d, z), (x, -d, z)]
+    spec["thruster_positions"][1][1] *= d
     return spec
 
 def parametric_jellyfish(d):
     spec = copy.deepcopy(SPEC_JELLIFISH)
     z1 = -0.16
     # two lateral thrusters at y = ±d
-    spec["thruster_positions"][0] = (0.0, +d, z1)
+    spec["thruster_positions"][0][1] *= d #(0.0, +d, z1)
+    spec["thruster_positions"][1][1] *= d #(0.0, -d, z1)
+    return spec
+
+def parametric_single_motor(d):
+    spec = copy.deepcopy(SPEC_SINGLE_MOTOR)
+    z1 = -0.16
+    # two lateral thrusters at y = ±d
+    spec["thruster_positions"][0][0] *= d #(-d, 0.0, z1)
     # keep the others as-is (or you can also parametrize them later)
     return spec
 
-def generate_structured_boat_specs_per_type( base_type, num_steps=5, d_max=0.5, ): 
+def generate_structured_boat_specs_per_type( base_type, num_steps=4, d_max=1., ): 
     specs = [] 
-    ds = np.linspace(d_max, 0.0, num_steps) 
+    ds = np.linspace(0.05, d_max, num_steps) 
+    print(f"Generating specs for {base_type} with thruster spacings: {ds}")
     for i, d in enumerate(ds): 
         d = float(d)
         if base_type == "kingfisher": 
@@ -514,6 +536,8 @@ def generate_structured_boat_specs_per_type( base_type, num_steps=5, d_max=0.5, 
             spec = parametric_vap2(d) 
         elif base_type == "jellyfish": 
             spec = parametric_jellyfish(d) 
+        elif base_type == "single_motor":
+            spec = parametric_single_motor(d)
         else: 
             raise ValueError(f"Unsupported base type: {base_type}") 
         spec["id"] = f"{base_type}_d_{i:02d}" 
@@ -523,7 +547,7 @@ def generate_structured_boat_specs_per_type( base_type, num_steps=5, d_max=0.5, 
 
 def generate_structured_boat_specs():
     all_specs = []
-    for base in ["kingfisher", "vap2", "jellyfish"]:
+    for base in ["kingfisher", "vap2", "jellyfish", "single_motor"]:
         all_specs.extend(generate_structured_boat_specs_per_type(base))
     return all_specs
 

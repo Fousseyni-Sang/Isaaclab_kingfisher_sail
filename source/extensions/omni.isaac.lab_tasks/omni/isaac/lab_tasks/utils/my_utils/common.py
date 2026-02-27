@@ -333,6 +333,66 @@ def compute_obs_dim(spec):
 
         return num_obs
 
+class DiscretizerFeasMap:
+    def __init__(self, device, num_envs, n_pts=11, vy=False):
+    
+        self.device = device
+        self.num_envs = num_envs
+        self.grid_index = 0
+        
+        # Normalized grids
+        self.vx_norm_grid = torch.linspace(-1, 1, n_pts, device=self.device)
+        self.vy_norm_grid = torch.linspace(-1, 1, n_pts, device=self.device)
+        self.w_norm_grid = torch.linspace(-1, 1, n_pts, device=self.device)
+        self.vy = vy
+        if vy==False:
+            # Create full 2D mesh
+            print("Creating 2D mesh for discretization...")
+            vx_mesh, w_mesh = torch.meshgrid(
+                self.vx_norm_grid,
+                self.w_norm_grid,
+                indexing="ij"
+            )
+            self.feasibility_map = torch.zeros((n_pts, n_pts), device=self.device, dtype=torch.int)
+
+            # Flatten into (121, 2)
+            self.grid_pairs = torch.stack(
+                [vx_mesh.flatten(), w_mesh.flatten()], dim=-1)  # shape (121, 2)
+
+                # Flatten into (1331, 3)
+            self.grid_pairs = torch.stack(
+                [vx_mesh.flatten(), w_mesh.flatten()], dim=-1)  # shape (1331, 3)
+
+            self.grid_ijk = torch.stack([ ((torch.arange(n_pts**2, device=self.device)) // n_pts), # i
+                        (torch.arange(n_pts**2, device=self.device) % n_pts) # j 
+                        ], dim=-1) # shape (n_pts**2, 2)
+
+        else:
+            # Create full 3D mesh
+            print("Creating 3D mesh for discretization...")
+            self.feasibility_map = torch.zeros((n_pts, n_pts, n_pts), device=self.device, dtype=torch.int)
+
+            vx_mesh, vy_mesh, w_mesh = torch.meshgrid(
+                self.vx_norm_grid,
+                self.vy_norm_grid,
+                self.w_norm_grid,
+                indexing="ij"
+            )
+
+            # Flatten into (1331, 3)
+            self.grid_pairs = torch.stack(
+                [vx_mesh.flatten(), vy_mesh.flatten(), w_mesh.flatten()],
+                dim=-1
+            )  # shape (1331, 3)
+
+            self.grid_ijk = torch.stack([ (torch.arange(n_pts**3, device=self.device) // n_pts**2), # i 
+                            ((torch.arange(n_pts**3, device=self.device) % (n_pts**2)) // n_pts), # j 
+                        (torch.arange(n_pts**3, device=self.device) % n_pts) # k 
+                        ], dim=-1) # shape (n_pts**3, 3) 
+
+        # For tracking which grid point each env is evaluating 
+        self.env_grid_ids = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+
 if __name__=="__main__":
 
     train_set, eval_set = load_ll_population_with_split()

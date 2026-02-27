@@ -20,7 +20,7 @@ params:
     mini_epochs: 5
     minibatch_size: 24576
     multi_gpu: false
-    name: kingfisher_direct_low_level_ll_model_000
+    name: kingfisher_direct_low_level_ll_model_011
     normalize_advantage: true
     normalize_input: true
     normalize_value: true

@@ -30,7 +30,7 @@ from omni.isaac.lab.actuator_force.robot_actuator_system import RobotActuatorSys
 from ...utils.my_utils.boat_config import *
 
 
-from ...utils.my_utils.common import sample_pairs_batch, compute_obs_dim
+from ...utils.my_utils.common import sample_pairs_batch, compute_obs_dim, DiscretizerFeasMap
 
 ##
 # Pre-defined configs
@@ -70,7 +70,7 @@ class KingfisherSailEnvCfg(DirectRLEnvCfg):
     decimation = 3
     step_dt = physics_dt * decimation  # 20 Hz
     action_space = 2 #3
-    base_observation_space = 6 #12
+    base_observation_space = 4 #12
     state_space = 0
     debug_vis = True
 
@@ -310,19 +310,6 @@ class KingfisherSailEnv(DirectRLEnv):
             foil_dynamics=foil_dynamics
             )
 
-
-        
-        """self._robot_system_dynamics = RobotActuatorSystem(
-            num_envs=self.num_envs, device=self.device, dt=cfg.step_dt, cfg=cfg.generic_system_foil_actuator_cfg, 
-            foil_dynamics=[self._rudder_hydrodynamics, self._keel_hydrodynamics, ] #self._rudder_hydrodynamics,
-        )"""
-        
-        # If we have a keel, we consider that there is no hull drag or at least it contributes less in the drag
-        """if self._robot_system_dynamics.cfg.foil_cfg is not None and "keel" in self._robot_system_dynamics.cfg.foil_cfg.foil_types:
-            self.apply_hydro = False
-        else:
-            self.apply_hydro = True"""
-
         # Buffers
         self.distance = torch.zeros(self.num_envs, device=self.device)
         self.previous_distance = torch.zeros(self.num_envs, device=self.device)
@@ -412,8 +399,10 @@ class KingfisherSailEnv(DirectRLEnv):
         self.red_marker_translations = np.random.uniform([-self.env_pos[0]-d, -self.env_pos[1]-d, 0], 
                         [self.env_pos[0]+d, self.env_pos[1]+d, 2], (n_markers//10, 3))
         
-        self.green_marker_translations = np.zeros((3, 3)) # 3 arrows for 3 bodies, both hulls and sail
-
+        self.green_marker_translations = np.zeros((3, 3)) # 3 arrows for 3 bodies, both hulls and sail 
+        
+        self.discretizer_feas_map = DiscretizerFeasMap(device=self.device, num_envs=self.num_envs, n_pts=11, vy=False)
+        
         # Normalized grids
         self.vx_norm_grid = torch.linspace(-1, 1, 11, device=self.device)
         self.vy_norm_grid = torch.linspace(-1, 1, 11, device=self.device)
@@ -448,55 +437,6 @@ class KingfisherSailEnv(DirectRLEnv):
    
         # ============================================================================================#
         # ============================================================================================#
-    """self.train_models, self.eval_models = load_ll_population_with_split()
-
-            self.train_agents = self.load_ll_agents(self.train_models) 
-            self.eval_agents = self.load_ll_agents(self.eval_models) 
-
-            # Pick initial model 
-            self.current_model = random.choice(self.eval_agents)[3]
-    def load_ll_agents(self, boat_models):
-            agents = []
-            for model in boat_models:
-                
-                model_ckpt = model["checkpoint"]
-                action_dim = compute_act_dim(model["spec"])
-                foil_obs_dim = compute_obs_dim(model["spec"])
-                base_obs = 6
-                feas = model["feasibility"]
-                ll_obs_dim = foil_obs_dim + base_obs + action_dim
-
-                ckpt = torch.load(model_ckpt, map_location="cpu") 
-                trained_obs_dim = ckpt['model']['running_mean_std.running_mean'].shape[0] 
-                trained_act_dim = ckpt['model']['a2c_network.mu.weight'].shape[0]
-
-                print(f"==========++> model: {model} \n{trained_obs_dim} \n{trained_act_dim}")
-                print(f"total_ll_obs: {ll_obs_dim}")
-                low_level_agent, env = get_low_level_agent(checkpoint_path=model_ckpt, num_envs=self.num_envs, 
-                                                        device=self.device, act_dim=action_dim, obs_dim=ll_obs_dim)
-            
-            agents.append((low_level_agent, env, model))
-
-            return agents
-        def update_low_level(self):
-
-            # Choose LL model based on training/eval mode 
-            if self.is_Training: 
-                agent, env, model = random.choice(self.train_agents) 
-            else: 
-                agent, env, model = random.choice(self.eval_agents) 
-            
-            
-            self._low_level_agent = agent
-            # Reset LL action buffer 
-            self.low_lvl_actions = torch.zeros(self.num_envs, env.act_dim, device=self.device) 
-            # Store feasibility map if needed 
-            feas_map = model["feasibility"]
-            # Convert DataFrame → numpy → tensor 
-            feas_np = feas_map.to_numpy(dtype=float).flatten() 
-            feas_tensor = torch.tensor(feas_np, device=self.device, dtype=torch.float32) 
-            # Repeat for all envs 
-            self.feasibility_map = feas_tensor.unsqueeze(0).repeat(self.num_envs, 1)"""
 
     def _setup_scene(self):
         self._robot = Articulation(self.cfg.robot)
@@ -533,34 +473,12 @@ class KingfisherSailEnv(DirectRLEnv):
             print("🔥 NaN/Inf in LL obs", actions)
             raise RuntimeError("Invalid HL observation")
         self._actions = actions.clone().clamp(-1.0, 1.0)
-        #self._actions[:, 2] = 0
-        # Override the actions for debugging
-        # self._actions[:,0] = 0.6
-        # self._actions[:,1] = 0.6
+
         if not torch.isfinite(self._actions).all():
             print("🔥 NaN/Inf in LL obs", self._actions)
             raise RuntimeError("Invalid HL observation")
         # Compute the thruster forces based on the actions.
         # thrust_cmds = torch.tensor([0.0, 1.0], dtype=torch.float32, device=self.device)
-        
-        """self._thruster_dynamics.set_target_cmd(self._actions[:, :2])
-        self._thruster_forces[:, 0, :] = self._thruster_dynamics.update_forces()"""
-        
-        # === THRUSTERS === 
-        """
-        # With foil actuator
-
-        current_sail_joint_pos   = self._sail_actuator.dynamics.foil_angle.reshape(self.num_envs, 1)
-        current_keel_joint_pos   = self._keel_actuator.dynamics.foil_angle.reshape(self.num_envs, 1)
-        current_rudder_joint_pos = self._rudder_actuator.dynamics.foil_angle.reshape(self.num_envs, 1)
-
-        self._robot_system_dynamics.set_target_cmd(self._actions) 
-        self._robot_system_dynamics.update(self._robot.data.heading_w, self._robot.data.root_lin_vel_b, 
-        [current_rudder_joint_pos, current_keel_joint_pos]) #  [current_rudder_joint_pos, current_keel_joint_pos ](num_envs, num_thrusters, 3)
-    
-        # Store for _apply_action 
-        self.robot_system_forces = self._robot_system_dynamics.get_forces()"""
-
         
         if self.foil_cfg is not None:
             foil_joint_positions = []
@@ -591,11 +509,6 @@ class KingfisherSailEnv(DirectRLEnv):
             robot_pos, robot_quat
         )
         self._hydrodynamic_force[:, 0, :] = self._hydrodynamics.ComputeHydrodynamicsEffects(robot_quat, robot_vel)
-
-        """current_joint_pos = self._sail_actuator.dynamics.foil_angle.reshape(self.num_envs, -1)
-        self._sail_actuator.update_joint_cmd(current_joint_pos, self._actions[:, 1:2]) #2:3
-        self._sail_actuator.update_forces(self._robot.data.heading_w, self._robot.data.root_lin_vel_b)
-        self._sail_aerodynamic_force_b[:, 0, :] = self._sail_actuator.get_forces_and_torques()"""
     
         #=====================================================================================================#
         
@@ -705,11 +618,16 @@ class KingfisherSailEnv(DirectRLEnv):
 
         # Fill feasibility map
         for env in range(self.num_envs):
-            grid_id = self.env_grid_ids[env]          # 0..999
-            i, j, k = self.grid_ijk[grid_id]          # convert to 3D index
-            self.feasibility_map[i, j, k] = feasible[env]
-
-        return self.feasibility_map.detach().cpu().numpy()
+            grid_id = self.discretizer_feas_map.env_grid_ids[env]
+                      # 0..999
+            if self.discretizer_feas_map.vy:
+                i, j, k = self.discretizer_feas_map.grid_ijk[grid_id]          # convert to 3D index
+                self.discretizer_feas_map.feasibility_map[i, j, k] = feasible[env]
+            else:
+                i, j = self.discretizer_feas_map.grid_ijk[grid_id]          # convert to 3D index
+                self.discretizer_feas_map.feasibility_map[i, j] = feasible[env]
+                #print("Feasibility map updated: ", self.discretizer_feas_map.feasibility_map.size(), self.discretizer_feas_map.feasibility_map)
+        return self.discretizer_feas_map.feasibility_map.detach().cpu().numpy()
         
 
     def _get_observations(self) -> dict:
@@ -724,19 +642,25 @@ class KingfisherSailEnv(DirectRLEnv):
         #self.distance = torch.linalg.norm(self.desired_pos_b, dim=1)
         self.bearing = torch.atan2(self.desired_pos_b[:, 1], self.desired_pos_b[:, 0])
 
-        error_lin = self.desired_wrench_b[:, 0:2]-self._robot.data.root_lin_vel_b[:, 0:2]
+        if self.discretizer_feas_map.vy:
+            error_lin = self.desired_wrench_b[:, 0:2]-self._robot.data.root_lin_vel_b[:, 0:2]
+            delta_vel_lin_b = (self._robot.data.root_lin_vel_b[:, 0:2]-self.prev_lin_vel_b[:, 0:2])
+        else:
+            error_lin = self.desired_wrench_b[:, 0:1]-self._robot.data.root_lin_vel_b[:, 0:1]
+            delta_vel_lin_b = (self._robot.data.root_lin_vel_b[:, 0:1]-self.prev_lin_vel_b[:, 0:1])
+
         self.norm_error_lin = torch.abs(error_lin)
 
         error_ang = self.desired_wrench_b[:, 5]-self._robot.data.root_ang_vel_b[:, 2]
         self.norm_error_ang = torch.abs(error_ang)
 
-        delta_vel_lin_b = (self._robot.data.root_lin_vel_b-self.prev_lin_vel_b)
+        
         delta_ang_vel_b = (self._robot.data.root_ang_vel_b-self.prev_ang_vel_b)
 
         obs_parts = [
                 self._actions,  # 3
                 error_lin.reshape(self.num_envs, -1), # 1
-                delta_vel_lin_b[:, 0:2].reshape(self.num_envs, -1), # 1
+                delta_vel_lin_b.reshape(self.num_envs, -1), # 1
                 error_ang.reshape(self.num_envs, -1), # 1
                 delta_ang_vel_b[:, 2].reshape(self.num_envs, -1), # 1
                 #((self.episode_length_buf%self.interval_between_goals)/self.interval_between_goals).reshape(self.num_envs, -1)    
@@ -812,10 +736,14 @@ class KingfisherSailEnv(DirectRLEnv):
         s = 1.0
         self.reward_goal = goal_reach.clone()
 
-        r1 =    0.5*(torch.exp(-5*torch.norm(distance_to_target[:, :1], dim=-1)/s)-1) + \
-                0.5*(torch.exp(-5*torch.norm(distance_to_target[:, 1:2], dim=-1)/s)-1) + \
-                0.5*(torch.exp(-5*torch.norm(distance_to_target[:, 5:], dim=-1)/s)-1)
-        
+        if self.discretizer_feas_map.vy:
+            r1 =    0.5*(torch.exp(-5*torch.norm(distance_to_target[:, :1], dim=-1)/s)-1) + \
+                    0.5*(torch.exp(-5*torch.norm(distance_to_target[:, 1:2], dim=-1)/s)-1) + \
+                    0.5*(torch.exp(-5*torch.norm(distance_to_target[:, 5:], dim=-1)/s)-1)
+        else:  
+            r1 = 0.5*(torch.exp(-5*torch.norm(distance_to_target[:, :1], dim=-1)/s)-1) + \
+                 0.5*(torch.exp(-5*torch.norm(distance_to_target[:, 5:], dim=-1)/s)-1)
+            
         self.reward_progress = r1.clone()
 
         dot_wrench = torch.sum(self.desired_wrench_b*self.current_wrench_b, dim=1)
@@ -898,20 +826,25 @@ class KingfisherSailEnv(DirectRLEnv):
 
         env_ids = env_ids.to(self.device)
 
-        N = self.grid_pairs.shape[0]
+        N = self.discretizer_feas_map.grid_pairs.shape[0]
 
         # Select grid indices for these envs
         # Each env gets a unique grid point based on global grid_index
-        idxs = (torch.arange(len(env_ids), device=self.device) + self.grid_index) % N
+        idxs = (torch.arange(len(env_ids), device=self.device) + self.discretizer_feas_map.grid_index) % N
 
         # Save which grid point each env is evaluating 
-        self.env_grid_ids[env_ids] = idxs
+        self.discretizer_feas_map.env_grid_ids[env_ids] = idxs
 
         # Extract normalized targets
-        vx_norm = self.grid_pairs[idxs, 0]
-        vy_norm = self.grid_pairs[idxs, 1]
-        w_norm  = self.grid_pairs[idxs, 2]
-
+        if self.discretizer_feas_map.vy:
+            vx_norm = self.discretizer_feas_map.grid_pairs[idxs, 0]
+            vy_norm = self.discretizer_feas_map.grid_pairs[idxs, 1]
+            w_norm  = self.discretizer_feas_map.grid_pairs[idxs, 2]
+        else:
+            vx_norm = self.discretizer_feas_map.grid_pairs[idxs, 0]
+            w_norm  = self.discretizer_feas_map.grid_pairs[idxs, 1]
+            vy_norm = w_norm.clone() # dummy, won't be used in this case
+            
         # === Correct scaling for asymmetric ranges === 
         Vx_min = self.cfg.min_target_lin_wrench 
         Vx_max = self.cfg.max_target_lin_wrench 
@@ -933,7 +866,7 @@ class KingfisherSailEnv(DirectRLEnv):
         self.desired_wrench_b[env_ids, 5] = w_target
 
         # Advance global index by number of envs reset
-        self.grid_index = (self.grid_index + len(env_ids)) % N
+        self.discretizer_feas_map.grid_index = (self.discretizer_feas_map.grid_index + len(env_ids)) % N
 
 
     def reset_wrench_targets(self, env_ids: torch.Tensor | None = None):

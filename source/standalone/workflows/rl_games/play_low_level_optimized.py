@@ -304,7 +304,7 @@ def main():
                     "max_available_energy": max_available_energy[env_id].item(), 
                     "ratio_energy_usage": ratio_energy_usage[env_id].item(), 
                     "norm_error_lin_vx": norm_error_lin[env_id, 0].item(), 
-                    "norm_error_lin_vy": norm_error_lin[env_id, 1].item(), 
+                    "norm_error_lin_vy": norm_error_lin[env_id, 1].item() if norm_error_lin.shape[1] > 1 else 0.0, 
                     "norm_error_ang": norm_error_ang[env_id].item(), 
                     } 
                 # actions, aero_force, thruster_force, energy_context, acord_prediction as vectors 
@@ -473,8 +473,8 @@ def main():
     df = pd.DataFrame(rows)
     df.to_csv(os.path.join(output_dir, "all_steps.csv"), index=False)
 
-    feasibility = extras["info"]["feasibility_map"]   # shape (10,10,10)
-    feasibility_flattened = feasibility.reshape(-1)               # shape (1000,)
+    feasibility = extras["info"]["feasibility_map"]   # shape (10,10,10) or (10,10)
+    feasibility_flattened = feasibility.reshape(-1)               # shape (1000,) or (100,)
 
     df = pd.DataFrame({"feasible": feasibility_flattened})
     df.to_csv(os.path.join(output_dir, "feasibility_map.csv"), index=False)
