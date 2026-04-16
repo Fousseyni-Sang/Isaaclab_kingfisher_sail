@@ -1,0 +1,58 @@
+# Copyright (c) 2022-2026, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
+# All rights reserved.
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
+# Reference: https://github.com/DLR-RM/rl-baselines3-zoo/blob/master/hyperparams/ppo.yml#L32
+
+ppo:
+  n_timesteps: !!float 10e6
+  policy: 'MultiInputPolicy'
+  n_steps: 48
+  batch_size: 24576
+  gae_lambda: 0.95
+  gamma: 0.99
+  n_epochs: 5
+  ent_coef: 0.01
+  learning_rate: !!float 3e-4
+  clip_range: !!float 0.2
+  policy_kwargs:
+    activation_fn: 'ELU'
+    net_arch: [256, 256]
+    squash_output: False
+  vf_coef: 1.0
+  max_grad_norm: 1.0
+  device: "cuda:0"
+  verbose: 1
+  seed: 42
+
+sac:
+  n_timesteps: !!float 10e6
+  policy: 'MultiInputPolicy'
+  n_steps: 256
+  batch_size: 8192
+  gamma: 0.99
+  gradient_steps: 5
+  ent_coef: 0.01
+  learning_rate: !!float 3e-4
+  policy_kwargs:
+    activation_fn: 'ELU'
+    net_arch: [256, 256]
+  device: "cuda:0"
+  buffer_size: 5000000
+  seed: 42
+
+ddpg: 
+  n_timesteps: !!float 10e6
+  policy: 'MultiInputPolicy'
+  n_steps: 256
+  batch_size: 4096
+  gamma: 0.99
+  gradient_steps: 1
+  learning_rate: !!float 3e-4
+  policy_kwargs:
+    activation_fn: 'ELU'
+    net_arch: [256, 256]
+  device: "cuda:0"
+  buffer_size: 5000000
+  seed: 42

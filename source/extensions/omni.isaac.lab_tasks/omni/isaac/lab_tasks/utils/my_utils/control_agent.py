@@ -47,7 +47,7 @@ class DummyLowLevelEnv:
         pass
 
 def get_control_agent(num_envs: int, task_name:str="Isaac-KingfisherSail-Direct-Low-v0",
-            device="cuda:1", act_dim:int=3, obs_dim:int=11, use_last_checkpoint:bool|None=None, 
+            device="cuda:0", act_dim:int=3, obs_dim:int=11, use_last_checkpoint:bool|None=None, 
             checkpoint_path: str|None=None):
     
     """Play with RL-Games agent."""
@@ -95,12 +95,24 @@ def get_control_agent(num_envs: int, task_name:str="Isaac-KingfisherSail-Direct-
     runner.load(agent_cfg)
     # obtain the agent from the runner
     agent: BasePlayer = runner.create_player()
-    
+
+    # Force torch to load models onto the available device (cuda:0) 
+    # even if they were saved on cuda:1
+    """def patched_torch_load(*args, **kwargs):
+        kwargs['map_location'] = f'cuda:{torch.cuda.current_device()}'
+        return torch.original_load(*args, **kwargs)
+
+    if not hasattr(torch, 'original_load'):
+        torch.original_load = torch.load
+        torch.load = patched_torch_load"""
+
+    agent.device=device
+    agent.device_name = device
+
     agent.restore(resume_path)
     agent.reset()
     agent.has_batch_dimension = True
-    agent.device=device
-    agent.device_name = device
+    
 
     return agent, env
 

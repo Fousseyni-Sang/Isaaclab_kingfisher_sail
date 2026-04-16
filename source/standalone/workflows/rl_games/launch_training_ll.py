@@ -49,6 +49,7 @@ def launch_ll_sweep(num_models=15):
         start_id, end_id = model_id_list[0].split("-")
         model_id_list = [f"{i:03d}" for i in range(int(start_id), int(end_id) + 1)]
 
+    ISAAC_PATH = os.getenv("ISAAC_PATH", "/mnt/ssd-storage/fsangare/isaaclab")
     print(f"============> model_id_list: {model_id_list}")
     for model_id, spec in enumerate(boat_specs):
         # ---------------------------------------------------------
@@ -95,12 +96,12 @@ def launch_ll_sweep(num_models=15):
         # 3. Launch training
         # ---------------------------------------------------------
         cmd = [
-            "/mnt/gpu_storage/zrr/fsangare/isaaclab/bin/python",
+            f"{ISAAC_PATH}/bin/python",
             "source/standalone/workflows/rl_games/train.py",
             "--task", "Isaac-KingfisherSail-Direct-Low-v0",
             "--headless",
             "--num_envs", str(args_cli.num_envs),
-            "--device", "cuda:1"
+            "--device", "cuda:0"
         ]
 
         print(f"Launching LL model {model_id} ({run_name})…")
@@ -110,7 +111,7 @@ def launch_ll_sweep(num_models=15):
 
     # Launch the eval process
     cmd = [
-        "/mnt/gpu_storage/zrr/fsangare/isaaclab/bin/python",
+        f"{ISAAC_PATH}/bin/python",
         "source/standalone/workflows/rl_games/launch_play_ll.py",
         "--model_id_list", args_cli.model_id_list,
     ]
@@ -120,12 +121,12 @@ def launch_ll_sweep(num_models=15):
 
     # Launch the HL training 
     cmd = [
-            "/mnt/gpu_storage/zrr/fsangare/isaaclab/bin/python",
+            f"{ISAAC_PATH}/bin/python",
             "source/standalone/workflows/rl_games/train.py",
             "--task", "Isaac-KingfisherSail-Direct-High-v0",
             "--headless",
             "--num_envs", str(args_cli.num_envs),
-            "--device", "cuda:1"
+            "--device", "cuda:0"
         ]
     subprocess.run(cmd, check=True)
     #subprocess.run(["./kill_isaac.sh"], check=True)

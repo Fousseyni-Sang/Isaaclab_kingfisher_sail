@@ -52,7 +52,9 @@ def load_cfg_from_registry(task_name: str, entry_point_key: str) -> dict | objec
         ValueError: If the entry point key is not available in the gym registry for the task.
     """
     # obtain the configuration entry point
+    
     cfg_entry_point = gym.spec(task_name).kwargs.get(entry_point_key)
+    
     print(f"[INFO===========]: Loading configuration for task: '{task_name}' from entry point: '{cfg_entry_point}'")
     # check if entry point exists
     if cfg_entry_point is None:
@@ -173,6 +175,7 @@ def get_checkpoint_path(
         runs = [
             os.path.join(log_path, run) for run in os.scandir(log_path) if run.is_dir() and re.match(run_dir, run.name)
         ]
+        print(f"[INFO]: Found the following runs in the directory: '{log_path}' that match: '{run_dir}': {runs}")
         # sort matched runs by alphabetical order (latest run should be last)
         if sort_alpha:
             runs.sort()
@@ -185,7 +188,7 @@ def get_checkpoint_path(
             run_path = runs[-1]
     except IndexError:
         raise ValueError(f"No runs present in the directory: '{log_path}' match: '{run_dir}'.")
-
+    
     # list all model checkpoints in the directory
     model_checkpoints = [f for f in os.listdir(run_path) if re.match(checkpoint, f)]
     # check if any checkpoints are present

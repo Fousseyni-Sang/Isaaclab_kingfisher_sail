@@ -28,10 +28,11 @@ class DynamicsRlAgentPublisher(Node):
     def publish(self, **variables):
         for var_name, data in variables.items():
             pubs = self.get_publishers(var_name)
-
+            
             for i in range(self.num_agents):
+
                 msg = Float32MultiArray(
-                    data=data[i].cpu().numpy().flatten().tolist()
+                    data=data[i].cpu().numpy().flatten().tolist() if isinstance(data[i], torch.Tensor) else data[i].flatten().tolist()
                 )
                 pubs[i].publish(msg)
 

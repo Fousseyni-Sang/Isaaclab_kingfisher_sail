@@ -9,6 +9,9 @@
 
 import argparse
 
+import numpy
+import yaml
+
 from omni.isaac.lab.app import AppLauncher
 
 # add argparse arguments
@@ -31,7 +34,7 @@ parser.add_argument("--wind_direction", type=float, default=180.0, help="True wi
 parser.add_argument("--wind_speed", type=float, default=5.0, help="True wind speed.") 
 parser.add_argument("--num_episode", type=int, default=10, help="Number of episodes for evaluation.") 
 parser.add_argument("--ros_publish_interval", type=int, default=10, help="ROS publish interval in steps.") 
-parser.add_argument("--model_id", type=str, default="000", help="low level model to run") 
+parser.add_argument("--model_id", type=str, default=None, help="low level model to run") 
 
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
@@ -70,6 +73,7 @@ import rclpy
 from omni.isaac.lab_tasks.utils.my_utils.ros2_Node import RewardWeightSubscriber, DynamicsRlAgentPublisher 
 from datetime import datetime
 import pandas as pd
+    
 
 def main():
     """Play with RL-Games agent."""
@@ -87,7 +91,7 @@ def main():
     # parse env configuration
     spec_path = os.environ.get("LL_OUTPUT_DIR", None)
     temp = spec_path
-    if spec_path==None:
+    if spec_path==None and args_cli.model_id is not None:
         spec_path = f"outputs/ll/ll_model_{args_cli.model_id}" 
         os.environ["LL_OUTPUT_DIR"] = spec_path
 
@@ -97,9 +101,9 @@ def main():
     
     agent_cfg = load_cfg_from_registry(args_cli.task, "rl_games_cfg_entry_point")
 
-    if temp==None:
+    if temp==None and args_cli.model_id is not None:
         agent_cfg["params"]["config"]["name"] = f"kingfisher_direct_low_level_ll_model_{args_cli.model_id}"
-        print(f'===============++++++++++> Helllo : {agent_cfg["params"]["config"]["name"]}')
+        
     # specify directory for logging experiments
     log_root_path = os.path.join("logs", "rl_games", agent_cfg["params"]["config"]["name"])
     log_root_path = os.path.abspath(log_root_path)
@@ -217,26 +221,26 @@ def main():
             obs, rew, dones, extras = env.step(actions)
 
             robot_pos = extras["info"]["robot_pos_w"][..., :2] # (N, 2) 
-            lift_coeff = extras["info"]["lift_coeff"] # (N,) 
-            drag_coeff = extras["info"]["drag_coeff"] # (N,) 
-            energy = extras["info"]["energy"] # (N,) 
-            episode_energy = extras["info"]["episode_energy"] # (N,) 
-            max_available_energy = extras["info"]["max_available_energy"] # (N,) 
-            ratio_energy_usage = extras["info"]["ratio_energy_usage"] # (N,) 
-            rew_progress = extras["info"]["reward_progress"] # (N,) 
-            rew_energy = extras["info"]["reward_energy"] # (N,) 
-            rew_backward = extras["info"]["reward_backward"] # (N,) 
-            rew_aero = extras["info"]["reward_aero"] # (N,) 
-            rew_acord = extras["info"]["reward_acord"] # (N,) 
-            bearing = extras["info"]["bearing"] # (N,) 
+            lift_coeff = extras.get("info", {}).get("lift_coeff", torch.zeros((num_envs,), device=rew.device)) # (N,) 
+            drag_coeff = extras.get("info", {}).get("drag_coeff", torch.zeros((num_envs,), device=rew.device)) # (N,) 
+            energy = extras.get("info", {}).get("energy", torch.zeros((num_envs,), device=rew.device)) # (N,) 
+            episode_energy = extras.get("info", {}).get("episode_energy", torch.zeros((num_envs,), device=rew.device)) # (N,) 
+            max_available_energy = extras.get("info", {}).get("max_available_energy", torch.zeros((num_envs,), device=rew.device)) # (N,) 
+            ratio_energy_usage = extras.get("info", {}).get("ratio_energy_usage", torch.zeros((num_envs,), device=rew.device)) # (N,) 
+            rew_progress = extras.get("info", {}).get("reward_progress", torch.zeros((num_envs,), device=rew.device)) # (N,) 
+            rew_energy = extras.get("info", {}).get("reward_energy", torch.zeros((num_envs,), device=rew.device)) # (N,) 
+            rew_backward = extras.get("info", {}).get("reward_backward", torch.zeros((num_envs,), device=rew.device)) # (N,) 
+            rew_aero = extras.get("info", {}).get("reward_aero", torch.zeros((num_envs,), device=rew.device)) # (N,) 
+            rew_acord = extras.get("info", {}).get("reward_acord", torch.zeros((num_envs,), device=rew.device)) # (N,) 
+            bearing = extras.get("info", {}).get("bearing", torch.zeros((num_envs,), device=rew.device)) # (N,) 
             distance = extras["info"]["distance"] # (N,) 
-            aoa = extras["info"]["aoa"] # (N,) 
-            app_wind_angle = extras["info"]["app_wind_angle"] # (N,) 
-            true_wind_angle = extras["info"]["true_wind_angle"] # (N,) 
-            sail_angle = extras["info"]["sail_angle"] # (N,) 
-            aero_force = extras["info"]["aero_force"] # (N, 6) 
-            max_aero_force = extras["info"]["max_aero_force"] # (N,) 
-            thruster_force = extras["info"]["thruster_force"] # (N, 6) 
+            aoa = extras.get("info", {}).get("aoa", torch.zeros((num_envs, ), device=rew.device)) # (N,) 
+            app_wind_angle = extras.get("info", {}).get("app_wind_angle", torch.zeros((num_envs, ), device=rew.device)) # (N,) 
+            true_wind_angle = extras.get("info", {}).get("true_wind_angle", torch.zeros((num_envs, ), device=rew.device)) # (N,) 
+            sail_angle = extras.get("info", {}).get("sail_angle", torch.zeros((num_envs,), device=rew.device)) # (N,) 
+            aero_force = extras.get("info", {}).get("aero_force", torch.zeros((num_envs, 1, 6), device=rew.device)) # (N, 6) 
+            max_aero_force = extras.get("info", {}).get("max_aero_force", torch.zeros((num_envs,), device=rew.device)) # (N,) 
+            thruster_force = extras.get("info", {}).get("thruster_force", torch.zeros((num_envs, 1, 6), device=rew.device)) # (N, 6) 
             norm_error_lin = extras["info"]["norm_error_lin"] # (N,) 
             norm_error_ang = extras["info"]["norm_error_ang"] # (N,) 
             goal_pos = extras["info"]["goal_pos"] # (N, 2) 
@@ -247,34 +251,34 @@ def main():
                     per_env_goal[env_id] = goal_pos[env_id].detach().cpu().clone() 
 
             # ROS publish (throttled) 
-            if args_cli.ros and (step_idx % args_cli.ros_publish_interval == 0): 
+            if args_cli.ros: #  and (step_idx % args_cli.ros_publish_interval == 0): 
                 dyn_ros_node.publish( 
-                    obs=obs, 
+                    obs=obs,
                     actions=actions, 
                     total_rew=rew, 
                     aero_force=aero_force, 
                     thruster_force=thruster_force,
-                    lin_vel_b=extras["info"]["lin_vel_b"], 
+                    lin_vel_b=extras.get("info", {}).get("lin_vel_b", torch.zeros((num_envs, 3), device=rew.device)), 
                     angle_of_attack=aoa, 
                     app_flow_angle=app_wind_angle, 
                     true_flow_angle=true_wind_angle, 
                     sail_angle=sail_angle, 
-                    heading_w=extras["info"]["heading_w"], 
-                    lift_drag_ratio=extras["info"]["lift_drag_ratio"], 
+                    heading_w=extras.get("info", {}).get("heading_w", torch.zeros((num_envs,), device=rew.device)), 
+                    lift_drag_ratio=extras.get("info", {}).get("lift_drag_ratio", torch.zeros((num_envs,), device=rew.device)), 
                     robot_pos_w=robot_pos, 
                     energy=energy, 
                     episode_energy=episode_energy, 
-                    lift_force_b=extras["info"]["lift_force_b"], 
-                    drag_force_b=extras["info"]["drag_force_b"], 
+                    lift_force_b=extras.get("info", {}).get("lift_force_b", torch.zeros((num_envs,3), device=rew.device)), 
+                    drag_force_b=extras.get("info", {}).get("drag_force_b", torch.zeros((num_envs,3), device=rew.device)), 
                     lift_coeff=lift_coeff, 
                     drag_coeff=drag_coeff, 
                     rew_progress=rew_progress, 
                     rew_energy=rew_energy, 
                     rew_backward=rew_backward, 
-                    desired_wrench_b=extras["info"]["desired_wrench_b"], 
-                    ang_speed_b=extras["info"]["ang_vel_b"], 
+                    desired_wrench_b=extras.get("info", {}).get("desired_wrench_b", torch.zeros((num_envs, 6), device=rew.device)), 
+                    ang_speed_b=extras.get("info", {}).get("ang_vel_b", torch.zeros((num_envs, 3), device=rew.device)), 
                     norm_error_cat=norm_error_cat, 
-                    rew_goal=extras["info"]["reward_goal"], 
+                    rew_goal=extras.get("info", {}).get("reward_goal", torch.zeros((num_envs,), device=rew.device)), 
                     rew_aero=rew_aero, 
                     distance=distance, 
                     ) 
@@ -369,6 +373,7 @@ def main():
                     # --------------------------------------------------------- 
                     per_env_steps[env_id] = []
 
+            step_idx += 1
             # perform operations for terminated episodes
             if len(dones) > 0:
                 # reset rnn state for terminated episodes

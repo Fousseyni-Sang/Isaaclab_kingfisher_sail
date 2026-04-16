@@ -126,6 +126,7 @@ class InteractiveScene:
         self.cloner = GridCloner(spacing=self.cfg.env_spacing)
         self.cloner.define_base_env(self.env_ns)
         self.env_prim_paths = self.cloner.generate_paths(f"{self.env_ns}/env", self.cfg.num_envs)
+
         # create source prim
         self.stage.DefinePrim(self.env_prim_paths[0], "Xform")
 

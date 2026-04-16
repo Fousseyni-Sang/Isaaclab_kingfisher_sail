@@ -5,7 +5,7 @@ from omni.isaac.lab.actuators import ImplicitActuatorCfg
 from omni.isaac.lab.assets.articulation import ArticulationCfg
 
 current_dir = os.path.dirname(__file__)
-usd_path = "/mnt/gpu_storage/zrr/fsangare/asv-sawasp-fousseyni/usd_walker/PF_P441C/PF_P441C.usd"
+usd_path = "usd_walker/PF_P441C/PF_P441C.usd"
 
 POINTFOOT_CFG = ArticulationCfg(
     spawn=sim_utils.UsdFileCfg(

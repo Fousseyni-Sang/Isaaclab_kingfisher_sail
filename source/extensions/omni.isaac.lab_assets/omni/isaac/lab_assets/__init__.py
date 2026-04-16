@@ -35,6 +35,7 @@ from .franka import *
 from .humanoid import *
 from .kingfisher import *
 from .kingfisher_sail import *
+from .turtlebot3 import *
 from .kinova import *
 from .quadcopter import *
 from .ridgeback_franka import *

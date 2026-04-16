@@ -56,8 +56,8 @@ config = {
         "config": {
             "name": f"bipedal_walker_seed{args_cli.seed}_{args_cli.spear}",
             "env_name": "BipedalWalkerCtx-v0",
-            "device": 'cuda:1',
-            "device_name": 'cuda:1',
+            "device": 'cuda:0',
+            "device_name": 'cuda:0',
             "multi_gpu": False,
             "ppo": True,
             "reward_shaper":{'scale_value': 0.1},

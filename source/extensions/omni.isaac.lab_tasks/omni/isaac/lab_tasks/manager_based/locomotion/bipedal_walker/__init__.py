@@ -1,4 +1,4 @@
-import gymnasium as gym
+"""import gymnasium as gym
 
 from .agents.rsl_rl_ppo_cfg import PointFootPPORunnerCfg, WheelFootPPORunnerCfg
 from .agents.rsl_rl_ppo_mlp_cfg import PFFlatPPORunnerMlpCfg, PFStairPPORunnerMlpCfg, WFFlatPPORunnerMlpCfg, WFRoughPPORunnerMlpCfg, WFStairPPORunnerMlpCfg
@@ -439,6 +439,4 @@ gym.register(
 )
 
 
-
-
-
+"""
