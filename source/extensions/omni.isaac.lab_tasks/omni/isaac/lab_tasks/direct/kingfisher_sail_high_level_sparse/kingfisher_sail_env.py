@@ -1,0 +1,1623 @@
+# Copyright (c) 2022-2025, The Isaac Lab Project Developers.
+# All rights reserved.
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
+from __future__ import annotations
+
+import gymnasium as gym
+import torch
+
+import omni.isaac.lab.sim as sim_utils
+from omni.isaac.lab.actuator_force.foil_actuator_force import FoilActuator, FoilActuatorCfg
+from omni.isaac.lab.actuator_force.actuator_force import PropellerActuator, PropellerActuatorCfg
+from omni.isaac.lab.assets import Articulation, ArticulationCfg, RigidObject, RigidObjectCfg
+from omni.isaac.lab.envs import DirectRLEnv, DirectRLEnvCfg
+from omni.isaac.lab.envs.ui import BaseEnvWindow
+from omni.isaac.lab.markers import VisualizationMarkers
+from omni.isaac.lab.physics.hydrodynamics import Hydrodynamics, HydrodynamicsCfg
+from omni.isaac.lab.physics.hydrostatics import Hydrostatics, HydrostaticsCfg
+from omni.isaac.lab.physics.foil_dynamics import FoilDynamics, FoilDynamicsCfg
+from omni.isaac.lab.actuator_force.robot_actuator_system import RobotActuatorSystem, RobotActuatorSystemCfg
+from omni.isaac.lab.scene import InteractiveSceneCfg
+from omni.isaac.lab.sim import SimulationCfg
+from omni.isaac.lab.terrains import TerrainImporterCfg
+from omni.isaac.lab.utils import configclass
+from omni.isaac.lab.utils.math import subtract_frame_transforms, transform_points, quat_from_euler_xyz
+import numpy as np
+import random
+from omni.isaac.lab_tasks.utils.my_utils.boat_config import *
+                     
+from ...utils.my_utils.control_agent import get_control_agent
+from omni.isaac.lab_tasks.utils.my_utils.ros2_Node import DynamicsRlAgentPublisher
+from ...utils.my_utils.common import (deterministic_split, load_ll_population_with_split, compute_act_dim, 
+                    compute_obs_dim)
+
+##
+# Pre-defined configs
+##
+from omni.isaac.lab_assets import (KINGFISHER_SAIL_CFG, RED_ARROW_X_MARKER_CFG, MAROON_ARROW_X_MARKER_CFG,
+ BLUE_ARROW_X_MARKER_CFG, CUBOID_MARKER_CFG, GREEN_ARROW_X_MARKER_CFG, YELLOW_ARROW_X_MARKER_CFG, MIMOSA_ARROW_X_MARKER_CFG,
+  RED_BIG_ARROW_X_MARKER_CFG, BEIGE_ARROW_X_MARKER_CFG, ORANGE_ARROW_X_MARKER_CFG, MAGENTA_ARROW_X_MARKER_CFG)  # isort: skip
+from omni.isaac.lab.markers import CUBOID_MARKER_CFG  # isort: skip
+from time import time
+
+class KingfisherSailEnvWindow(BaseEnvWindow):
+    """Window manager for the Kingfisher environment."""
+
+    def __init__(self, env: KingfisherSailEnv, window_name: str = "IsaacLab"):
+        """Initialize the window.
+
+        Args:
+            env: The environment object.
+            window_name: The name of the window. Defaults to "IsaacLab".
+        """
+        # initialize base window
+        super().__init__(env, window_name)
+        # add custom UI elements
+        with self.ui_window_elements["main_vstack"]:
+            with self.ui_window_elements["debug_frame"]:
+                with self.ui_window_elements["debug_vstack"]:
+                    # add command manager visualization
+                    self._create_debug_vis_ui_element("targets", self.env)
+
+
+# CSI-Code-WhenIsGood-9cspihx
+@configclass
+class KingfisherSailEnvCfg(DirectRLEnvCfg):
+    # env
+    episode_length_s = 100.0 #30
+    physics_dt = 1 / 60.0  # 60 Hz
+    decimation = 3
+    decimation_low_level = 3
+    step_dt = physics_dt * decimation  # 20 Hz
+    action_space = 2
+    observation_space = gym.spaces.Dict({
+                        "observation": gym.spaces.Box(low=-1, high=1, shape=(10, ), dtype=np.float32), 
+                        #"feasibility_map":gym.spaces.Box(low=0, high=1, shape=(121, ), dtype=np.float32),
+                        "achieved_goal": gym.spaces.Box(low=np.array([-np.inf, -np.inf, -np.pi]), high=np.array([np.inf, np.inf, np.pi]), shape=(3, ), dtype=np.float32), # [x, y, theta]
+                        "desired_goal": gym.spaces.Box(low=np.array([-np.inf, -np.inf, -np.pi]), high=np.array([np.inf, np.inf, np.pi]), shape=(3, ), dtype=np.float32),  # [x, y, theta]
+                    })
+    state_space = 0
+    debug_vis = True
+    num_low_level_steps = 20 # step_dt
+
+    ui_window_class_type = KingfisherSailEnvWindow
+    
+    # simulation
+    sim: SimulationCfg = SimulationCfg(
+        dt=physics_dt,
+        render_interval=decimation,
+        disable_contact_processing=True,
+        physics_material=sim_utils.RigidBodyMaterialCfg(
+            friction_combine_mode="multiply",
+            restitution_combine_mode="multiply",
+            static_friction=1.0,
+            dynamic_friction=1.0,
+            restitution=0.0,
+        ),
+    )
+    terrain = TerrainImporterCfg(
+        prim_path="/World/ground",
+        terrain_type="plane",
+        collision_group=-1,
+        debug_vis=True,
+    )
+
+    # scene
+    scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=4096, env_spacing=10.0, replicate_physics=True)
+
+    # robot
+    robot: ArticulationCfg = KINGFISHER_SAIL_CFG.replace(prim_path="/World/envs/env_.*/Robot")
+
+    cone_cfg = RigidObjectCfg(
+
+        prim_path="/World/envs/env_.*/Cone",
+        spawn=sim_utils.ConeCfg(
+            radius=0.1,
+            height=0.2,
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(),
+            mass_props=sim_utils.MassPropertiesCfg(mass=1.0),
+            collision_props=sim_utils.CollisionPropertiesCfg(),
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 1.0, 0.0), metallic=0.2),
+        ),
+        init_state=RigidObjectCfg.InitialStateCfg(),
+
+    )
+
+    sail_aerodyn_cfg: FoilDynamicsCfg = sail_config()
+    rudder_hydrodyn_cfg: FoilDynamicsCfg = rudder_config()
+    keel_hydrodyn_cfg: FoilDynamicsCfg = keel_config()
+
+    sail_actuator_cfg: FoilActuatorCfg = sail_actuator_config()
+    rudder_actuator_cfg: FoilActuatorCfg = rudder_actuator_config()
+    keel_actuator_cfg: FoilActuatorCfg = keel_actuator_config()
+        
+    # Hydrdynamics
+    hydrodynamics_cfg: HydrodynamicsCfg = hydrodynamics_config() 
+    
+    # Hydrostatics
+    hydrostatics_cfg: HydrostaticsCfg = hydrostatics_config()
+    # Thruster dynamics
+    propeller_cfg: PropellerActuatorCfg = propeller_config()
+
+    # markers configurations
+    # Blue markers used to visualize apparent wind
+    blue_marker_cfg = BLUE_ARROW_X_MARKER_CFG.copy()
+    blue_marker_cfg.prim_path = "/Visuals/Command/appWind"
+
+    maroon_marker_cfg = MAROON_ARROW_X_MARKER_CFG.copy()
+    maroon_marker_cfg.prim_path = "/Visuals/Command/inducedWind"
+
+    # red markers used to visualize true wind
+    red_marker_cfg = RED_ARROW_X_MARKER_CFG.copy()
+    red_marker_cfg.prim_path = "/Visuals/Command/trueWind"
+
+    # red markers used to visualize true wind
+    red_big_marker_cfg = RED_BIG_ARROW_X_MARKER_CFG.copy()
+    red_big_marker_cfg.prim_path = "/Visuals/Command/truebigWind"
+
+    # Green markers used to visualize thruster forces
+    green_marker_cfg = GREEN_ARROW_X_MARKER_CFG.copy()
+    green_marker_cfg.prim_path = "/Visuals/Command/force"
+
+    # Yellow markers used to visualize thruster forces
+    yellow_marker_cfg = YELLOW_ARROW_X_MARKER_CFG.copy()
+    yellow_marker_cfg.prim_path = "/Visuals/Command/force_yellow"
+
+    # Green markers used to visualize thruster forces
+    beige_marker_cfg = BEIGE_ARROW_X_MARKER_CFG.copy()
+    beige_marker_cfg.prim_path = "/Visuals/Command/netforce_beige"
+
+    # Magenta markers used to visualize thruster forces
+    magenta_marker_cfg = MAGENTA_ARROW_X_MARKER_CFG.copy()
+    magenta_marker_cfg.prim_path = "/Visuals/Command/sail_unit_magenta"
+
+    # Mimosa markers used to visualize thruster forces
+    mimosa_marker_cfg = MIMOSA_ARROW_X_MARKER_CFG.copy()
+    mimosa_marker_cfg.prim_path = "/Visuals/Command/sail_unit_ortho_magenta"
+
+    # Orange markers used to visualize thruster forces
+    orange_marker_cfg = ORANGE_ARROW_X_MARKER_CFG.copy()
+    orange_marker_cfg.prim_path = "/Visuals/Command/hydro_force_orange"
+
+    max_energy = 2.0  # Max of 1.0 per thruster
+    max_available_energy = max_energy
+    max_robot_speed = 1.5 # Max speed for energy optimization
+
+    # reward scales
+    distance_reward_scale = 0.0
+    distance_progress_reward_scale = 1.3 #2 #0.5 #30 #5 # 6 too much
+    bearing_progress_reward_scale = 0.0
+
+    goal_reached_threshold = 0.3
+    bearing_reached_threshold = 0.3
+    goal_reached_scale =  800.0 #
+
+    energy_penalty_scale = -0.5 #0.5 #0.08  #-0.001
+    backwards_penalty_scale = -0.5
+    time_penalty_scale = -1 #-0.008 #
+    penalty_inefficient_sailing_scale = -0.1
+    tack_penalty_scale = -10
+    bearing_penalty_scale = 0.5
+    beargin_penalty_coef = -4 #0.5 #-4
+    lift_drag_ratio_scale = 0.1
+    acord_reward_scale = 0.5
+    speed_penalty_scale = -0.1
+
+    # Environment
+    min_target_distance = 3.0 
+    max_target_distance = 10.0
+    min_target_bearing =  45*torch.pi/180 #-torch.pi / 2
+    max_target_bearing = 120*torch.pi/180 #torch.pi / 2
+    max_cross_track = 8.0
+
+    lin_wrench_scale = 1.5
+    ang_wrench_scale = 0.5
+
+    scale_vx_vy = 0.1
+    max_target_lin_wrench =  1.5
+    min_target_lin_wrench =  -0.*max_target_lin_wrench
+    max_target_ang_wrench =  0.5
+    min_target_ang_wrench = - max_target_ang_wrench 
+
+class ExperienceBufferLowLvl:
+    def __init__(self, num_envs:int, hl_decimation:int, ll_decimation:int, ll_obs_space:int, device="cuda:0"):
+        self.shape = (num_envs, hl_decimation//ll_decimation, ll_obs_space)
+        self.obs_buffer = torch.zeros(self.shape, device=device)
+        self.rb_pos_w = torch.zeros((*self.shape[:2], 3), device=device)
+        self.rb_lin_ang_vel_b = torch.zeros((*self.shape[:2], 2), device=device)
+        self.index = 0
+        
+    #shape(1024, 45//3=15, 12)
+    #obs = (1024, 12)
+    def update(self, obs:torch.Tensor, lin_vel:torch.Tensor, ang_vel:torch.Tensor, pos_w:torch.Tensor) -> None:
+    
+        cat_lin_ang_vel = torch.cat((lin_vel, ang_vel), dim=-1)
+        self.obs_buffer[:, self.index%self.shape[1], :] = obs.clone()
+        self.rb_lin_ang_vel_b[:, self.index%self.shape[1], :]  = cat_lin_ang_vel.clone()
+        self.rb_pos_w[:, self.index%self.shape[1], :] = pos_w.clone()
+
+        self.index += 1 
+       
+
+class KingfisherSailEnv(DirectRLEnv):
+    cfg: KingfisherSailEnvCfg
+
+    def __init__(self, cfg: KingfisherSailEnvCfg, render_mode: str | None = None, **kwargs):
+        super().__init__(cfg, render_mode, **kwargs)
+
+        # Actions
+        self._actions = torch.zeros(self.num_envs, gym.spaces.flatdim(self.single_action_space), device=self.device)
+
+        # Goal position
+        self._desired_pos_w = torch.zeros(self.num_envs, 3, device=self.device)
+
+        # Logging
+        self._episode_sums = {
+            key: torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
+            for key in [
+                "1_distance_progress",
+                "2_goal_reached",
+                "3_energy",
+                "4_backwards",
+                "5_bearing_penalty",
+                "6_time",
+                "7_tack_penalty",
+                "8_lift_drag_ratio",    
+            ]
+        }
+        # Get specific body indices
+        self._base_link = self._robot.find_bodies("base_link")[0]
+        self._left_thruster_id = self._robot.find_bodies("thruster_left")[0]
+        self._right_thruster_id = self._robot.find_bodies("thruster_right")[0]
+        self._sail_wing_id = self._robot.find_bodies("sailwing")[0]
+        self._wing_joint_dof_id = self._robot.find_joints("wing_joint")[0]
+
+        self._robot_mass = self._robot.root_physx_view.get_masses()[0].sum()
+        self._gravity_magnitude = torch.tensor(self.sim.cfg.gravity, device=self.device).norm()
+        self._robot_weight = (self._robot_mass * self._gravity_magnitude).item()
+
+        # Runtime-only attributes 
+        self.train_models = [] 
+        self.eval_models = [] 
+        # Load LL population at runtime 
+        self.train_models, self.eval_models = load_ll_population_with_split() 
+        # Pick initial model 
+        self.current_model = random.choice(self.train_models) 
+        # Build morphology 
+
+        self.train_agents = self.load_ll_agents(self.train_models, self.num_envs, self.device) 
+        self.eval_agents = self.load_ll_agents(self.eval_models, self.num_envs, self.device) 
+
+        # Pick initial model 
+        agent0, _, self.current_model = random.choice(self.eval_agents)
+
+        self.generic_system_actuator_cfg = make_boat_model(self.current_model["spec"])
+        self.roboat_hydrodyn_cfg = self.generic_system_actuator_cfg.hydrodynamics_cfg
+        if self.roboat_hydrodyn_cfg is not None:
+            self.cfg.hydrodynamics_cfg = self.roboat_hydrodyn_cfg 
+
+        # Forces
+        self._hydrodynamic_force = torch.zeros(self.num_envs, 1, 6, device=self.device)
+        self._hydrostatic_force = torch.zeros(self.num_envs, 1, 6, device=self.device)
+        self._sail_aerodynamic_force_b = torch.zeros(self.num_envs, 1, 6, device=self.device)
+        self._rudder_hydrodynamics_force_b = torch.zeros(self.num_envs, 1, 6, device=self.device)
+        self._keel_hydrodynamics_force_b = torch.zeros(self.num_envs, 1, 6, device=self.device)
+        self._aerodynamic_force_wing = torch.zeros(self.num_envs, 1, 3, device=self.device)
+        self._thruster_forces = torch.zeros(self.num_envs, 1, 6, device=self.device)
+        self.robot_system_forces = torch.zeros((self.num_envs, 6), device=self.device)
+
+        self._no_torque = torch.zeros(self.num_envs, 1, 3, device=self.device)
+
+        self._hydrostatics = Hydrostatics(num_envs=self.num_envs, device=self.device, cfg=self.cfg.hydrostatics_cfg)
+
+        self._hydrodynamics = Hydrodynamics(num_envs=self.num_envs, device=self.device, cfg=self.cfg.hydrodynamics_cfg)
+
+        self._sail_aerodynamics = FoilDynamics(num_envs=self.num_envs, device=self.device, cfg=self.cfg.sail_aerodyn_cfg)
+        self._sail_aerodynamics.init_flow_vector(
+            self._robot.data.root_lin_vel_b[:, 0:2], self._robot.data.heading_w
+        )
+        self._rudder_hydrodynamics = FoilDynamics(num_envs=self.num_envs, device=self.device, cfg=self.cfg.rudder_hydrodyn_cfg)
+        self._rudder_hydrodynamics.init_flow_vector(
+            self._robot.data.root_lin_vel_b[:, 0:2], self._robot.data.heading_w
+        )
+        self._keel_hydrodynamics = FoilDynamics(num_envs=self.num_envs, device=self.device, cfg=self.cfg.keel_hydrodyn_cfg)
+        self._keel_hydrodynamics.init_flow_vector(
+            self._robot.data.root_lin_vel_b[:, 0:2], self._robot.data.heading_w
+        )
+        
+        self._thruster_dynamics = PropellerActuator(
+            num_envs=self.num_envs, device=self.device, dt=cfg.step_dt, cfg=self.cfg.propeller_cfg
+        )
+        self._sail_actuator = FoilActuator(
+            num_envs=self.num_envs, dt=cfg.step_dt, dynamics=self._sail_aerodynamics, cfg=self.cfg.sail_actuator_cfg
+        )
+        self._rudder_actuator = FoilActuator(
+            num_envs=self.num_envs, dynamics=self._rudder_hydrodynamics, dt=cfg.step_dt, cfg=self.cfg.rudder_actuator_cfg
+        )
+        self._keel_actuator = FoilActuator(
+            num_envs=self.num_envs, dynamics=self._keel_hydrodynamics, dt=cfg.step_dt, cfg=self.cfg.keel_actuator_cfg
+        )
+
+        foil_dynamics = []
+        self.foil_cfg = self.generic_system_actuator_cfg.foil_cfg
+        if self.foil_cfg is not None:
+            for typ in self.foil_cfg.foil_types:
+                if typ=="rudder":
+                    foil_dynamics.append(self._rudder_hydrodynamics)
+                if typ=="keel":
+                    foil_dynamics.append(self._keel_hydrodynamics)
+                if typ=="sail":
+                    foil_dynamics.append(self._sail_aerodynamics)
+        else:
+            foil_dynamics = None
+
+        self._robot_system_dynamics = RobotActuatorSystem(
+            num_envs=self.num_envs, device=self.device, dt=cfg.step_dt, cfg=self.generic_system_actuator_cfg, 
+            foil_dynamics=foil_dynamics
+            )
+        # Low-level RL agent for sail control
+        self._low_level_agent =  agent0
+        """get_control_agent(num_envs=self.num_envs, 
+        checkpoint_path="logs/rl_games/kingfisher_direct_low_level/2026-01-22_15-11-25_compromise_nosail/nn/last_kingfisher_direct_low_level_ep_300_rew_120.73284.pth", 
+        device=self.device, act_dim=3, obs_dim=12)"""
+        
+        self.ll_agent_cache = {}
+        self.feasibility_map = self.current_model["feasibility"]
+        self.current_spec = self.current_model["spec"]
+        self.global_model_reset_frequency = 48*self.cfg.num_low_level_steps
+        
+        #self._low_level_agent = LowPPOAgent(10, 3, 64)
+        
+        self.low_lvl_actions = torch.zeros(self.num_envs, 3, device=self.device)
+        # Buffers
+        self.distance = torch.zeros(self.num_envs, device=self.device)
+        self.previous_distance = torch.zeros(self.num_envs, device=self.device)
+        self.distance_progress = torch.zeros(self.num_envs, device=self.device)
+        self.initial_distance = torch.zeros(self.num_envs, device=self.device)
+        self.cross_track_error = torch.zeros(self.num_envs, device=self.device)
+        self.position_progress = torch.zeros(self.num_envs, device=self.device)
+
+        self.bearing = torch.zeros(self.num_envs, device=self.device)
+        self.previous_bearing = torch.zeros(self.num_envs, device=self.device)
+        self.bearing_progress = torch.zeros(self.num_envs, device=self.device)
+        self.initial_bearing = torch.zeros(self.num_envs, device=self.device)
+        self.use_thruster = torch.zeros(self.num_envs, device=self.device)
+
+        self.energy = torch.zeros(self.num_envs, device=self.device)
+        self.episode_energy = torch.zeros_like(self.energy)
+        self.max_available_episode_energy = torch.zeros_like(self.energy)
+        self.ratio_energy_usage = torch.zeros_like(self.energy)
+        self.episode_avg_speed = torch.zeros_like(self.energy)
+        self.episode_avg_lift_drag_ratio = torch.zeros_like(self.energy)
+        self.desired_pos_b = torch.zeros(self.num_envs, 2, device=self.device)
+        self.desired_trajectory_b = torch.zeros(self.num_envs, 10, 2) # 10 pts
+        self.desired_speed_b = torch.zeros(self.num_envs, device=self.device)
+        self.desired_orientation = torch.zeros(self.num_envs, device=self.device)
+        self.desired_bearing = torch.zeros(self.num_envs, device=self.device)
+
+        self.prev_lin_vel_b = torch.zeros((self.num_envs, 3), device=self.device)
+        self.prev_ang_vel_b = torch.zeros((self.num_envs, 3), device=self.device)
+
+        self.desired_heading = torch.zeros(self.num_envs, device=self.device)
+
+        self.is_upwind = torch.zeros(self.num_envs, device=self.device)
+        self.is_downwind = torch.zeros(self.num_envs, device=self.device)
+
+        self.joint_pos_target = torch.zeros(self.num_envs, device=self.device)
+        self.sail_angle = torch.zeros(self.num_envs, device=self.device)
+        self.joint_angle_mapped_pi = torch.zeros(self.num_envs, device=self.device)
+        self.actual_angle_of_attack = torch.zeros(self.num_envs, device=self.device)
+        
+        self.previous_robot_pos = torch.zeros((self.num_envs, 3), device=self.device)
+        self.initial_robot_pos = torch.zeros((self.num_envs, 3), device=self.device)
+
+        self.thruster_left_randn = torch.zeros(self.num_envs, device=self.device)
+        self.thruster_right_randn = torch.zeros(self.num_envs, device=self.device)
+        # add handle for debug visualization (this is set to a valid handle inside set_debug_vis)
+        self.set_debug_vis(self.cfg.debug_vis)
+
+        self.previous_sail_action = torch.zeros_like(self.actions[:, -1])
+
+        self.episode_number = torch.ones(self.num_envs, device=self.device)
+        self.global_step = 0
+
+
+        self.is_Training = True
+        self.updated = False
+
+
+        self.reward_progress = torch.zeros(self.num_envs, device=self.device)
+        self.reward_success = torch.zeros(self.num_envs, device=self.device)
+        self.reward_bearing = torch.zeros(self.num_envs, device=self.device)
+        self.reward_energy = torch.zeros(self.num_envs, device=self.device)
+        self.reward_backward = torch.zeros(self.num_envs, device=self.device)
+        self.reward_acord = torch.zeros(self.num_envs, device=self.device)
+        self.reward_aero = torch.zeros(self.num_envs, device=self.device)
+        self.total_reward = torch.zeros(self.num_envs, device=self.device)
+        self.sent_reward = torch.zeros(self.num_envs, device=self.device)
+        self.reward_time = torch.zeros(self.num_envs, device=self.device)
+        self.reward_goal = torch.zeros(self.num_envs, device=self.device)
+
+        
+        self.normalize_heading = torch.zeros(self.num_envs, device=self.device)
+        self.normalized_energy = torch.zeros(self.num_envs, device=self.device)
+
+        self.corridor_width = torch.ones(self.num_envs, device=self.device)
+        self.interval_between_goals = 120 # number of times steps intervals before sending new goal to the low level
+        
+        self.tack_side = torch.ones(self.num_envs, device=self.device)
+        self.in_tack_mode = torch.ones(self.num_envs, device=self.device)
+        self.sailing_mode = torch.zeros((self.num_envs, 3), device=self.device)
+
+        self.tack_length = torch.ones(self.num_envs, device=self.device)  # Default tack leg length
+        self.num_tack_waypoints = 10  # Default number of waypoints for tacking
+        self.tack_waypoints = torch.zeros((self.num_envs, self.num_tack_waypoints, 3), device=self.device)  # 10 waypoints
+        self.tack_valid_mask = torch.zeros((self.num_envs, self.num_tack_waypoints), dtype=torch.bool, device=self.device)  # Valid mask for waypoints
+
+        self.next_tack_wpt_idx = torch.zeros(self.num_envs, dtype=torch.int32, device=self.device)  # Index of the next waypoint to reach
+        self.max_aero_force = torch.zeros(self.num_envs, device=self.device)  # Max aerodynamic force for the current episode
+        
+        self.send_goals = torch.zeros(self.num_envs, device=self.device)
+        self.lin_target_wrench = torch.zeros((self.num_envs, 2), device=self.device)
+        self.ang_target_wrench = torch.zeros((self.num_envs, 1), device=self.device)
+
+        self.norm_error_lin = torch.zeros(self.num_envs, device=self.device)
+        self.norm_error_ang = torch.zeros(self.num_envs, device=self.device)
+
+        self.low_level_agents_index = torch.zeros(self.num_envs, device=self.device)
+        
+        self.decimation_counter = 0
+        self.vy = False # whether to include vy in the observation 
+        """self.ll_exp_buf = ExperienceBufferLowLvl(num_envs=self.num_envs, hl_decimation=self.cfg.decimation, 
+                    ll_decimation=self.cfg.decimation_low_level, ll_obs_space=dummy_env.obs_dim, 
+                    device=self.device
+                )"""
+        
+        
+        #self.extras["loss_mask"] = torch.ones((self.num_envs, 1), device=self.device)
+        
+        # ============================================================================================#
+        # ======================== Markers for the wind visualization ================================#
+        # ============================================================================================#
+        n_markers = 500
+        self.max_width = 5
+        d = 5
+        self.env_pos = self._terrain.env_origins[0, :2].cpu().numpy()
+
+        # Generate random translations for markers within a specified range in the world frame
+        self.marker_translations = np.random.uniform([-self.env_pos[0]-d, -self.env_pos[1]-d, 0], 
+                        [self.env_pos[0]+d, self.env_pos[1]+d, 2], (n_markers, 3))  # Adjust bounds as needed
+        
+        self.red_marker_translations = np.random.uniform([-self.env_pos[0]-d, -self.env_pos[1]-d, 0], 
+                        [self.env_pos[0]+d, self.env_pos[1]+d, 2], (n_markers//10, 3))
+        
+        self.green_marker_translations = np.zeros((3, 3)) # 3 arrows for 3 bodies, both hulls and sail
+        
+        # ============================================================================================#
+        # ============================================================================================#
+
+
+    def _setup_scene(self):
+        self._robot = Articulation(self.cfg.robot)
+        self.scene.articulations["robot"] = self._robot
+
+        self.cone = RigidObject(self.cfg.cone_cfg)
+        self.scene.rigid_objects["cone"] = self.cone
+
+        self.cfg.terrain.num_envs = self.scene.cfg.num_envs
+        self.cfg.terrain.env_spacing = self.scene.cfg.env_spacing
+        self._terrain = self.cfg.terrain.class_type(self.cfg.terrain)
+        # clone, filter, and replicate
+        self.scene.clone_environments(copy_from_source=False)
+        self.scene.filter_collisions(global_prim_paths=[self.cfg.terrain.prim_path])
+        # add lights
+        light_cfg = sim_utils.DomeLightCfg(intensity=2000.0, color=(0.75, 0.75, 0.75))
+        light_cfg.func("/World/Light", light_cfg)
+
+        self.blue_marker = VisualizationMarkers(self.cfg.blue_marker_cfg)
+        self.maroon_marker = VisualizationMarkers(self.cfg.maroon_marker_cfg)
+        self.green_marker = VisualizationMarkers(self.cfg.green_marker_cfg)
+        self.red_marker = VisualizationMarkers(self.cfg.red_marker_cfg)
+        self.red_big_marker = VisualizationMarkers(self.cfg.red_big_marker_cfg)
+        self.yellow_marker = VisualizationMarkers(self.cfg.yellow_marker_cfg)
+        self.beige_marker = VisualizationMarkers(self.cfg.beige_marker_cfg)
+        self.orange_marker = VisualizationMarkers(self.cfg.orange_marker_cfg)
+        self.magenta_marker = VisualizationMarkers(self.cfg.magenta_marker_cfg)
+        self.mimosa_marker = VisualizationMarkers(self.cfg.mimosa_marker_cfg)
+        self.visualize = False
+    
+    def _get_low_level_obs(self):
+
+        # Extract normalized targets
+        vx_norm = self._actions[:, 0]
+        vy_norm = self._actions[:, 1]
+        if self.vy:
+            w_norm  = self._actions[:, 2]
+        else:
+            w_norm  = torch.zeros_like(self._actions[:, 1])
+        # === Correct scaling for asymmetric ranges === 
+        Vx_min = self.cfg.min_target_lin_wrench 
+        Vx_max = self.cfg.max_target_lin_wrench 
+
+        Vy_min = -self.cfg.scale_vx_vy * self.cfg.max_target_lin_wrench 
+        Vy_max = self.cfg.scale_vx_vy * self.cfg.max_target_lin_wrench 
+
+        W_min = -self.cfg.max_target_ang_wrench 
+        W_max = self.cfg.max_target_ang_wrench 
+
+        # Convert normalized [-1,1] → real range [min,max] 
+        vx_target = Vx_min + (vx_norm + 1.0) * 0.5 * (Vx_max - Vx_min) 
+        vy_target = Vy_min + (vy_norm + 1.0) * 0.5 * (Vy_max - Vy_min) 
+        w_target = W_min + (w_norm + 1.0) * 0.5 * (W_max - W_min)
+
+        self.lin_target_wrench[:, 0] = vx_target
+        self.lin_target_wrench[:, 1] = vy_target
+        self.ang_target_wrench = w_target
+
+
+        if self.vy:
+            error_lin = self.lin_target_wrench - self._robot.data.root_lin_vel_b[:, 0:2]
+            delta_vel_lin_b = self._robot.data.root_lin_vel_b[:, 0:2] - self.prev_lin_vel_b[:, 0:2]
+        else:
+            error_lin = self.lin_target_wrench[:, 0:1] - self._robot.data.root_lin_vel_b[:, 0:1]
+            delta_vel_lin_b = self._robot.data.root_lin_vel_b[:, 0:1] - self.prev_lin_vel_b[:, 0:1]
+
+        self.norm_error_lin = torch.abs(error_lin)
+
+        error_ang = self.ang_target_wrench.view(-1) - self._robot.data.root_ang_vel_b[:, 2]
+        self.norm_error_ang = torch.abs(error_ang)
+
+        
+        delta_ang_vel_b = self._robot.data.root_ang_vel_b - self.prev_ang_vel_b
+
+        # Start building observation list
+        obs_parts = [
+            self.low_lvl_actions,  # act_dim
+            error_lin.reshape(self.num_envs, -1), # 2
+            delta_vel_lin_b.reshape(self.num_envs, -1), # 2
+            error_ang.reshape(self.num_envs, -1), # 1
+            delta_ang_vel_b[:, 2].reshape(self.num_envs, -1), # 1
+        ]
+
+        # --- Rudder block (only if rudder exists) ---
+        if self.current_spec.get("has_rudder", False):
+            obs_parts.extend([
+                torch.cos(self._rudder_hydrodynamics.foil_angle.reshape(self.num_envs, -1)),
+                torch.sin(self._rudder_hydrodynamics.foil_angle.reshape(self.num_envs, -1)),
+            ])
+
+        # --- Keel block (only if keel exists) ---
+        if self.current_spec.get("has_keel", False):
+            obs_parts.extend([
+                torch.cos(self._keel_hydrodynamics.foil_angle.reshape(self.num_envs, -1)),
+                torch.sin(self._keel_hydrodynamics.foil_angle.reshape(self.num_envs, -1)),
+            ])
+
+        if self.current_spec.get("has_keel", False) or self.current_spec.get("has_rudder", False): 
+            obs_parts.extend([
+                torch.norm(self._keel_hydrodynamics.apparent_flow_speed_b, dim=-1).reshape(self.num_envs, -1),
+            ])
+
+        # --- Sail block (only if sail exists) ---
+        if self.current_spec.get("has_sail", False):
+            obs_parts.extend([
+                torch.cos(self._sail_aerodynamics.foil_angle.reshape(self.num_envs, -1)),
+                torch.sin(self._sail_aerodynamics.foil_angle.reshape(self.num_envs, -1)),
+                torch.norm(self._sail_aerodynamics.apparent_flow_speed_b, dim=-1).reshape(self.num_envs, -1),
+            ])
+
+        
+        
+        # Concatenate everything
+        obs_low_lvl = torch.cat(obs_parts, dim=1)
+
+        # Safety check
+        if not torch.isfinite(obs_low_lvl).all():
+            print("🔥 NaN/Inf in LL obs", obs_low_lvl)
+            raise RuntimeError("Invalid HL observation")
+
+        # Convert to LL agent format
+        obs_low_lvl = self._low_level_agent.obs_to_torch(obs_low_lvl)
+
+        return obs_low_lvl.clone()
+
+    def step(self, high_action:torch.Tensor):
+        high_level_reward = torch.zeros(self.num_envs, device=self.device)
+        high_level_done = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        high_level_timeout = torch.zeros_like(high_level_done)
+
+        # store high-level action for low-level controller
+        self.current_high_level_action = high_action.clone().clamp(-1.0, 1.0)
+
+        for _ in range(self.cfg.num_low_level_steps):
+            # call original DirectRLEnv.step() logic
+            obs, reward, done, timeout, extras = super().step(self.current_high_level_action)
+
+            high_level_reward += reward
+            high_level_done |= done
+            high_level_timeout |= timeout
+
+        # return only one macro-transition
+        return obs, high_level_reward, high_level_done, high_level_timeout, extras
+
+    
+    def get_agent_and_systems(self):
+        
+        if self.is_Training:
+            agent_list = self.train_agents 
+        else:
+            agent_list = self.eval_agents
+
+        system_list = []
+        for i in range(len(agent_list)):
+            agent, env, model = agent_list[i]
+
+            self._low_level_agent = agent
+            self.current_model = model
+            self.current_spec = model["spec"]
+            # Reset LL action buffer 
+            self.low_lvl_actions = torch.zeros(self.num_envs, env.act_dim, device=self.device) 
+            # Store feasibility map if needed 
+            feas_map = model["feasibility"]
+            # Convert DataFrame → numpy → tensor 
+            feas_np = feas_map.to_numpy(dtype=float).flatten() 
+            #feas_tensor = torch.randint(0, 2, (121, ), device=self.device, dtype=torch.float32) #
+            # Repeat for all envs 
+            feas_tensor = torch.tensor(feas_np, device=self.device, dtype=torch.float32) #
+            self.feasibility_map = feas_tensor.unsqueeze(0).repeat(self.num_envs, 1)
+
+            self.update_roboat_system()
+
+            system_list.append(self.robot_system_forces)
+
+        return system_list
+    
+    def update_low_level(self):
+
+        # Choose LL model based on training/eval mode 
+        if self.is_Training: 
+            agent, env, model = random.choice(self.train_agents) 
+        else: 
+            agent, env, model = random.choice(self.eval_agents) 
+        
+        print(f"random model : {model}")
+        self._low_level_agent = agent
+        self.current_model = model
+        self.current_spec = model["spec"]
+        # Reset LL action buffer 
+        self.low_lvl_actions = torch.zeros(self.num_envs, env.act_dim, device=self.device) 
+        # Store feasibility map if needed 
+        feas_map = model["feasibility"]
+        # Convert DataFrame → numpy → tensor 
+        feas_np = feas_map.to_numpy(dtype=float).flatten() 
+        #feas_tensor = torch.randint(0, 2, (121, ), device=self.device, dtype=torch.float32) #
+        # Repeat for all envs 
+        feas_tensor = torch.tensor(feas_np, device=self.device, dtype=torch.float32) #
+        self.feasibility_map = feas_tensor.unsqueeze(0).repeat(self.num_envs, 1)
+
+        self.update_roboat_system()
+
+    def load_ll_agents(self, boat_models, num_envs=1024, device="cuda:0"):
+        agents = []
+        for model in boat_models:
+            
+            model_ckpt = model["checkpoint"]
+            action_dim = compute_act_dim(model["spec"])
+            foil_obs_dim = compute_obs_dim(model["spec"])
+            base_obs = 4 #6
+            ll_obs_dim = foil_obs_dim + base_obs + action_dim
+
+            low_level_agent, env = get_control_agent(checkpoint_path=model_ckpt, num_envs=num_envs, 
+                                                    device=device, act_dim=action_dim, obs_dim=ll_obs_dim)
+        
+            agents.append((low_level_agent, env, model))
+
+        return agents
+
+    def get_info(self):
+        
+        info = {
+            "lin_vel_b": self._robot.data.root_lin_vel_b,                  # (N, 3)
+            "ang_vel_b": self._robot.data.root_ang_vel_b,                  # (N, 3)
+            "robot_pos_w": self._robot.data.root_pos_w,                    # (N, 3)
+            "lift_force_b": self._sail_aerodynamics.flow_lift_b,           # (N, 3)
+            "drag_force_b": self._sail_aerodynamics.flow_drag_b,           # (N, 3)
+            "heading_w": self._robot.data.heading_w,                       # (N,)
+            "lin_target_wrench": self.lin_target_wrench,                   # (N, 1)
+            "ang_target_wrench": self.ang_target_wrench,                   # (N, 1)
+            "lift_coeff": self._sail_aerodynamics.lift_coeff,              # (N,)
+            "drag_coeff": self._sail_aerodynamics.drag_coeff,              # (N,)                    # (N,)
+            "energy": self.energy,                                         # (N,)
+            "episode_energy": self.episode_energy,                         # (N,)
+            "max_available_energy": self.max_available_episode_energy,     # (N,)
+            "ratio_energy_usage": self.ratio_energy_usage,                 # (N,)
+            "reward_progress": self.reward_progress,                       # (N,)
+            "reward_acord": self.reward_acord,                             # (N,) 
+            "reward_energy": self.reward_energy,                           # (N,)
+            "reward_goal": self.reward_goal,                               # (N,)
+            "reward_backward": self.reward_backward,                       # (N,)
+            "reward_aero": self.reward_aero,                               # (N,)
+            "bearing": self.bearing,                                       # (N,)
+            "distance": self.distance,                                     # (N,)
+            "aoa": self._sail_aerodynamics.angle_of_attack,                # (N,)
+            "app_wind_angle": self._sail_aerodynamics.apparent_flow_angle, # (N,)
+            "true_wind_angle": self._sail_aerodynamics.true_flow_angle,    # (N,)
+            "sail_angle": self._sail_aerodynamics.foil_angle,              # (N,)
+            "aero_force": self._sail_aerodynamic_force_b,                  # (N, 6)
+            "max_aero_force": self.max_aero_force,      # (N,)
+            "thruster_force": self._thruster_forces,                       # (N, 6)
+            "norm_error_lin": self.norm_error_lin,                         # (N,)
+            "norm_error_ang": self.norm_error_ang,                         # (N,)
+            "goal_pos": self._desired_pos_w[:, :2],                        # (N, 2)
+            "desired_wrench_b": torch.cat([self.lin_target_wrench, self.ang_target_wrench.clone().reshape(-1, 1)], dim=-1), # (N, 3)
+
+            # Combined error vector (N, 3)
+            "norm_error_cat": torch.cat(
+                [
+                    self.norm_error_lin,
+                    self.norm_error_ang.reshape(-1, 1),
+                ],
+                dim=-1,
+            ),
+
+        }
+
+        return info
+    
+    def update_roboat_system(self):
+
+        """ After creating a new roboat system, update all existing classes """
+
+        self.generic_system_actuator_cfg = make_boat_model(self.current_spec) 
+        self.roboat_hydrodyn_cfg = self.generic_system_actuator_cfg.hydrodynamics_cfg
+        
+        # Hydrdynamics
+        self.hydrodynamics_cfg: HydrodynamicsCfg = hydrodynamics_config() if self.roboat_hydrodyn_cfg is None else self.roboat_hydrodyn_cfg
+        self._hydrodynamics = Hydrodynamics(num_envs=self.num_envs, device=self.device, cfg=self.cfg.hydrodynamics_cfg)
+
+        self._sail_aerodynamics = FoilDynamics(num_envs=self.num_envs, device=self.device, cfg=self.cfg.sail_aerodyn_cfg)
+        self._sail_aerodynamics.init_flow_vector(
+            self._robot.data.root_lin_vel_b[:, 0:2], self._robot.data.heading_w
+        )
+        self._rudder_hydrodynamics = FoilDynamics(num_envs=self.num_envs, device=self.device, cfg=self.cfg.rudder_hydrodyn_cfg)
+        self._rudder_hydrodynamics.init_flow_vector(
+            self._robot.data.root_lin_vel_b[:, 0:2], self._robot.data.heading_w
+        )
+        self._keel_hydrodynamics = FoilDynamics(num_envs=self.num_envs, device=self.device, cfg=self.cfg.keel_hydrodyn_cfg)
+        self._keel_hydrodynamics.init_flow_vector(
+            self._robot.data.root_lin_vel_b[:, 0:2], self._robot.data.heading_w
+        )
+        
+        self._thruster_dynamics = PropellerActuator(
+            num_envs=self.num_envs, device=self.device, dt=self.cfg.step_dt, cfg=self.cfg.propeller_cfg
+        )
+        self._sail_actuator = FoilActuator(
+            num_envs=self.num_envs, dt=self.cfg.step_dt, dynamics=self._sail_aerodynamics, cfg=self.cfg.sail_actuator_cfg
+        )
+        self._rudder_actuator = FoilActuator(
+            num_envs=self.num_envs, dynamics=self._rudder_hydrodynamics, dt=self.cfg.step_dt, cfg=self.cfg.rudder_actuator_cfg
+        )
+        self._keel_actuator = FoilActuator(
+            num_envs=self.num_envs, dynamics=self._keel_hydrodynamics, dt=self.cfg.step_dt, cfg=self.cfg.keel_actuator_cfg
+        )
+
+        foil_dynamics = []
+        self.foil_cfg = self.generic_system_actuator_cfg.foil_cfg
+        if self.foil_cfg is not None:
+            for typ in self.foil_cfg.foil_types:
+                if typ=="rudder":
+                    foil_dynamics.append(self._rudder_hydrodynamics)
+                if typ=="keel":
+                    foil_dynamics.append(self._keel_hydrodynamics)
+                if typ=="sail":
+                    foil_dynamics.append(self._sail_aerodynamics)
+        else:
+            foil_dynamics = None
+
+        self._robot_system_dynamics = RobotActuatorSystem(
+            num_envs=self.num_envs, device=self.device, dt=self.cfg.step_dt, cfg=self.generic_system_actuator_cfg, 
+            foil_dynamics=foil_dynamics
+            )
+
+    def _pre_physics_step(self, actions: torch.Tensor):
+        actions = actions.clamp(-1.0, 1.0)
+        #self._actions = actions.clone()
+        self.send_goals = (self.episode_length_buf%self.interval_between_goals==0)
+        
+        #self._actions = torch.where(self.send_goals.unsqueeze(1), actions, self._actions)
+        self._actions = actions.clone()
+        self.decimation_counter = 0
+
+        # build low-level obs
+        obs_low_lvl = self._get_low_level_obs()
+
+        ll_actions = self._low_level_agent.get_action(
+            obs_low_lvl, is_deterministic=self._low_level_agent.is_deterministic
+        )
+        self.low_lvl_actions = ll_actions
+
+        # update robot system dynamics from LL actions
+        if self.foil_cfg is not None:
+            foil_joint_positions = []
+            foil_types = self.foil_cfg.foil_types
+            current_sail_joint_pos   = self._sail_aerodynamics.foil_angle.reshape(self.num_envs, 1)
+            current_keel_joint_pos   = self._keel_hydrodynamics.foil_angle.reshape(self.num_envs, 1)
+            current_rudder_joint_pos = self._rudder_hydrodynamics.foil_angle.reshape(self.num_envs, 1)
+
+            if "rudder" in foil_types:
+                foil_joint_positions.append(current_rudder_joint_pos)
+            if "keel" in foil_types:
+                foil_joint_positions.append(current_keel_joint_pos)
+            if "sail" in foil_types:
+                foil_joint_positions.append(current_sail_joint_pos)
+        else:
+            foil_joint_positions = None
+
+        self._robot_system_dynamics.set_target_cmd(self.low_lvl_actions)
+
+        self._robot_system_dynamics.update(
+            self._robot.data.heading_w,
+            self._robot.data.root_lin_vel_b,
+            foil_joint_positions=foil_joint_positions,
+        )
+        self.robot_system_forces = self._robot_system_dynamics.get_forces()
+
+        # 2) Compute hydro forces every sim step (using current state)
+        robot_pos = self._robot.data.root_pos_w
+        robot_quat = self._robot.data.root_quat_w
+        robot_vel = self._robot.data.root_vel_w
+
+        self._hydrostatic_force[:, 0, :] = self._hydrostatics.compute_archimedes_metacentric_local(
+            robot_pos, robot_quat
+        )
+        self._hydrodynamic_force[:, 0, :] = self._hydrodynamics.ComputeHydrodynamicsEffects(
+            robot_quat, robot_vel
+        )
+
+        #=====================================================================================================#
+    
+    def _apply_action(self):
+
+        # 3) Combine forces and apply
+        combined = self._hydrostatic_force + self._hydrodynamic_force
+
+        combined_thruster_forces = self.robot_system_forces[:, :3]
+        combined_thruster_torques = self.robot_system_forces[:, 3:]
+
+        combined[:, 0, :3] += combined_thruster_forces
+        combined[:, 0, 3:] += combined_thruster_torques
+
+        self._robot.set_external_force_and_torque(
+            combined[..., :3], combined[..., 3:], body_ids=self._base_link
+        )
+
+        # sail joint targets etc.
+        self.joint_pos_target = self._sail_actuator.get_joint_positions()
+
+    def compute_reward(self, achieved_goal, desired_goal, info={}):
+
+        alpha = 0.5
+        beta = 1 - alpha
+
+        # Case 1: HER → NumPy arrays
+        if isinstance(achieved_goal, np.ndarray):
+            
+            pos_error = np.linalg.norm(achieved_goal[:, :2] - desired_goal[:, :2], axis=1)
+            norm_pos_error = (pos_error-self.cfg.min_target_distance)/(self.cfg.max_target_distance-self.cfg.min_target_distance)
+            heading_diff = achieved_goal[:, 2] - desired_goal[:, 2]
+            heading_error = np.abs(np.arctan2(np.sin(heading_diff), np.cos(heading_diff)))
+            success = np.logical_and(pos_error <= self.cfg.goal_reached_threshold, heading_error<=self.cfg.bearing_reached_threshold).astype(float)
+
+            return -alpha*norm_pos_error + success - (1-alpha)
+        # Case 2: IsaacLab internal reward → Torch tensors
+        elif isinstance(achieved_goal, torch.Tensor):
+
+            ag = achieved_goal
+            dg = desired_goal
+            pos_error = torch.norm(ag[:, :2] - dg[:, :2], dim=1)
+            norm_pos_error = (pos_error-self.cfg.min_target_distance)/(self.cfg.max_target_distance-self.cfg.min_target_distance)
+            heading_diff = ag[:, 2] - dg[:, 2]
+            heading_error = torch.atan2(torch.sin(heading_diff), torch.cos(heading_diff)).abs()
+            success = torch.logical_and(pos_error <= self.cfg.goal_reached_threshold, heading_error<=self.cfg.bearing_reached_threshold).float()
+            return -alpha*norm_pos_error,  success, - (1-alpha)
+        else:
+            raise TypeError(f"Unsupported type for compute_reward: {type(achieved_goal)}")
+
+
+   
+    def _get_observations(self) -> dict:
+
+        # Observations
+        self.global_step += 1
+        # Desired position in the robot frame (2D)
+        self.desired_pos_b_3d, _ = subtract_frame_transforms(
+            self._robot.data.root_link_state_w[:, :3], self._robot.data.root_link_state_w[:, 3:7], self._desired_pos_w
+        )
+        self.desired_pos_b[:, :2] = self.desired_pos_b_3d[:, :2]
+        self.distance = torch.linalg.norm(self.desired_pos_b, dim=1)
+        self.bearing = torch.atan2(self.desired_pos_b[:, 1], self.desired_pos_b[:, 0])
+
+        self.energy = torch.sum(torch.square(self.low_lvl_actions[:, :2]), dim=1)
+        self.normalized_energy = self.energy / self.cfg.max_energy
+
+        desired_vector = self._desired_pos_w[:, :2] - self._robot.data.root_pos_w[:, :2]
+        desired_bearing = torch.atan2(desired_vector[:, 1], desired_vector[:, 0]) - self.desired_orientation
+        self.desired_bearing = torch.atan2(torch.sin(desired_bearing), torch.cos(desired_bearing))
+
+        self.ratio_energy_usage = self.episode_energy / self.max_available_episode_energy
+        
+        self.energy = torch.sum(torch.square(self.low_lvl_actions[:, :2]), dim=1)
+        
+        error_lin = self.lin_target_wrench-self._robot.data.root_lin_vel_b[:, 0:2]
+        self.norm_error_lin = torch.abs(error_lin)
+
+        error_ang = self.ang_target_wrench.view(-1)-self._robot.data.root_ang_vel_b[:, 2]
+        self.norm_error_ang = torch.abs(error_ang)
+        percentage_episode = self.episode_length_buf/(self.max_episode_length-1)
+
+        #self.extras["loss_mask"] = self.send_goals.unsqueeze(1)
+        base_obs = torch.cat(
+            [
+                self._actions,  # 3 # vx, vy, w of the low level
+                self._robot.data.root_lin_vel_b[:, :2]/self.cfg.max_robot_speed,  # 2
+                self._robot.data.root_ang_vel_b[:, 2].unsqueeze(1),  # 1
+                torch.cos(self.bearing).unsqueeze(1),  # 1
+                torch.sin(self.bearing).unsqueeze(1),  # 1
+                torch.cos(self._robot.data.heading_w).unsqueeze(1),  # 1
+                torch.sin(self._robot.data.heading_w).unsqueeze(1),  # 1
+                (self.distance/self.initial_distance).unsqueeze(1),  # 1
+                       
+            ],
+            dim=1,
+        )
+        
+        current_config = torch.cat(
+            [self._robot.data.root_pos_w[:, :2], self._robot.data.heading_w.reshape(-1, 1)], dim=1
+        ) 
+
+        target_config = torch.cat(
+            [self._desired_pos_w[:, :2], self.desired_orientation.reshape(-1, 1)], dim=1
+        ) 
+        
+        obs = {
+            "observation":base_obs, # 10
+            #"feasibility_map":self.feasibility_map.reshape(self.num_envs, -1), # 121
+            "achieved_goal": current_config, # 3
+            "desired_goal":target_config, # 3
+        }
+        
+        self.prev_lin_vel_b = self._robot.data.root_lin_vel_b.clone()
+        self.prev_ang_vel_b = self._robot.data.root_ang_vel_b.clone()
+
+        observations = {"policy":obs}
+        
+        if not self.is_Training:
+            self.extras.update({
+                "info":self.get_info()
+                })
+
+        return observations
+
+    def _get_rewards(self) -> torch.Tensor:
+        
+        current_config = torch.cat(
+            [self._robot.data.root_pos_w[:, :2], self._robot.data.heading_w.reshape(-1, 1)], dim=1
+        ) 
+
+        target_config = torch.cat(
+            [self._desired_pos_w[:, :2], self.desired_orientation.reshape(-1, 1)], dim=1
+        )
+
+        reward_progress, goal_reward, reward_time = self.compute_reward(current_config, target_config)
+        
+        self.reward_progress = reward_progress.clone()
+        self.reward_success = goal_reward.clone()
+        self.reward_time[:] = reward_time
+
+        rewards = {  
+            "2_goal_reached": self.reward_success,
+            "1_distance_progress":self.reward_progress,
+            "6_time": self.reward_time,
+        }
+        #print(f"rewards: {rewards} rew_lift_drag_ratio: {lift_drag_ratio}\n")
+        # #"6_time": time_reward
+        self.previous_distance = self.distance.clone()
+        self.previous_robot_pos = self._robot.data.root_pos_w.clone()
+        reward = torch.sum(torch.stack(list(rewards.values())), dim=0)
+        # Logging
+        for key, value in rewards.items():
+            self._episode_sums[key] += value
+
+        self.total_reward += reward
+        
+        return reward
+    
+    def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
+        time_out = self.episode_length_buf >= self.max_episode_length - 1
+
+        current_config = torch.cat(
+            [self._robot.data.root_pos_w[:, :2], self._robot.data.heading_w.reshape(-1, 1)], dim=1
+        ) 
+
+        target_config = torch.cat(
+            [self._desired_pos_w[:, :2], self.desired_orientation.reshape(-1, 1)], dim=1
+        )
+        pos_error = torch.norm(target_config[:, :2] - current_config[:, :2], dim=1)
+        heading_diff = target_config[:, 2] - current_config[:, 2]
+        heading_error = torch.atan2(torch.sin(heading_diff), torch.cos(heading_diff)).abs()
+
+        done = torch.logical_and(pos_error <= self.cfg.goal_reached_threshold, heading_error<=self.cfg.bearing_reached_threshold).float()
+
+        #done = torch.logical_or(done, goal_passed)
+        if (torch.any(done) or torch.any(time_out)) and self.num_envs==1:
+            print(f"done: {done} \tdistance: {self.distance} \ttime: {time_out}     \
+                \tepisod_length: {self.episode_length_buf}: > {self.max_episode_length - 1}")
+            
+        #self.total_reward[self.send_goals==1] = 0
+        return done, time_out
+
+    def _reset_idx(self, env_ids: torch.Tensor | None):
+        if env_ids is None or len(env_ids) == self.num_envs:
+            env_ids = self._robot._ALL_INDICES
+
+        # Logging
+        final_distance_to_goal = self.distance[env_ids].mean()
+        final_bearing_to_goal = self.bearing[env_ids].mean()
+        final_energy =  self.energy[env_ids].mean()
+        consumed_energy = (self.episode_energy[env_ids]/(self.episode_length_buf[env_ids])).mean() # /self.max_available_episode_energy[env_ids]
+        extras = dict()
+        total_reward = 0
+        for key in self._episode_sums.keys():
+            episodic_sum_avg = torch.mean(self._episode_sums[key][env_ids])
+            total_reward += episodic_sum_avg.item()
+            extras["Episode_Reward/" + key] = episodic_sum_avg
+            self._episode_sums[key][env_ids] = 0.0
+    
+
+        """if not self.is_Training and not (self.has_wrapper_attr("dyn_ros_node")):
+            self.dyn_ros_node = DynamicsRlAgentPublisher(self.num_envs)"""
+
+        self.extras["log"] = dict()
+        self.extras["log"].update(extras)
+        extras = dict()
+        extras["Episode_Termination/done"] = torch.count_nonzero(self.reset_terminated[env_ids]).item() / len(env_ids)
+        extras["Episode_Termination/time_out"] = torch.count_nonzero(self.reset_time_outs[env_ids]).item() / len(
+            env_ids
+        )
+        extras["Metrics/final_distance_to_goal"] = final_distance_to_goal.item()
+        extras["Metrics/final_bearing_to_goal"] = final_bearing_to_goal.item()
+        extras["Metrics/final_energy"] = final_energy.item()
+        extras["Metrics/consumed_energy"] = consumed_energy.item()
+        extras["Metrics/average_speed"] = (self.episode_avg_speed[env_ids]/(self.episode_length_buf[env_ids])).mean().item()
+        self.extras["log"].update(extras)
+
+        extras = dict()
+        
+        self.extras["log"].update(extras)
+
+        
+        self._robot.reset(env_ids)
+        super()._reset_idx(env_ids)
+        if self.num_envs > 1 and len(env_ids) == self.num_envs:
+            # Spread out the resets to avoid spikes in training when many environments reset at a similar time
+            self.episode_length_buf = torch.randint_like(self.episode_length_buf, high=int(self.max_episode_length))
+
+        self._actions[env_ids] = 0.0
+        # Sample new goal position
+        self.initial_bearing[env_ids] = torch.zeros_like(self._desired_pos_w[env_ids, 0]).uniform_(
+            self.cfg.min_target_bearing, self.cfg.max_target_bearing
+        )
+        self.desired_orientation[env_ids] = torch.zeros_like(self.initial_bearing[env_ids]).uniform_(
+            -torch.pi, torch.pi
+        )
+
+        self.bearing[env_ids] = self.initial_bearing[env_ids]
+        self.previous_bearing = self.initial_bearing[env_ids]
+        self.total_reward[env_ids] = 0
+        
+        if self.is_Training:
+            if self.common_step_counter%self.global_model_reset_frequency==0 and not self.updated:
+                print(f"common: {self.common_step_counter}")
+                self.update_low_level() # choose another low level
+                print(f"current_model: {self.current_model}")
+                self.low_level_agents_index[env_ids] = torch.randint_like(self.low_level_agents_index[env_ids], 0, len(self.train_agents))
+                self.updated = True
+        else:
+            self.update_low_level()
+            print(f"current_model: {self.current_model}")
+            self.low_level_agents_index[env_ids] = torch.randint_like(self.low_level_agents_index[env_ids], 0, len(self.eval_agents))
+            
+        self._robot_system_dynamics.reset(env_ids=env_ids)
+
+        self._sail_actuator.reset(env_ids=env_ids)
+
+        self.initial_distance[env_ids] = torch.zeros_like(self._desired_pos_w[env_ids, 0]).uniform_(
+            self.cfg.min_target_distance, self.cfg.max_target_distance
+        )
+        self.next_tack_wpt_idx[env_ids] = 0
+        self.distance[env_ids] = self.initial_distance[env_ids]
+        self.previous_distance[env_ids] = self.initial_distance[env_ids]
+        self._desired_pos_w[env_ids, 0] = torch.cos(self.initial_bearing[env_ids]) * self.initial_distance[env_ids]
+        self._desired_pos_w[env_ids, 1] = torch.sin(self.initial_bearing[env_ids]) * self.initial_distance[env_ids]
+        self._desired_pos_w[env_ids, 2] = 0.0  # only in 2D
+        self._desired_pos_w[env_ids, :2] += self._terrain.env_origins[env_ids, :2]
+        self.desired_heading[env_ids] = torch.atan2(self._desired_pos_w[env_ids, 1] - self._robot.data.root_link_pos_w[env_ids, 1],
+                                                    self._desired_pos_w[env_ids, 0] - self._robot.data.root_link_pos_w[env_ids, 0])
+
+        # Initialize available energy
+        max_dist_per_step = self.cfg.max_robot_speed*self.step_dt
+        energy_percent = 1 #torch.rand_like(self.initial_distance[env_ids]) * 0.3 + 0.5  # Randomize energy percent between 0.5 and 1.0
+        self.max_available_episode_energy[env_ids] = energy_percent*(self.initial_distance[env_ids]/max_dist_per_step) * self.cfg.max_energy
+
+        # Initialize markers pos
+        d = 5
+        n_markers = 500
+        self.marker_translations = np.random.uniform([-self.env_pos[0]-d, -self.env_pos[1]-d, 1], 
+                    [self.env_pos[0]+d, self.env_pos[1]+d, 1.6], (n_markers, 3))  # Adjust bounds as needed
+        self.red_marker_translations = np.random.uniform([-self.env_pos[0]-d/3, -self.env_pos[1]-d/3, 1], 
+                    [self.env_pos[0]+d/2, self.env_pos[1]+d/2, 1.5], (n_markers//5, 3))
+        
+        self.max_aero_force = self._sail_aerodynamics.get_max_aero_force(self._sail_aerodynamics.Uw)
+        
+        if self.is_Training:
+            
+            
+            self.desired_speed_b[env_ids] = torch.zeros_like(self.desired_speed_b[env_ids]).uniform_(0.2, 1.5)
+            
+            random = torch.rand_like(self.episode_number[env_ids])
+
+            self._sail_aerodynamics.reset_flow_condition(env_ids=env_ids, randomize_direction=False, randomize_speed=False, 
+                                                    upflow=False, downflow=True, beam=True, close=False, broad=True,
+                                                    fixed=True)
+
+            self.thruster_left_randn[env_ids] = torch.zeros_like(self.thruster_left_randn[env_ids]).uniform_(0, 1)
+            self.thruster_right_randn[env_ids] = torch.zeros_like(self.thruster_right_randn[env_ids]).uniform_(0, 1)
+
+        
+        self.tack_side[env_ids] = torch.ones_like(self.tack_side[env_ids])
+        self.in_tack_mode[env_ids] = torch.zeros_like(self.in_tack_mode[env_ids])
+        
+        self.episode_number[env_ids]  = self.episode_number[env_ids] + 1 
+        self.episode_energy[env_ids] = 0
+        self.episode_avg_speed[env_ids] = 0
+        # Reset robot state
+        joint_pos = self._robot.data.default_joint_pos[env_ids]
+        joint_vel = self._robot.data.default_joint_vel[env_ids]
+        default_root_state = self._robot.data.default_root_state[env_ids]
+        default_root_state[:, :3] += self._terrain.env_origins[env_ids]
+        self._robot.write_root_link_pose_to_sim(default_root_state[:, :7], env_ids)
+        self._robot.write_root_link_velocity_to_sim(default_root_state[:, 7:], env_ids)
+        self._robot.write_joint_state_to_sim(joint_pos, joint_vel, None, env_ids)
+
+        self.previous_robot_pos[env_ids] = self._robot.data.root_link_pos_w[env_ids]
+        self.initial_robot_pos[env_ids] = self._robot.data.root_link_pos_w[env_ids]
+        
+        self.tack_length[env_ids] = self.initial_distance[env_ids] // 3
+        #print(f"tack_length: {self.tack_length[env_ids]}")
+
+        #print(f"tack_waypoints: {self.tack_waypoints[env_ids, :, :2]}")
+
+    def _set_debug_vis_impl(self, debug_vis: bool):
+        # create markers if necessary for the_robot_mass first tome
+        if debug_vis:
+            if not hasattr(self, "goal_pos_visualizer"):
+                marker_cfg = CUBOID_MARKER_CFG.copy()
+                marker_cfg.markers["cuboid"].size = (0.1, 0.1, 0.5)
+                # -- goal pose
+                marker_cfg.prim_path = "/Visuals/Command/goal_position"
+                self.goal_pos_visualizer = VisualizationMarkers(marker_cfg)
+            # set their visibility to true
+            self.goal_pos_visualizer.set_visibility(True)
+
+        else:
+            if hasattr(self, "goal_pos_visualizer"):
+                self.goal_pos_visualizer.set_visibility(False)
+
+    def _debug_vis_callback(self, event):
+        # update the markers
+        self.goal_pos_visualizer.visualize(self._desired_pos_w)
+        
+        if self.num_envs==1:
+            # apparent wind visualization
+            app_wind_world = transform_points(torch.cat((self._sail_aerodynamics.apparent_flow_speed_b, 
+            torch.zeros((self.num_envs, 1), device=self.device)), dim=-1), 
+            quat=self._robot.data.body_state_w[:, self._base_link, 3:7].reshape(self.num_envs, -1), 
+            pos=None)[:, :2]
+            #print(f"app: {self._sail_aerodynamics.apparent_flow_speed_b}")
+            app_wind_speed_world = torch.norm(app_wind_world, dim=-1) # magnitude of app_wind
+            app_wind_angle_world = torch.atan2(app_wind_world[:, 1], app_wind_world[:, 0])
+
+
+            true_wind_world = transform_points(torch.cat((self._sail_aerodynamics.true_flow_speed2D_b, 
+            torch.zeros((self.num_envs, 1), device=self.device)), dim=-1), 
+            quat=self._robot.data.body_state_w[:, self._base_link, 3:7].reshape(self.num_envs, -1), 
+            pos=None)[:, :2]
+            true_wind_speed_world = torch.norm(true_wind_world, dim=-1) # magnitude of app_wind
+            true_wind_angle_world = torch.atan2(true_wind_world[:, 1], true_wind_world[:, 0])
+
+            induced_wind_world = transform_points(-self._robot.data.root_lin_vel_b, 
+                quat=self._robot.data.body_state_w[:, self._base_link, 3:7].reshape(self.num_envs, -1), 
+            pos=None)[:, :2]
+            induced_wind_angle_world = torch.atan2(induced_wind_world[:, 1], induced_wind_world[:, 0])
+            induced_wind_speed_world = torch.norm(induced_wind_world, dim=-1) 
+
+            # sail unit vectors
+            sail_unit_vector_world = transform_points(torch.cat((self._sail_aerodynamics.foil_unit_vector, 
+            torch.zeros((self.num_envs, 1), device=self.device)), dim=-1), 
+            quat=self._robot.data.body_state_w[:, self._base_link, 3:7].reshape(self.num_envs, -1), 
+            pos=None)[:, :2]
+
+            # sail ortho unit vector
+            sail_ortho_unit_vector_world = transform_points(torch.cat((self._sail_aerodynamics.foil_ortho_unit_vector, 
+            torch.zeros((self.num_envs, 1), device=self.device)), dim=-1), 
+            quat=self._robot.data.body_state_w[:, self._base_link, 3:7].reshape(self.num_envs, -1), 
+            pos=None)[:, :2]
+
+            vec2d = torch.cat((sail_unit_vector_world, sail_ortho_unit_vector_world), dim=0)
+            #print(app_wind_world.shape, true_wind_world.shape, vec2d.shape)
+
+            self.vector_field1_visualization(vis_enabled=True, 
+                                             vectors_2d=sail_unit_vector_world,
+                                             body_ids=[3],
+                                             offset=[0.0, 0.0, 0.35], marker_obj=self.magenta_marker, max_arrow_length=10)
+            
+            self.vector_field1_visualization(vis_enabled=True, 
+                                             vectors_2d=sail_ortho_unit_vector_world,
+                                             body_ids=[3],
+                                             offset=[0.0, 0.0, 0.35], marker_obj=self.mimosa_marker)
+            
+            """print(f"Vector: app_transf: {app_wind_world} \ttrue: {true_wind_world} \tinduced:{induced_wind_world}")
+            print(f"Norm: app_transf: {app_wind_speed_world} \ttrue: {true_wind_speed_world} \tinduced:{induced_wind_speed_world}")
+            print(f"Angle: app_transf: {(180/torch.pi)*app_wind_angle_world} \ttrue: {(180/torch.pi)*true_wind_angle_world} \
+                  \tinduced:{(180/torch.pi)*induced_wind_angle_world}\n")"""
+            #wind_drag_world = transform_points(self._sail_aerodynamics.wind_drag[:, :3], quat=self._robot.data.root_link_state_w[:, 3:7], pos=None)
+            self.vector_field_visualization(
+                                vis_enabled=True,
+                                directions=app_wind_angle_world,
+                                magnitudes=app_wind_speed_world,
+                                marker_obj=self.blue_marker,
+                                marker_translations=self.marker_translations,
+                                wrap_distance=2.5,
+                                update_scale=0.1,
+                                body_ids=[3],
+                                offset=[0.0, 0.0, 0.2]
+                            )
+            
+            self.vector_field_visualization(
+                                vis_enabled=True,
+                                directions=true_wind_world,
+                                magnitudes=None,
+                                marker_obj=self.red_big_marker,
+                                marker_translations=self.marker_translations,
+                                wrap_distance=2.5,
+                                update_scale=0.1,
+                                body_ids=[3],
+                                offset=[0., 0.0, 0.2]
+                            )
+            
+            # true wind visualization
+            """self.vector_field_visualization(
+                                vis_enabled=True,
+                                directions=true_wind_world,
+                                magnitudes=None,
+                                marker_obj=self.red_marker,
+                                marker_translations=self.red_marker_translations,
+                                wrap_distance=2.0,
+                                update_scale=0.05,
+                            )"""
+            
+            self.vector_field_visualization(
+                                vis_enabled=True,
+                                directions=induced_wind_angle_world,
+                                magnitudes=induced_wind_speed_world,
+                                marker_obj=self.maroon_marker,
+                                marker_translations=self.marker_translations,
+                                wrap_distance=2.5,
+                                update_scale=0.1,
+                                body_ids=[3],
+                                offset=[0.0, 0.0, 0.2]
+                            )
+            #print(f"\napp_speed: {app_wind_world} app_angle: {app_wind_angle_world}")
+            #print(f"true_speed: {self._sail_aerodynamics.Uw*torch.cos(self._sail_aerodynamics.Beta_w), self._sail_aerodynamics.Uw*torch.sin(self._sail_aerodynamics.Beta_w)} :{true_wind_world} true_angle: {true_wind_angle_world}\n")
+
+            
+            thrust_left = self._thruster_forces[..., :3].clone().detach().reshape(self.num_envs, -1)
+            thrust_right = self._thruster_forces[..., 3:].clone().detach().reshape(self.num_envs, -1)
+            aerodynamic_force_b = self._sail_aerodynamic_force_b[:, :3].clone().detach().reshape(self.num_envs, -1)
+            hydrodynamic_force = self._hydrodynamic_force.clone().detach().reshape(self.num_envs, -1)[:, :3]
+            hydrodynamic_force_lateral = torch.zeros_like(hydrodynamic_force)
+            hydrodynamic_force_forward = torch.zeros_like(hydrodynamic_force)
+
+            hydrodynamic_force_lateral[:, 1] = hydrodynamic_force[:, 1]
+            hydrodynamic_force_forward[:, 0] = hydrodynamic_force[:, 0]
+            """thrust_left[:, :1] = self._actions[:, :1]
+            thrust_right[:, :1] = self._actions[:, 1:2]"""
+            #print(f"{thrust_left.shape} -> {thrust_right.shape} -> {self._sail_aerodynamic_force_b.squeeze(0)[:, :2].shape}")
+            #array_forces_2D = torch.cat((thrust_left, thrust_right, self._sail_aerodynamics.wind_lift[:, :2], self._sail_aerodynamics.wind_drag[:, :2]), dim=0)
+            #self.force_visualization(True, thrust_left.squeeze(0)[:, :2], body_ids=[1], marker_ob=self.green_marker)
+            #self.force_visualization(True, thrust_right.squeeze(0)[:, :2], body_ids=[2], marker_ob=self.green_marker)
+            wind_lift_world = transform_points(self._sail_aerodynamics.flow_lift_b[:, :3], 
+                quat=self._robot.data.body_state_w[:, self._base_link, 3:7].reshape(self.num_envs, -1), pos=None)
+            
+            wind_drag_world = transform_points(self._sail_aerodynamics.flow_drag_b[:, :3], 
+                quat=self._robot.data.body_state_w[:, self._base_link, 3:7].reshape(self.num_envs, -1), pos=None)
+
+            aerodynamic_force_world = transform_points(aerodynamic_force_b[:, :3], 
+                quat=self._robot.data.body_state_w[:, self._base_link, 3:7].reshape(self.num_envs, -1), pos=None)
+            
+            """wind_lift_world = transform_points(self._sail_aerodynamics.wind_lift_wing[:, :3], 
+                quat=self._robot.data.body_state_w[:, self._sail_wing_id, 3:7].reshape(self.num_envs, -1), pos=None)
+            
+            wind_drag_world = transform_points(self._sail_aerodynamics.wind_drag_wing[:, :3], 
+                quat=self._robot.data.body_state_w[:, self._sail_wing_id, 3:7].reshape(self.num_envs, -1), pos=None)
+            
+            aerodynamic_force_world = transform_points(aerodynamic_force_wing, 
+                quat=self._robot.data.body_state_w[:, self._sail_wing_id, 3:7].reshape(self.num_envs, -1), pos=None)"""
+            
+            #print(self._robot.data.body_state_w[:, self._sail_wing_id, 3:7].shape)
+            #print(f"aero_body: {aerodynamic_force_b.shape} \naero_world: {aerodynamic_force_world.shape}\n aero_wing: {self._aerodynamic_force_wing.shape}\n")
+            hydrodynamic_force_world = transform_points(hydrodynamic_force, quat=self._robot.data.root_link_state_w[:, 3:7], pos=None)
+            hydrodynamic_force_forward_world = transform_points(hydrodynamic_force_forward, 
+                quat=self._robot.data.root_link_state_w[:, 3:7], pos=None)
+            
+            hydrodynamic_force_lateral_world = transform_points(hydrodynamic_force_lateral, 
+                quat=self._robot.data.root_link_state_w[:, 3:7], pos=None)
+            
+            thrust_left_force_world = transform_points(thrust_left, 
+                quat=self._robot.data.body_state_w[:, self._left_thruster_id, 3:7].reshape(self.num_envs, -1), pos=None)
+            
+            thrust_right_force_world = transform_points(thrust_right, 
+                quat=self._robot.data.body_state_w[:, self._right_thruster_id, 3:7].reshape(self.num_envs, -1), pos=None)
+
+            #hydrodynamic_force_world[:, 1] = 0
+            heading_vec = torch.zeros_like(self._robot.data.root_link_lin_vel_b[:, :2])
+            heading_vec[:, 0] = torch.cos(self._robot.data.heading_w)
+            heading_vec[:, 1] = torch.sin(self._robot.data.heading_w)
+            unit_heading_vec = torch.zeros_like(heading_vec)
+
+            unit_heading_vec[:, 0] = heading_vec[:, 0]/torch.norm(heading_vec, dim=-1)
+            unit_heading_vec[:, 1] = heading_vec[:, 1]/torch.norm(heading_vec, dim=-1)
+            
+            """self.force_visualization(True, wind_drag_world[:, :2], body_ids=[3], marker_ob=self.green_marker, offset=[0., 0., 0.15])
+            self.force_visualization(True, wind_lift_world[:, :2], body_ids=[3], marker_ob=self.yellow_marker, offset=[0., 0., 0.15])
+            self.force_visualization(True, aerodynamic_force_world[:, :2], body_ids=[3], marker_ob=self.beige_marker, offset=[0., 0., 0.15])"""
+
+            self.vector_field1_visualization(vis_enabled=True, 
+                                             vectors_2d=wind_drag_world[:, :2],
+                                             body_ids=[3],
+                                             offset=[0.0, 0.0, 0.15], marker_obj=self.green_marker, max_arrow_length=8)
+            
+            self.vector_field1_visualization(vis_enabled=True, 
+                                             vectors_2d=wind_lift_world[:, :2],
+                                             body_ids=[3],
+                                             offset=[0.0, 0.0, 0.15], marker_obj=self.yellow_marker, max_arrow_length=8)
+            
+            self.vector_field1_visualization(vis_enabled=True, 
+                                             vectors_2d=aerodynamic_force_world[:, :2],
+                                             body_ids=[3],
+                                             offset=[0.0, 0.0, 0.15], marker_obj=self.beige_marker, max_arrow_length=8)
+            
+            #self.force_visualization(True, hydrodynamic_force_world[:, :2], body_ids=[0], marker_ob=self.orange_marker, offset=[0., 0., 0.15])
+
+            array_forces_2D = torch.cat((hydrodynamic_force_lateral_world[:, :2], hydrodynamic_force_forward_world[:, :2], 
+                                         thrust_left_force_world[:, :2], thrust_right_force_world[:, :2]), dim=0)
+            
+            """self.force_visualization(True, thrust_left_force_world[:, :2], body_ids=[1], marker_ob=self.orange_marker, offset=[0., 0., 0.])
+            self.force_visualization(True, thrust_right_force_world[:, :2], body_ids=[2], marker_ob=self.orange_marker, offset=[0., 0., 0.])"""
+            self.force_visualization(True, array_forces_2D, body_ids=[0, 0, 1, 2], marker_ob=self.orange_marker, offset=[0., 0., 0.])
+            """# force thruster visualization
+            self.vector_field_visualization(
+                                vis_enabled=True,
+                                directions=self._actions,
+                                magnitudes=self._actions,
+                                marker_obj=self.red_marker,
+                                marker_translations=self.red_marker_translations,
+                                wrap_distance=2.0,
+                                update_scale=0.05,
+                                body_ids=[1, 2]
+                            )
+            
+            # force wind visualization
+            self.vector_field_visualization(
+                                vis_enabled=True,
+                                directions=self._sail_aerodynamic_force_b.squeeze(0),
+                                magnitudes=self._sail_aerodynamic_force_b,
+                                marker_obj=self.red_marker,
+                                marker_translations=self.red_marker_translations,
+                                wrap_distance=2.0,
+                                update_scale=0.05,
+                                body_ids=[3]
+                            )"""
+
+    def vector_field1_visualization(
+        self,
+        vis_enabled: bool,
+        vectors_2d: torch.Tensor,
+        body_ids: list[int],
+        marker_obj,
+        offset: list[float] | None = None,
+        max_arrow_length: float = 5.0
+    ):
+        """
+        Visualize multiple 2D vectors (forces, winds, etc.) at specified body positions.
+
+        Args:
+            vis_enabled: Whether to enable visualization.
+            vectors_2d: (N, 2) tensor of 2D vectors to display.
+            body_ids: List of body IDs corresponding to each vector.
+            marker_obj: The marker object for visualization (e.g., self.blue_marker).
+            offset: Optional [x, y, z] offset applied to all markers.
+            max_arrow_length: Maximum visual arrow length.
+        """
+        if not vis_enabled or self.num_envs != 1:
+            return
+
+        n = len(body_ids)
+        assert vectors_2d.shape[0] == n, f"vectors_2d and body_ids must have matching lengths: they have {vectors_2d.shape[0]} and {n}"
+
+        # Compute rotation (yaw) angles for each vector
+        alpha = torch.atan2(vectors_2d[:, 1], vectors_2d[:, 0]).cpu().numpy()
+        
+        # Build quaternion rotations around Z-axis (yaw)
+        marker_orientations = np.zeros((n, 4))
+        marker_orientations[:, 0] = np.cos(alpha / 2)  # w
+        marker_orientations[:, 3] = np.sin(alpha / 2)  # z
+
+        # Get body positions
+        body_pos = self._robot.data.body_link_pos_w[:, body_ids, :].squeeze(0)
+        marker_translations = body_pos.cpu().numpy()
+
+        # Apply optional offset
+        if offset is not None:
+            marker_translations[:, 0] += offset[0]
+            marker_translations[:, 1] += offset[1]
+            marker_translations[:, 2] += offset[2]
+
+        # Compute scaling based on vector magnitudes
+        magnitudes = torch.norm(vectors_2d, dim=-1).cpu().numpy()
+        marker_scales = np.ones_like(marker_translations)  # Default to [1, 1, 1] scaling
+
+        #print(f"alpha: {alpha*(180/torch.pi)} \tmagn: {magnitudes}")
+
+        max_magnitude = self._sail_aerodynamics.cfg.flow_speed + 2  # Or any configurable maximum
+        scale_factors = (magnitudes / max_magnitude) * max_arrow_length
+        marker_scales[:, 0] = scale_factors  # Scale along X only
+
+        # Visualize
+        marker_obj.visualize(translations=marker_translations, orientations=marker_orientations, scales=marker_scales)
+
+
+    def vector_field_visualization(
+        self,
+        vis_enabled: bool,
+        directions: torch.Tensor,
+        magnitudes: torch.Tensor | None,
+        marker_obj,
+        marker_translations: np.ndarray,
+        wrap_distance: float=4.,
+        update_scale: float=0.1,
+        z_clip: tuple[float, float] = (0.0, 4.0),
+        body_ids: list[int] | None = None,
+        offset:list[float] | None = None,
+        max_arrow_length=5
+    ):
+        """
+        Generic function for visualizing vector fields (wind, forces, etc.)
+
+        Args:
+            vis_enabled: Whether to enable the visualization.
+            directions: A (N,) tensor of angles (radians) or 2D force vectors (N x 2).
+            magnitudes: Optional (N,) tensor of speeds or force magnitudes.
+            marker_obj: The marker object (e.g., self.blue_marker).
+            marker_translations: N x 3 numpy array of marker positions (updated in-place).
+            wrap_distance: Distance threshold to wrap markers around.
+            update_scale: How much to move markers per timestep.
+            z_clip: Min and max bounds for Z values.
+            body_ids: Optional list of body IDs (used for static markers like forces).
+            offset: Optional list of offset over the three axes [x, y, z]
+        """
+        if not vis_enabled or self.num_envs != 1:
+            return
+        
+        # Determine orientation angles (alpha)
+        if directions.ndim == 2:  # it's a 2D vector like (Fx, Fy)
+            alpha = torch.atan2(directions[:, 1], directions[:, 0]).cpu().numpy()
+            speeds = torch.linalg.norm(directions, dim=-1).cpu().numpy()
+        else:  # it's an angle
+            alpha = directions.cpu().numpy()
+            speeds = magnitudes.cpu().numpy() if magnitudes is not None else np.ones_like(alpha)
+
+        # Compute quaternions for Z-axis (yaw) rotation
+        rotation = np.stack([
+            np.cos(alpha / 2),
+            np.zeros_like(alpha),
+            np.zeros_like(alpha),
+            np.sin(alpha / 2)
+        ], axis=-1)
+        
+        # Apply the same rotation to all markers
+        marker_orientations = np.tile(rotation, (marker_translations.shape[0]//5, 1))
+        
+        # Update marker positions (only for dynamic fields like wind)
+        if body_ids is None:
+            marker_translations[:, :2] += (speeds * self.step_dt * update_scale)
+
+            current_pos = self._robot.data.root_pos_w[:, :2].clone().cpu().numpy()
+            dist = np.abs(marker_translations[:, :2] - current_pos)
+
+            for i in range(2):  # x and y
+                marker_translations[:, i] = np.where(
+                    dist[:, i] > wrap_distance,
+                    current_pos[:, i] - wrap_distance / 2,
+                    marker_translations[:, i]
+                )
+
+            marker_translations[:, 2] = np.clip(marker_translations[:, 2], *z_clip)
+        else:
+            body_pos = self._robot.data.body_link_pos_w[:, body_ids, :].squeeze(0)
+            marker_translations[:] = body_pos.cpu().numpy()
+            #print(f"{marker_translations.shape}")
+            if offset is not None:
+                marker_translations[:, 0] += offset[0]
+                marker_translations[:, 1] += offset[1]
+                marker_translations[:, 2] += offset[2]
+                
+            marker_scales = np.zeros_like(body_pos.cpu().numpy())
+            scale = np.array([1, 1, 1])
+            max_speeds = self._sail_aerodynamics.cfg.flow_speed + 2 # assuming 2m/s is boat max speed
+            scale[0] = scale[0]*(1/max_speeds)*speeds*max_arrow_length
+            # np.maximum(np.ones_like(speeds), (1/max_speeds)*speeds*max_arrow_length)
+            marker_scales[:, :] = scale
+
+        #print(f"{marker_scales.shape}:{body_ids}")
+       
+        # Visualize
+        marker_obj.visualize(translations=marker_translations, orientations=marker_orientations, scales=marker_scales)
+
+    def force_visualization(self, force_vis:bool, array_forces_2D: torch.Tensor, body_ids:list, marker_ob, 
+                            offset:list[float] | None = None, max_arrow_length=8):
+        """
+            This function visualize the forces arrow applied on the bodies based on their direction
+            
+            Args: 
+            force_vis: True means visualize the arrow, Force means not visualize them in the simulation
+            array_forces_2D: concatenate of the 2D vector of the forces to be applied on the bodies
+            body_ids: Ids of the bodies which will the forces be applied on.
+            Please sort the body_ids in the order as the array_forces_2D is concatenated
+            ex: [force_right_thruster, force_left_thruster, force-sail] ===> [right_hull_id, left_hull_id, sail_id]
+            
+        """
+
+        if force_vis and self.num_envs==1:
+        
+            n = len(body_ids)
+            alpha = torch.atan2(array_forces_2D[:, 1], array_forces_2D[:, 0]).cpu().numpy()
+
+            # Compute quaternion for rotation along the wind direction (in the world frame)
+            marker_orientations = np.zeros((n, 4))
+            for i in range(len(alpha)):
+                marker_orientations[i, :] = np.array([np.cos(alpha[i] / 2), 0, 0, np.sin(alpha[i] / 2)]) # # Rotate around Z-axis (yaw) 
+
+            # Apply the same rotation to all markers
+            body_pos = self._robot.data.body_link_pos_w[:, body_ids, :].squeeze(0)
+            marker_translations = body_pos.cpu().numpy()
+            if offset is not None:
+                marker_translations[:, 0] += offset[0]
+                marker_translations[:, 1] += offset[1]
+                marker_translations[:, 2] += offset[2]
+            #print(f"trans: {marker_translations} shape: {marker_translations.shape}")
+            magnitude = torch.norm(array_forces_2D, dim=-1).cpu().numpy()
+            #print(f"magnitude: {magnitude}")
+            marker_scales = np.zeros_like(body_pos.cpu().numpy())
+            scale = np.tile(np.array([1, 1, 1]), (len(body_ids), 1))
+            max_force = 8
+            for i in range(len(body_ids)):
+                scale[i][0] = scale[i][0]*(1/max_force)*magnitude[i]*max_arrow_length
+            marker_scales[:, :] = scale
+
+            # Visualize markers in the world frame
+            marker_ob.visualize(translations=marker_translations, orientations=marker_orientations, scales=marker_scales)
+
+

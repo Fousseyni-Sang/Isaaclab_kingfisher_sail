@@ -18,7 +18,7 @@ parser.add_argument("--num_episode", type=int, default=50, help="Number of episo
 args_cli = parser.parse_args()
 
 AGENTCFG = "source/extensions/omni.isaac.lab_tasks/omni/isaac/lab_tasks/direct/kingfisher_sail_low_level/agents/rl_games_ppo_cfg.yaml"
-
+ISAAC_PATH = os.getenv("ISAAC_PATH", "/mnt/ssd-storage/fsangare/isaaclab")
 
 def load_all_ll_models(root="outputs/ll"):
     """Return a sorted list of all LL model directories."""
@@ -78,12 +78,12 @@ def launch_ll_play():
         # 3. Launch the play script
         # ---------------------------------------------------------
         cmd = [
-            "/mnt/gpu_storage/zrr/fsangare/isaaclab/bin/python",
+            f"{ISAAC_PATH}/bin/python",
             "source/standalone/workflows/rl_games/play_low_level_optimized.py",
             "--task", "Isaac-KingfisherSail-Direct-Low-v0",
             "--headless",
             "--num_envs", f"{args_cli.num_envs}",
-            "--device", "cuda:1",
+            "--device", "cuda:0",
             "--num_episode", f"{args_cli.num_episode}"
         ]
 

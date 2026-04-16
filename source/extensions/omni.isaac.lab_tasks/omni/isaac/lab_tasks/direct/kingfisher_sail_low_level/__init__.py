@@ -17,7 +17,7 @@ from .kingfisher_sail_env import KingfisherSailEnv, KingfisherSailEnvCfg
 ##
 
 gym.register(
-    id="Isaac-KingfisherSail-Direct-v1",
+    id="Isaac-KingfisherSail-Direct-Low-v0",
     entry_point="omni.isaac.lab_tasks.direct.kingfisher_sail_low_level:KingfisherSailEnv",
     disable_env_checker=True,
     kwargs={

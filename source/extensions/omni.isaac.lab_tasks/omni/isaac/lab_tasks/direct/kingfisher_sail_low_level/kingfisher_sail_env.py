@@ -698,8 +698,6 @@ class KingfisherSailEnv(DirectRLEnv):
         # Concatenate everything
         obs = torch.cat(obs_parts, dim=1)
            
-        
-        
         if not torch.isfinite(obs).all():
             torch.set_printoptions(threshold=torch.inf)
             n=500

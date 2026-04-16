@@ -464,7 +464,7 @@ class KingfisherSailEnv(DirectRLEnv):
         self._sail_actuator.update_joint_cmd(current_joint_pos, self._actions[:, 2:3])
         self._sail_actuator.update_forces(self._robot.data.heading_w, self._robot.data.root_lin_vel_b)
         #print(f"")
-        self._sail_aerodynamic_force_b[:, 0, :] = self._sail_actuator.get_forces()
+        self._sail_aerodynamic_force_b[:, 0, :] = self._sail_actuator.get_forces_and_torques()
         #print(f"SAIL FORCE: {self._sail_aerodynamic_force_b[:, 0, :]}")
         """self._rudder_actuator.update_joint_cmd(self._actions[:, 3:])
         self._rudder_actuator.update_forces(self._robot.data.heading_w, self._robot.data.root_lin_vel_b)

@@ -76,6 +76,7 @@ def hydra_task_config(task_name: str, agent_cfg_entry_point: str) -> Callable:
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
             # register the task to Hydra
+            
             env_cfg, agent_cfg = register_task_to_hydra(task_name, agent_cfg_entry_point)
 
             # define the new Hydra main function
@@ -95,6 +96,7 @@ def hydra_task_config(task_name: str, agent_cfg_entry_point: str) -> Callable:
                     agent_cfg = hydra_env_cfg["agent"]
                 else:
                     agent_cfg.from_dict(hydra_env_cfg["agent"])
+                
                 # call the original function
                 func(env_cfg, agent_cfg, *args, **kwargs)
 

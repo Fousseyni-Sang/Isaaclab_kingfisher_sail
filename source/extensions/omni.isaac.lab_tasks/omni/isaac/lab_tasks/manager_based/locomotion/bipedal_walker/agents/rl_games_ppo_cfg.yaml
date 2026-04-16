@@ -43,8 +43,8 @@ params:
   config:
     name: bipedal_walker
     env_name: rlgpu
-    device: 'cuda:1'
-    device_name: 'cuda:1'
+    device: 'cuda:0'
+    device_name: 'cuda:0'
     multi_gpu: False
     ppo: True
     mixed_precision: True

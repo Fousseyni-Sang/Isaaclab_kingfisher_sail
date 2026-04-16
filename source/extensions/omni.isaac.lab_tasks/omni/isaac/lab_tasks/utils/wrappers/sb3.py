@@ -204,12 +204,19 @@ class Sb3VecEnvWrapper(VecEnv):
         return [self.unwrapped.seed(seed)] * self.unwrapped.num_envs
 
     def reset(self) -> VecEnvObs:  # noqa: D102
-        obs_dict, _ = self.env.reset()
+        out = self.env.reset()
+        if isinstance(out, dict):
+            obs_dict = out
+        elif isinstance(out, (list, tuple)) and len(out) == 2:
+            obs_dict, _ = out
+        else:
+            raise RuntimeError(f"Unexpected reset() output: {type(out)}")
         # reset episodic information buffers
         self._ep_rew_buf.zero_()
         self._ep_len_buf.zero_()
         # convert data types to numpy depending on backend
         return self._process_obs(obs_dict)
+
 
     def step_async(self, actions):  # noqa: D102
         # convert input to numpy array
@@ -230,7 +237,7 @@ class Sb3VecEnvWrapper(VecEnv):
         # compute reset ids
         dones = terminated | truncated
         reset_ids = (dones > 0).nonzero(as_tuple=False)
-
+        
         # convert data types to numpy depending on backend
         # note: ManagerBasedRLEnv uses torch backend (by default).
         obs = self._process_obs(obs_dict)
@@ -238,9 +245,10 @@ class Sb3VecEnvWrapper(VecEnv):
         terminated = terminated.detach().cpu().numpy()
         truncated = truncated.detach().cpu().numpy()
         dones = dones.detach().cpu().numpy()
+        
         # convert extra information to list of dicts
         infos = self._process_extras(obs, terminated, truncated, extras, reset_ids)
-
+        
         # reset info for terminated environments
         self._ep_rew_buf[reset_ids] = 0
         self._ep_len_buf[reset_ids] = 0
@@ -272,14 +280,27 @@ class Sb3VecEnvWrapper(VecEnv):
         if method_name == "render":
             # gymnasium does not support changing render mode at runtime
             return self.env.render()
+
+        elif method_name=="compute_reward": # for her
+
+            env = self.env
+            while hasattr(env, "env"):
+                env = env.env
+
+            return [env.compute_reward(*method_args)] # stable baseline expect a list containing one element 
+
         else:
             # this isn't properly implemented but it is not necessary.
             # mostly done for completeness.
+            
             env_method = getattr(self.env, method_name)
+            
             return env_method(*method_args, indices=indices, **method_kwargs)
 
     def env_is_wrapped(self, wrapper_class, indices=None):  # noqa: D102
-        raise NotImplementedError("Checking if environment is wrapped is not supported.")
+        if indices is None:
+            indices = range(self.num_envs)
+        return [False for _ in indices]
 
     def get_images(self):  # noqa: D102
         raise NotImplementedError("Getting images is not supported.")
@@ -291,6 +312,7 @@ class Sb3VecEnvWrapper(VecEnv):
     def _process_obs(self, obs_dict: torch.Tensor | dict[str, torch.Tensor]) -> np.ndarray | dict[str, np.ndarray]:
         """Convert observations into NumPy data type."""
         # Sb3 doesn't support asymmetric observation spaces, so we only use "policy"
+
         obs = obs_dict["policy"]
         # note: ManagerBasedRLEnv uses torch backend (by default).
         if isinstance(obs, dict):
@@ -310,6 +332,7 @@ class Sb3VecEnvWrapper(VecEnv):
         infos: list[dict[str, Any]] = [dict.fromkeys(extras.keys()) for _ in range(self.num_envs)]
         # fill-in information for each sub-environment
         # note: This loop becomes slow when number of environments is large.
+        
         for idx in range(self.num_envs):
             # fill-in episode monitoring info
             if idx in reset_ids:
@@ -330,7 +353,13 @@ class Sb3VecEnvWrapper(VecEnv):
                         for sub_key, sub_value in value.items():
                             infos[idx]["episode"][sub_key] = sub_value
                 else:
-                    infos[idx][key] = value[idx]
+                    if isinstance(value, dict):
+                        for sub_key, sub_value in value.items():
+                            if infos[idx][key] is None:
+                                infos[idx][key] = dict()
+                            infos[idx][key][sub_key] = sub_value[idx]
+                    else:
+                        infos[idx][key] = value[idx]
             # add information about terminal observation separately
             if idx in reset_ids:
                 # extract terminal observations
