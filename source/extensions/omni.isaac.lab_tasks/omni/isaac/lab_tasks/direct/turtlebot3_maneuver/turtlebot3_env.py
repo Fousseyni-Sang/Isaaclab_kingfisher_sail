@@ -282,8 +282,8 @@ class TurtleBot3Env(DirectRLEnv):
         self._robot = Articulation(self.cfg.robot)
         self.scene.articulations["robot"] = self._robot
 
-        self.cone = RigidObject(self.cfg.cone_cfg)
-        self.scene.rigid_objects["cone"] = self.cone
+        #self.cone = RigidObject(self.cfg.cone_cfg)
+        #self.scene.rigid_objects["cone"] = self.cone
         #self._tiled_camera = TiledCamera(self.cfg.tiled_camera)
         self.cfg.terrain.num_envs = self.scene.cfg.num_envs
         self.cfg.terrain.env_spacing = self.scene.cfg.env_spacing
@@ -389,11 +389,47 @@ class TurtleBot3Env(DirectRLEnv):
             raise TypeError(f"Unsupported type for compute_reward: {type(achieved_goal)}")
 
     
-    def compute_reward_maneuver_net(self, achieved_goal, desired_goal, info={}):
+    def compute_reward_maneuver_net(self, achieved_goal, desired_goal, info={}, rew_type:str="default"):
+        """
+            type: hourglass, default, max
+        """
 
         delta_goal = achieved_goal[:, :2] - desired_goal[:, :2]
         error_bias = (1.0, 2.0) 
-        reward = self.get_reward_hourglass(delta_goal, error_bias)
+
+        if rew_type=="hourglass":
+            reward = self.get_reward_hourglass(delta_goal, error_bias)
+        elif rew_type=="max":
+            pass
+        else:
+            reward = self.get_reward_box(delta_goal, error_bias)
+
+        return reward
+
+    def get_reward_box(self, delta_goal, error_bias):
+
+        """
+            copied and adapted from: 
+            https://github.com/MelodieDANIEL/4ws_actor_critic_maneuvering/blob/main/reward_shape.ipynb
+
+            delta_goal: batch of (delta_x, delta_y), size: (batch_size, 2) the error in position along the x and y axes in the robot frame.
+            error_bias: (bias_x, bias_y) the bias to apply to the error along the x and y axes. This can be used to shape 
+            the reward to encourage certain behaviors, such as prioritizing progress along the x-axis (towards the goal) 
+            over the y-axis (cross-track error).
+
+            bias: (bias_x, bias_y) the bias to apply to the error along the x and y axes. This can be used to shape
+
+        """
+
+        if isinstance(delta_goal, torch.Tensor):
+
+            coords = delta_goal
+            bias = torch.ones_like(coords) * torch.tensor(error_bias, device=coords.device)
+            reward = -torch.linalg.norm(coords * bias, dim=1)
+        else:
+            coords = delta_goal
+            bias = np.ones_like(coords) * np.array(error_bias)
+            reward = -np.linalg.norm(coords * bias, axis=1)
 
         return reward
     
@@ -464,11 +500,11 @@ class TurtleBot3Env(DirectRLEnv):
         )
         
         current_config = torch.cat(
-            [self._robot.data.root_pos_w[:, :2], self._robot.data.heading_w.reshape(-1, 1)], dim=1
+            [self._robot.data.root_pos_w[:, :2]], dim=1
         ) 
 
         target_config = torch.cat(
-            [self._desired_pos_w[:, :2], self.desired_orientation.reshape(-1, 1)], dim=1
+            [self._desired_pos_w[:, :2]], dim=1
         ) 
         
         if isinstance(self.cfg.observation_space, int):
@@ -508,7 +544,7 @@ class TurtleBot3Env(DirectRLEnv):
         rewards = {  
             "2_goal_reached": 0*self.reward_success,
             "1_distance_progress":rew_maneuver,
-            "6_time": 0*self.reward_time,
+            "6_time": self.reward_time,
         }
         #print(f"rewards: {rewards} rew_lift_drag_ratio: {lift_drag_ratio}\n")
         # #"6_time": time_reward

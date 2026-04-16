@@ -163,6 +163,7 @@ def main():
         with torch.inference_mode():
             # agent stepping
             actions, _ = agent.predict(obs, deterministic=True)
+            
             # env stepping
             obs, rew, dones, extras = env.step(actions)
 

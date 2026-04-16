@@ -9,7 +9,7 @@ def generate_experiments_yaml():
 
     v0s = [0.5]
     num_points = 6
-    space = 5
+    space = 2
     length = 8
     width = 4
     

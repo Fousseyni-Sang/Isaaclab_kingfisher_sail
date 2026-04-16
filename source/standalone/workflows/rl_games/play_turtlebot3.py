@@ -193,6 +193,9 @@ def main():
     env.unwrapped.discriminator.load_checkpoint(checkpoint_name_acord)
     env.unwrapped.discriminator.eval()"""
     env.unwrapped.is_Training = False
+    env.unwrapped.cfg.episode_length_s = 1000 # override default max episode length for evaluation
+    num_episodes_target = args_cli.num_episode 
+
     obs = env.reset()
     if isinstance(obs, dict):
         obs = obs["obs"]
@@ -204,8 +207,7 @@ def main():
         agent.init_rnn()
 
     num_envs = env.unwrapped.num_envs 
-    env.unwrapped.cfg.max_episode_length = 500 # override default max episode length for evaluation
-    num_episodes_target = args_cli.num_episode 
+    
     episodes_finished = 0 
     # Per-env episode buffers (lists of dicts) 
     per_env_steps = [[] for _ in range(num_envs)] 
@@ -216,7 +218,8 @@ def main():
     all_metrics = [] 
     step_idx = 0 
     next_goal_idx = 0
-    env.unwrapped._desired_pos_w[:, :2] = torch.tensor(points[next_goal_idx], device=env.unwrapped._desired_pos_w.device)
+    env.unwrapped._desired_pos_w[0, :2] = torch.tensor(points[next_goal_idx], device=env.unwrapped._desired_pos_w.device)
+   
 
     print(f"\n================ Vectorized Evaluation: {num_envs} envs =================\n") 
     
@@ -234,6 +237,7 @@ def main():
             # env stepping
             obs, rew, dones, extras = env.step(actions)
 
+            print(f"\ndesired_pos: {env.unwrapped._desired_pos_w[:, :2]}, \nactions: {actions}, \nrew: {rew}, \ndone: {dones}")
             robot_pos = extras["info"]["robot_pos_w"][..., :2] # (N, 2) 
             lift_coeff = extras.get("info", {}).get("lift_coeff", torch.zeros((num_envs,), device=rew.device)) # (N,) 
             drag_coeff = extras.get("info", {}).get("drag_coeff", torch.zeros((num_envs,), device=rew.device)) # (N,) 

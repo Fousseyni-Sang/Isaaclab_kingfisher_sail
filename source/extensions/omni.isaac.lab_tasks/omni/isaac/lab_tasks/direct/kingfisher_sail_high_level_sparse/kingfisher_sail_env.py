@@ -856,7 +856,6 @@ class KingfisherSailEnv(DirectRLEnv):
             foil_joint_positions = None
 
         self._robot_system_dynamics.set_target_cmd(self.low_lvl_actions)
-
         self._robot_system_dynamics.update(
             self._robot.data.heading_w,
             self._robot.data.root_lin_vel_b,
