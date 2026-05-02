@@ -97,6 +97,7 @@ def main():
 
     # Replace the .pth extension with .onnx
     output_path = resume_path.replace(".pth", ".onnx")
+    
 
     # wrap around environment for rl-games
     rl_device = agent_cfg["params"]["config"]["device"]

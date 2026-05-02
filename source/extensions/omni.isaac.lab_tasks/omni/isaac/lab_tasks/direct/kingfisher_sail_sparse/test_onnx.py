@@ -22,7 +22,7 @@ num_envs = 1
 aerodynamics = Aerodynamics(num_envs=1, device=device, cfg=aerodynamics_cfg)
 aerodynamic_force_b = torch.zeros(num_envs, 1, 3, device=device)
 
-session = ort.InferenceSession("/home/fousseyni/asv-sawasp-fousseyni/Isaaclab_kingfisher_sail/logs/rl_games/kingfisher_direct/2025-06-30_17-57-59/nn/last_kingfisher_direct_ep_50_rew_0.5999513.onnx")
+session = ort.InferenceSession("/home/GTL/fsangare/Isaaclab_kingfisher_sail/logs/rl_games/kingfisher_direct/2025-06-30_17-57-59/nn/last_kingfisher_direct_ep_50_rew_0.5999513.onnx")
 #loaded_agent = torch.load("runs/exp1/last_kingfisher_direct_ep_200_rew_-13.527881.pth", weights_only=False)
 
 # Input name and dummy observation

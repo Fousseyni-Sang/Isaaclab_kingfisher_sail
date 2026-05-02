@@ -78,6 +78,58 @@ if spec_path==None and args_cli.model_id is not None:
     spec_path = f"outputs/ll/ll_model_{args_cli.model_id}" 
     os.environ["LL_OUTPUT_DIR"] = spec_path
 
+import numpy as np
+
+class RLGamesDictToBoxWrapper(gym.Wrapper):
+    """
+    Converts a Dict observation space into a single flat Box for RL-Games.
+    """
+
+    def __init__(self, env):
+        super().__init__(env)
+
+        assert isinstance(env.observation_space, gym.spaces.Dict), \
+            "This wrapper only supports Dict observation spaces."
+
+        self.keys = list(env.observation_space.spaces.keys())
+
+        # Flatten each subspace
+        lows = []
+        highs = []
+        for key in self.keys:
+            space = env.observation_space[key]
+            assert isinstance(space, gym.spaces.Box), \
+                f"Subspace '{key}' must be a Box."
+
+            lows.append(space.low.flatten())
+            highs.append(space.high.flatten())
+
+        low = np.concatenate(lows)
+        high = np.concatenate(highs)
+
+        # RL-Games expects gymnasium.spaces.Box
+        self.observation_space = gym.spaces.Box(
+            low=low,
+            high=high,
+            dtype=np.float32
+        )
+
+    def reset(self, **kwargs):
+        obs = self.env.reset(**kwargs)
+        return self._flatten(obs)
+
+    def step(self, action):
+        obs, reward, done, truncated, info = self.env.step(action)
+        return self._flatten(obs), reward, done, truncated, info
+
+    def _flatten(self, obs_dict):
+        """Concatenate all dict components into a single vector."""
+        parts = []
+        for key in self.keys:
+            parts.append(obs_dict[key].reshape(-1))
+        return np.concatenate(parts, dtype=np.float32)
+
+
 @hydra_task_config(args_cli.task, "rl_games_cfg_entry_point")
 def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: dict):
     """Train with RL-Games agent."""
@@ -150,6 +202,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # convert to single-agent instance if required by the RL algorithm
     if isinstance(env.unwrapped, DirectMARLEnv):
         env = multi_agent_to_single_agent(env)
+
 
     # wrap for video recording
     if args_cli.video:

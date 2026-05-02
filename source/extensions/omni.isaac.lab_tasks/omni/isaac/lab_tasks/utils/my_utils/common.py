@@ -5,6 +5,7 @@ import yaml
 import glob
 import pandas as pd
 import shutil
+import numpy as np
 
 def sample_pairs_batch(env_ids, params, device="cpu"):
     """
@@ -332,6 +333,76 @@ def compute_obs_dim(spec):
         
 
         return num_obs
+
+
+class Feasibility:
+  def __init__(self, N=11):
+    self.size = N
+    assert self.size%2==1, "size of the grid must be odd number"
+
+  def feasibility_ok(self, vx, w, feasibility_map):
+
+    """
+    vx, vy, w: tensors of shape (num_envs,) or scalars in physical units
+    feasibility_map: (10, 10, 10) int tensor with 0/1 entries
+    """
+
+    min_norm = -1
+    max_norm = 1
+
+    step = (max_norm - min_norm)/(self.size-1)
+
+    # 2. Convert normalized → grid index [0..9]
+    i = int(round((vx-min_norm)/step, 1))
+    j = int(round((w-min_norm)/step, 1))
+
+    # 3. Lookup feasibility
+    feas = feasibility_map[i, j]
+    print(f"i: {i} j: {j} --> {feas} --> {feas.bool()}")
+
+    return feas.bool()
+
+
+  def trapeze(self, left_width, right_width, height:int, stair_leaps:int=1, inverse=False, low=False):
+
+    sum = left_width + right_width
+    assert sum <=self.size, f"full width ({sum}) should be lower than map size ({self.size})"
+    assert height<=self.size, f"height ({height}) must be lower than map size ({self.size})"
+    map = torch.zeros((self.size, self.size))
+
+
+    center_j = self.size//2
+    center_i = self.size//2
+    lateral_incr = 0
+
+
+    if inverse and not low:
+      iterator = [-i for i in range(1, height+1)]
+    elif low and not inverse:
+      iterator = [i for i in range(-height, -1)]
+    else:
+      iterator = [i for i in range(0, height)]
+
+    for i in  iterator:
+
+      map[i, max(0, center_j-left_width-lateral_incr):center_j+right_width+lateral_incr+1] = 1
+      #print(map, i, lateral_incr, center_j-left_width-lateral_incr, center_j+right_width+lateral_incr+1)
+      lateral_incr += int(i % stair_leaps==0)
+    map[center_i, center_j] = 1
+    return map
+
+
+  def circle(self, radius:int):
+
+    assert radius <=1, f"radius ({radius}) must be within a unit circle"
+    map = torch.zeros((self.size, self.size))
+    x = torch.linspace(-1, 1, self.size)
+    y = torch.linspace(-1, 1, self.size)
+    X, Y = np.meshgrid(x.numpy(), y.numpy())
+    mask = (np.square(X) + np.square(Y) <= radius)
+    mask = torch.from_numpy(mask).int()
+
+    return mask
 
 
 

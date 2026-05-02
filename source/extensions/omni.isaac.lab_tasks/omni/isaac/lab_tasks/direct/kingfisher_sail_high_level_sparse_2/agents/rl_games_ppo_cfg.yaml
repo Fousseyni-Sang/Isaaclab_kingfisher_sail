@@ -44,7 +44,7 @@ params:
   load_path: '' # path to the checkpoint to load
 
   config:
-    name: kingfisher_direct_high_level_sparse
+    name: kingfisher_direct_high_level_sparse2
     env_name: rlgpu
     device: 'cuda:0'
     device_name: 'cuda:0'

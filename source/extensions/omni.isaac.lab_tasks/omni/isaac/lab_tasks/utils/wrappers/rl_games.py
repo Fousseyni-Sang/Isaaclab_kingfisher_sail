@@ -139,7 +139,35 @@ class RlGamesVecEnvWrapper(IVecEnv):
         """Returns the :attr:`Env` :attr:`observation_space`."""
         # note: rl-games only wants single observation space
         policy_obs_space = self.unwrapped.single_observation_space["policy"]
-        if not isinstance(policy_obs_space, gymnasium.spaces.Box):
+        print(f"Policy observation space: {policy_obs_space}")
+        if not isinstance(policy_obs_space, gym.spaces.Box) and not isinstance(policy_obs_space, gymnasium.spaces.Box):
+            
+            if isinstance(policy_obs_space, gym.spaces.Dict) or isinstance(policy_obs_space, gymnasium.spaces.Dict):
+                
+                import numpy as np
+                self.keys = list(policy_obs_space.keys())
+
+                # Flatten each subspace
+                lows = []
+                highs = []
+                for key in self.keys:
+                    space = policy_obs_space[key]
+                    assert (isinstance(space, gym.spaces.Box) or isinstance(space, gymnasium.spaces.Box)), \
+                        f"Subspace '{key}' must be a Box."
+
+                    if isinstance(space.low, np.ndarray) and isinstance(space.high, np.ndarray):
+                        lows.append(space.low.flatten())
+                        highs.append(space.high.flatten())
+                    else:
+                        lows.append(np.full(space.shape, space.low).flatten())
+                        highs.append(np.full(space.shape, space.high).flatten())
+
+                low = np.concatenate(lows)
+                high = np.concatenate(highs)
+
+                # RL-Games expects gymnasium.spaces.Box
+                return gym.spaces.Box(low=low, high=high, dtype=np.float32)
+
             raise NotImplementedError(
                 f"The RL-Games wrapper does not currently support observation space: '{type(policy_obs_space)}'."
                 f" If you need to support this, please modify the wrapper: {self.__class__.__name__},"
@@ -286,6 +314,10 @@ class RlGamesVecEnvWrapper(IVecEnv):
         """
         # process policy obs
         obs = obs_dict["policy"]
+
+        if isinstance(obs, dict):
+            obs = torch.cat([obs[key] for key in obs], dim=-1)
+
         feas = obs_dict.get("feas", None)
         # clip the observations
         obs = torch.clamp(obs, -self._clip_obs, self._clip_obs)

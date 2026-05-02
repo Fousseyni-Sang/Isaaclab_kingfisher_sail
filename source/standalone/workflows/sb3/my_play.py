@@ -166,7 +166,7 @@ def main():
             
             # env stepping
             obs, rew, dones, extras = env.step(actions)
-
+            print(f"\nStep: {timestep} obs: {obs} rew: {rew} dones: {dones} extras: {extras}")
             #print(obs_pub)
             obs_pub = []
             robot_pos = [] #extras["info"]["robot_pos_w"][..., :2] # (N, 2) 

@@ -154,7 +154,7 @@ tack_waypoints[0, :, :2], _ = generate_tacking_waypoints(
 angle_of_attack = torch.linspace(-180, 180, 360, device=device)
 cl, cd = aerodynamics.generate_coeffs(angle_of_attack)
 
-dir = "/home/fousseyni/asv-sawasp-fousseyni/Isaaclab_kingfisher_sail/"
+dir = "/home/GTL/fsangare/Isaaclab_kingfisher_sail/"
 # Open Aerodynamics figure:  xdg-open /tmp/cl_cd_aoa.png
 plt.figure()
 plt.plot(angle_of_attack.cpu(), cl.cpu(), '--', c='g', label="cl")

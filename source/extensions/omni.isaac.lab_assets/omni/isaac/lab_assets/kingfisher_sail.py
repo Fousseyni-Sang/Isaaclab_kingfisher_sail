@@ -18,11 +18,11 @@ from omni.isaac.lab.markers.visualization_markers import VisualizationMarkersCfg
 # Configuration
 ##/home/fousseyni/asv-saw
 
-root_path = "/mnt/gpu_storage/zrr/fsangare/asv-sawasp-fousseyni"
+root_path = "/home/GTL/fsangare"
 KINGFISHER_SAIL_CFG = ArticulationCfg(
     prim_path="{ENV_REGEX_NS}/Robot",
     spawn=sim_utils.UsdFileCfg(
-        usd_path="/mnt/ssd-storage/fsangare/asv-sawasp-fousseyni/Isaaclab_kingfisher_sail/Usd/kingfisher_sail.usd",
+        usd_path="/home/GTL/fsangare/Isaaclab_kingfisher_sail/Usd/kingfisher_sail.usd",
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             disable_gravity=False,
             rigid_body_enabled=True,

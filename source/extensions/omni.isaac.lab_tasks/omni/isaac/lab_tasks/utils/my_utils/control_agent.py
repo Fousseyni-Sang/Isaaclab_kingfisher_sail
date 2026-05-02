@@ -156,3 +156,43 @@ class LowPPOAgent(nn.Module):
             self.load_state_dict(checkpoint)
 
         self.eval()
+
+
+class AutoEncoder(nn.Module):
+  def __init__(self, indim, outdim, hdim, device="cuda:1") -> None:
+    super(AutoEncoder, self).__init__()
+    self.device = device
+
+    self.encoder = nn.Sequential(
+        nn.Linear(indim, hdim),
+        nn.ReLU(),
+        nn.Linear(hdim, hdim),
+        nn.ReLU(),
+        nn.Linear(hdim, outdim),
+    )
+
+    self.decoder = nn.Sequential(
+        nn.Linear(outdim, hdim),
+        nn.ReLU(),
+        nn.Linear(hdim, hdim),
+        nn.ReLU(),
+        nn.Linear(hdim, indim),
+        nn.Sigmoid()
+    )
+
+    self.loss_fn = nn.MSELoss()
+
+    # IMPORTANT: move model to device
+    self.to(self.device)
+
+  def forward(self, x):
+    x = self.decoder(self.encoder(x))
+
+    return x
+
+
+  def load(self, path:str):
+    self.eval()
+    checkpoint = torch.load(path, map_location=self.device, weights_only=True)
+    self.encoder.load_state_dict(checkpoint["encoder"])
+    self.decoder.load_state_dict(checkpoint["decoder"])

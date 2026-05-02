@@ -174,7 +174,7 @@ def main():
     env.unwrapped.is_Training = False
     env.unwrapped.discr_checkpoint = checkpoint_name_acord
     #env.unwrapped.discriminator_energy.load_checkpoint(checkpoint_name_acord)
-    env.unwrapped.discriminator_energy.eval()
+    #env.unwrapped.discriminator_energy.eval()
     if args_cli.episode_length is not None:
         env.unwrapped.cfg.episode_length_s = args_cli.episode_length
     
@@ -278,19 +278,20 @@ def main():
     #while simulation_app.is_running():
     current_step = 0
     
+
     while episode_cntr<num_episodes:   
         
         # run everything in inference mode
         with torch.inference_mode():
             current_step += 1
             goal_pos =  env.unwrapped._desired_pos_w[:, :2]
-            energy_context = env.unwrapped.energy_context
+            #energy_context = env.unwrapped.energy_context
 
             # convert obs to agent format
             #print(f"\nenergy: {env.unwrapped.energy_context} \ntime: {env.unwrapped.time_context} \nwind: {env.unwrapped._sail_aerodynamics.Beta_w}\n")
             obs = agent.obs_to_torch(obs)
             # agent stepping
-            
+            print(f"\nStep: {current_step} obs: {obs} feas: {feas}")
             actions = agent.get_action(obs, is_deterministic=agent.is_deterministic, feas=feas)
 
             if not any(torch.equal(goal_pos, x) for x in goal_pos_list):
@@ -300,58 +301,61 @@ def main():
                 energy_context_list.append(energy_context.clone())"""
 
             # env stepping
-            obs, rew, dones, _ = env.step(actions)
+            obs, rew, dones, extras = env.step(actions)
             if actions.shape[1]==2:
                 actions = torch.cat((actions, torch.zeros((1, 1), device=actions.device)), dim=-1)
-            aero_force = env.unwrapped._sail_aerodynamic_force_b.squeeze(0)
-            thruster_force = env.unwrapped._thruster_forces.squeeze(0)
-            lin_speed = env.unwrapped._robot.data.root_lin_vel_b
-            ang_speed = env.unwrapped._robot.data.root_ang_vel_b
-            aoa = (180/torch.pi)*env.unwrapped._sail_aerodynamics.angle_of_attack
-            app_flow_angle = (180/torch.pi)*env.unwrapped._sail_aerodynamics.apparent_flow_angle # in degree
-            true_flow_angle = (180/torch.pi)*env.unwrapped._sail_aerodynamics.true_flow_angle # in degree
-            sail = (180/torch.pi)*env.unwrapped._sail_aerodynamics.foil_angle
-            head_w = (180/torch.pi)*env.unwrapped._robot.data.heading_w
+
+            robot_pos = extras["info"]["robot_pos_w"][..., :2] # (N, 2) 
+            lift_coeff = extras.get("info", {}).get("lift_coeff", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,) 
+            drag_coeff = extras.get("info", {}).get("drag_coeff", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,) 
+            energy = extras.get("info", {}).get("energy", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,) 
+            episode_energy = extras.get("info", {}).get("episode_energy", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,) 
+            max_available_energy = extras.get("info", {}).get("max_available_energy", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,) 
+            ratio_energy_usage = extras.get("info", {}).get("ratio_energy_usage", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,) 
+            rew_progress = extras.get("info", {}).get("reward_progress", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,) 
+            rew_energy = extras.get("info", {}).get("reward_energy", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,) 
+            rew_backward = extras.get("info", {}).get("reward_backward", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,) 
+            rew_aero = extras.get("info", {}).get("reward_aero", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,) 
+            rew_acord = extras.get("info", {}).get("reward_acord", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,) 
+            bearing = extras.get("info", {}).get("bearing", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,) 
+            distance = extras["info"]["distance"] # (N,) 
+            aoa = extras.get("info", {}).get("aoa", torch.zeros((args_cli.num_envs, ), device=rew.device)) # (N,) 
+            sail_angle = (180/torch.pi)*extras.get("info", {}).get("sail_angle", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,) 
+            aero_force = extras.get("info", {}).get("aero_force", torch.zeros((args_cli.num_envs, 1, 6), device=rew.device)) # (N, 6) 
+            max_aero_force = extras.get("info", {}).get("max_aero_force", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,) 
+            thruster_force = extras.get("info", {}).get("thruster_force", torch.zeros((args_cli.num_envs, 1, 6), device=rew.device)) # (N, 6) 
+            lin_speed = extras["info"]["lin_vel_b"] # (N, 3)
+            ang_speed = extras["info"]["ang_vel_b"] # (N, 3)
+            app_flow_angle = (180/torch.pi)*extras["info"].get("app_flow_angle", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,)
+            true_flow_angle = (180/torch.pi)*extras["info"].get("true_flow_angle", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,)
+            norm_error_lin = extras["info"]["norm_error_lin"] # (N,) 
+            norm_error_ang = extras["info"]["norm_error_ang"] # (N,) 
+            goal_pos = extras["info"]["goal_pos"] # (N, 2) 
+            norm_error_cat=torch.cat( [norm_error_lin, norm_error_ang.reshape(-1, 1)], dim=-1 )
+            head_w = (180/torch.pi)*extras["info"].get("heading_w", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,)
+            lift_force_b = extras["info"].get("lift_force_b", torch.zeros((args_cli.num_envs, 3), device=rew.device)) # (N, 3)
+            drag_force_b = extras["info"].get("drag_force_b", torch.zeros((args_cli.num_envs, 3), device=rew.device)) # (N, 3)
+
             head_wrt_wind = torch.abs(head_w - (180/torch.pi)*env.unwrapped._sail_aerodynamics.Beta_w)
-            lift = env.unwrapped._sail_aerodynamics.flow_lift_b
-            drag = env.unwrapped._sail_aerodynamics.flow_drag_b
-            ld_ratio = torch.norm(lift, dim=-1)/torch.norm(drag, dim=-1) #torch.abs(aero_force[:, 0]/(aero_force[:, 1]+1e-6))
+            
+            #ld_ratio = torch.norm(lift, dim=-1)/torch.norm(drag, dim=-1) #torch.abs(aero_force[:, 0]/(aero_force[:, 1]+1e-6))
             robot_pos = env.unwrapped._robot.data.root_link_pos_w[:, :2]
             
-            energy = env.unwrapped.energy
-            episode_energy = env.unwrapped.episode_energy
-            max_available_energy = env.unwrapped.max_available_episode_energy
-            ratio_energy_usage = env.unwrapped.ratio_energy_usage
-            lift_coeff = env.unwrapped._sail_aerodynamics.lift_coeff
-            drag_coeff = env.unwrapped._sail_aerodynamics.drag_coeff
-            sum_angle = sail + app_flow_angle + aoa
-            desired_pos = env.unwrapped.desired_pos_b
-            rew_progress = env.unwrapped.reward_progress
+        
+            sum_angle = sail_angle + app_flow_angle + aoa
+            
             rew_bearing = env.unwrapped.reward_bearing
             rew_energy = env.unwrapped.reward_energy
             rew_backward = env.unwrapped.reward_backward
             reward_aero = env.unwrapped.reward_aero
             reward_acord = env.unwrapped.reward_acord
-            loss = env.unwrapped.loss_discrim_energy
-            max_aero_force = env.unwrapped.max_aero_force.squeeze(0)
-            acord_prediction_logs = env.unwrapped.acord_prediction_logs
-            predicted_context = acord_prediction_logs[:, 0]
+            
+
             world_wind_direc = env.unwrapped._sail_aerodynamics.Beta_w
-            sent_reward = env.unwrapped.sent_reward
-
-            distance  = env.unwrapped.distance
-            bearing = env.unwrapped.bearing
-
-            norm_error_lin = env.unwrapped.norm_error_lin
-            norm_error_ang = env.unwrapped.norm_error_ang.reshape(-1, 1)
-            send_goal =  env.unwrapped.send_goals.clone().float()
-            norm_error_cat = torch.cat((norm_error_lin, norm_error_ang), dim=-1)
             
             lin_target_wrench = env.unwrapped.lin_target_wrench
             ang_target_wrench = env.unwrapped.ang_target_wrench
             #print(loss, rew_backward)
-            loss_disc = torch.tensor([loss], device=rew_backward.device) if loss is not None else torch.zeros_like(rew_energy)
-            tack_wpts = env.unwrapped.tack_waypoints
 
             """ll_lvl_pos_w = env.unwrapped.ll_exp_buf.rb_pos_w.clone()
             ll_lvl_lin_ang_vel_b = env.unwrapped.ll_exp_buf.rb_lin_ang_vel_b.clone()
@@ -402,7 +406,7 @@ def main():
                 reward_acord_list.append(reward_acord_logs[:-1].clone())
                 reward_aero_list.append(reward_aero_logs[:-1].clone())
                 acord_prediction_logs_list.append(acord_prediction_logs_logs[:-1].clone())
-                energy_context_list.append(energy_context_logs[:-1].clone())
+                #energy_context_list.append(energy_context_logs[:-1].clone())
                 norm_error_logs_list.append(norm_error_logs[:-1].clone())
                 
                 # Reset buffers for next episode
@@ -426,12 +430,12 @@ def main():
                 obs = obs["obs"]
             dyn_ros_node.publish(obs=obs, actions=actions, total_rew=rew, aero_force=aero_force, thruster_force=thruster_force, 
                             lin_vel_b=lin_speed, ang_vel_b=ang_speed, angle_of_attack=aoa, app_flow_angle=app_flow_angle, true_flow_angle=true_flow_angle, 
-                            sail_angle=sail, heading_w=head_w, head_wrt_wind=head_wrt_wind, lift_drag_ratio=ld_ratio, robot_pos_w=robot_pos, 
-                            goal_pos_w=goal_pos, energy=energy, episode_energy=episode_energy, lift_vec=lift, drag_vec=drag, lift_coeff=lift_coeff, 
-                            drag_coeff=drag_coeff, sum_angle=sum_angle, desired_pos_b=desired_pos, rew_progress=rew_progress, rew_bearing=rew_bearing, 
-                            rew_energy=rew_energy, rew_backward=rew_backward, loss_disc=loss_disc, tack_wpts=tack_wpts, energy_context=energy_context, 
-                            predicted_context=predicted_context, norm_error_cat=norm_error_cat, world_wind_direc=world_wind_direc, send_goal=send_goal, 
-                            sent_reward=sent_reward, lin_target_wrench=lin_target_wrench, ang_target_wrench=ang_target_wrench)
+                            sail_angle=sail_angle, heading_w=head_w, head_wrt_wind=head_wrt_wind, robot_pos_w=robot_pos, 
+                            goal_pos_w=goal_pos, energy=energy, episode_energy=episode_energy, lift_vec=lift_force_b, drag_vec=drag_force_b, lift_coeff=lift_coeff, 
+                            drag_coeff=drag_coeff, sum_angle=sum_angle, rew_progress=rew_progress, rew_bearing=rew_bearing, 
+                            rew_energy=rew_energy, rew_backward=rew_backward, 
+                            norm_error_cat=norm_error_cat, world_wind_direc=world_wind_direc,
+                            lin_target_wrench=lin_target_wrench, ang_target_wrench=ang_target_wrench)
             
             lift_coeff_logs[step] = lift_coeff.clone().float()
             drag_coeff_logs[step] = drag_coeff.clone().float()
@@ -448,7 +452,7 @@ def main():
             #print(f"actions: {actions.shape} actions_logs: {actions_logs[step, 0, :].shape}")
             actions_logs[step, 0, :] = torch.tensor([actions[0, 0].clone().float(), actions[0, 1].clone().float(), 
                                             actions[0, 2].clone().float() ], device=actions_logs.device)
-            sail_angle_logs[step] = sail.clone().float()
+            sail_angle_logs[step] = sail_angle.clone().float()
             aero_force_logs[step] = aero_force.clone().float()
             max_aero_force_logs[step] = max_aero_force.clone().float()
             thruster_force_logs[step] = thruster_force.clone().float()
@@ -457,8 +461,8 @@ def main():
             ratio_energy_usage_logs[step] = ratio_energy_usage.clone().float()
             reward_aero_logs[step] = reward_aero.clone().float()
             reward_acord_logs[step] = reward_acord.clone().float()
-            acord_prediction_logs_logs[step] = acord_prediction_logs.clone().float()
-            energy_context_logs[step] = energy_context.clone().float()
+    
+            #energy_context_logs[step] = energy_context.clone().float()
             norm_error_logs[step, 0, 0:2], norm_error_logs[step, 0, 2] = norm_error_lin.clone().float(), norm_error_ang.clone().float()
             
     # Cleanup
@@ -470,15 +474,15 @@ def main():
     return all_metrics, trajectories_list, lift_coeff_list, drag_coeff_list, goal_pos_list, env, episode_lengths_list, \
                 energy_list, reward_progress_list, reward_energy_list, reward_backward_list, total_reward_list, bearing_list, \
                 distance_list, aoa_list, app_wind_direc_list, true_wind_direc_list, actions_list, sail_angle_list, aero_force_list, max_aero_force_list, \
-                thruster_force_list, episode_energy_list, max_available_energy_list, ratio_energy_usage_list, energy_context_list, \
-                reward_acord_list, reward_aero_list, acord_prediction_logs_list, norm_error_logs_list
+                thruster_force_list, episode_energy_list, max_available_energy_list, ratio_energy_usage_list, \
+                reward_acord_list, reward_aero_list, norm_error_logs_list
    
 if __name__ == "__main__":
     metrics_list, trajectories_list, lift_coeff_list, drag_coeff_list, goal_pos_list, env, episode_lengths_list, energy_list, \
     reward_progress_list, reward_energy_list, reward_backward_list, total_reward_list, bearing_list, distance_list, aoa_list, \
     app_wind_direc_list, true_wind_direc_list, actions_list, sail_angle_list, aero_force_list, max_aero_force_list, thruster_force_list, \
-    episode_energy_list, max_available_energy_list, ratio_energy_usage_list, energy_context_list, reward_acord_list, \
-    reward_aero_list, acord_prediction_logs_list, norm_error_logs_list = main()
+    episode_energy_list, max_available_energy_list, ratio_energy_usage_list, reward_acord_list, \
+    reward_aero_list, norm_error_logs_list = main()
 
     import pandas as pd
     import os

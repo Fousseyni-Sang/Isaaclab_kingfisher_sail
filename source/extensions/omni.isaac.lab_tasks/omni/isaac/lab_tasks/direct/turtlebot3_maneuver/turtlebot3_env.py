@@ -56,11 +56,11 @@ class TurtleBot3EnvCfg(DirectRLEnvCfg):
     decimation = 3
     step_dt = physics_dt * decimation  # 20 Hz
     action_space = 2 #gym.spaces.Box(low=-1, high=1, shape=(2, ), dtype=np.float32)
-    observation_space = 16 
+    observation_space = 8
     """gym.spaces.Dict({
-                        "observation": gym.spaces.Box(low=-1, high=1, shape=(16, ), dtype=np.float32), 
-                        "achieved_goal": gym.spaces.Box(low=np.array([-np.inf, -np.inf, -np.pi]), high=np.array([np.inf, np.inf, np.pi]), shape=(3, ), dtype=np.float32), # [x, y, theta]
-                        "desired_goal": gym.spaces.Box(low=np.array([-np.inf, -np.inf, -np.pi]), high=np.array([np.inf, np.inf, np.pi]), shape=(3, ), dtype=np.float32),  # [x, y, theta]
+                        "observation": gym.spaces.Box(low=-1, high=1, shape=(8, ), dtype=np.float32), 
+                        "achieved_goal": gym.spaces.Box(low=np.array([-np.inf, -np.inf]), high=np.array([np.inf, np.inf]), shape=(2, ), dtype=np.float32), # [x, y, theta]
+                        "desired_goal": gym.spaces.Box(low=np.array([-np.inf, -np.inf]), high=np.array([np.inf, np.inf]), shape=(2, ), dtype=np.float32),  # [x, y, theta]
                     })"""
     state_space = 0
     debug_vis = True
@@ -125,8 +125,8 @@ class TurtleBot3EnvCfg(DirectRLEnvCfg):
     max_available_energy = max_energy
     max_robot_speed = 1.5 # Max speed for energy optimization
 
-    lin_velocity_command_scale = 0.4 # Scale for the velocity commands output by the policy
-    ang_velocity_command_scale = 1.5
+    lin_velocity_command_scale = 0.15 # Scale for the velocity commands output by the policy
+    ang_velocity_command_scale = 0.15 # Scale for the angular velocity commands output by the policy
     # reward scales
     distance_reward_scale = 0.0
     distance_progress_reward_scale = 1.4 #2 #0.5 #30 #5 # 6 too much
@@ -150,21 +150,27 @@ class TurtleBot3EnvCfg(DirectRLEnvCfg):
     # Environment
     min_target_distance = 5.0 
     max_target_distance = 10.0
-    min_target_bearing =  45*torch.pi/180 #-torch.pi / 2
-    max_target_bearing = 120*torch.pi/180 #torch.pi / 2
+    min_target_bearing =  -180*torch.pi/180 #-torch.pi / 2
+    max_target_bearing = 180*torch.pi/180 #torch.pi / 2
     max_cross_track = 8.0
 
-
+import random
 class TwistToWheels:
     def __init__(self, wheel_radius=0.035, wheel_base=0.23):
+        
         self.r = wheel_radius
         self.b = wheel_base
+        #self.reset_base()
 
     def convert(self, vx:torch.Tensor, wz:torch.Tensor):
         # Compute wheel angular velocities (rad/s)
         w_l = (vx - 0.5 * self.b * wz) / self.r
         w_r = (vx + 0.5 * self.b * wz) / self.r
         return torch.stack([w_l, w_r], dim=1)
+    
+    def reset_base(self):
+
+        self.b = random.normalvariate(self.b, sigma=0.03)
 
 
 class TurtleBot3Env(DirectRLEnv):
@@ -194,10 +200,10 @@ class TurtleBot3Env(DirectRLEnv):
             ]
         }
         # Get the link ids
-        self.base_link_id, _ = self._robot.find_bodies("a__namespace_base_link")
+        self.base_link_id, _ = self._robot.find_bodies("a__namespace_base_link") # chassis_link for carter, base_link for turtlebot
         
-        self.left_wheel_joint_id, _ = self._robot.find_joints("a__namespace_wheel_left_joint")
-        self.right_wheel_joint_id, _ = self._robot.find_joints("a__namespace_wheel_right_joint")
+        self.left_wheel_joint_id, _ = self._robot.find_joints("a__namespace_wheel_left_joint") # left_wheel for carter
+        self.right_wheel_joint_id, _ = self._robot.find_joints("a__namespace_wheel_right_joint") # right_wheel for carter
 
         self._robot_mass = self._robot.root_physx_view.get_masses()[0].sum()
         self._gravity_magnitude = torch.tensor(self.sim.cfg.gravity, device=self.device).norm()
@@ -305,11 +311,16 @@ class TurtleBot3Env(DirectRLEnv):
         
         self._actions = actions.clone().clamp(-1.0, 1.0)
 
-        lin_velocity = self._actions[:, 0] * self.cfg.lin_velocity_command_scale
-        ang_velocity = self._actions[:, 1] * self.cfg.ang_velocity_command_scale
+        lin_velocity = self._actions[:, 0]*2
+        ang_velocity = self._actions[:, 1]*2
 
-        self.wheels_joint_cmds = self.twist_to_wheels.convert(lin_velocity, ang_velocity) 
+        #print(f"actions: {self._actions} lin_velocity: {lin_velocity} ang_velocity: {ang_velocity}\n")
 
+        self.wheels_joint_cmds = self.twist_to_wheels.convert(lin_velocity, ang_velocity) # clamp to max wheel speed 
+        
+        #print(f"\n[DEBUG] wheel cmds: {self.wheels_joint_cmds}\n lin_velocity: {lin_velocity} ang_velocity: {ang_velocity}\n")
+        #print(f"\n[DEBUG] robot_vel: {torch.max(self._robot.data.root_lin_vel_b[:, :2])} angular: {torch.max(self._robot.data.root_ang_vel_b[:, 2])}\n")
+        #print(f"\n[DEBUG] actions: {self._actions}")
         #=====================================================================================================#
 
     def get_info(self):
@@ -351,12 +362,12 @@ class TurtleBot3Env(DirectRLEnv):
 
         return info   
     
-    
+        
     def _apply_action(self):
         # only apply thruster forces if they are not zero, otherwise it disables external previous forces.
 
         self._robot.set_joint_velocity_target(target=self.wheels_joint_cmds, joint_ids=[self.left_wheel_joint_id[0], self.right_wheel_joint_id[0]])
-
+        #print(f"wheel cmds: {self.wheels_joint_cmds}\n")
 
     def compute_reward(self, achieved_goal, desired_goal, info={}, is_her=True):
         # Case 1: HER → NumPy arrays
@@ -395,7 +406,7 @@ class TurtleBot3Env(DirectRLEnv):
         """
 
         delta_goal = achieved_goal[:, :2] - desired_goal[:, :2]
-        error_bias = (1.0, 2.0) 
+        error_bias = (1.0, 1.0) 
 
         if rew_type=="hourglass":
             reward = self.get_reward_hourglass(delta_goal, error_bias)
@@ -425,11 +436,11 @@ class TurtleBot3Env(DirectRLEnv):
 
             coords = delta_goal
             bias = torch.ones_like(coords) * torch.tensor(error_bias, device=coords.device)
-            reward = -torch.linalg.norm(coords * bias, dim=1)
+            reward = -torch.linalg.norm(coords * bias, dim=1)/self.initial_distance
         else:
             coords = delta_goal
             bias = np.ones_like(coords) * np.array(error_bias)
-            reward = -np.linalg.norm(coords * bias, axis=1)
+            reward = -np.linalg.norm(coords * bias, axis=1)/self.initial_distance.cpu().numpy()
 
         return reward
     
@@ -464,7 +475,6 @@ class TurtleBot3Env(DirectRLEnv):
 
         return reward
 
-
     def _get_observations(self) -> dict:
 
         # Observations
@@ -487,13 +497,11 @@ class TurtleBot3Env(DirectRLEnv):
         base_obs = torch.cat(
             [
                 self._actions,  # 2
-                self._robot.data.root_lin_vel_b[:, :2]/self.cfg.max_robot_speed,  # 2
+                self._robot.data.root_lin_vel_b[:, :2],  # 2
                 self._robot.data.root_ang_vel_b[:, 2].unsqueeze(1),  # 1
                 torch.cos(self.bearing).unsqueeze(1),  # 1
                 torch.sin(self.bearing).unsqueeze(1),  # 1
-                torch.cos(self._robot.data.heading_w).unsqueeze(1),  # 1
-                torch.sin(self._robot.data.heading_w).unsqueeze(1),  # 1
-                (self.distance/self.initial_distance).unsqueeze(1),  # 1
+                (self.distance).unsqueeze(1),  # 1
 
             ],
             dim=1,
@@ -515,8 +523,9 @@ class TurtleBot3Env(DirectRLEnv):
                 "achieved_goal": current_config, # 3
                 "desired_goal":target_config, # 3
             }
-    
-        observations = {"policy": obs}
+
+        #print(f"[DEBUG] obs: {base_obs}")
+        observations = {"policy": base_obs}
 
         if not self.is_Training:
             self.extras.update({
@@ -539,14 +548,24 @@ class TurtleBot3Env(DirectRLEnv):
         rew_maneuver = self.compute_reward_maneuver_net(current_config, target_config)
         self.reward_progress = reward_progress.clone()
         self.reward_success = goal_reward.clone()
-        self.reward_time[:] = time_reward
+        self.reward_time[:] = self.cfg.time_penalty_scale * self.cfg.step_dt
+
+        # Penalize bearing errors
+        bearing_penalty = torch.exp(self.cfg.beargin_penalty_coef * torch.abs(self.bearing)) - 1
+        bearing_penalty = self.cfg.bearing_penalty_scale * bearing_penalty
+
+        vel_x = self._robot.data.root_lin_vel_b[:, 0]
+        self.reward_backward[vel_x < 0] = -1
 
         rewards = {  
             "2_goal_reached": 0*self.reward_success,
             "1_distance_progress":rew_maneuver,
             "6_time": self.reward_time,
+            "5_bearing_penalty": bearing_penalty,
+            "4_backwards": self.reward_backward,
+
         }
-        #print(f"rewards: {rewards} rew_lift_drag_ratio: {lift_drag_ratio}\n")
+        #print(f"rewards: {rewards}\n")
         # #"6_time": time_reward
         self.previous_distance = self.distance.clone()
         self.previous_robot_pos = self._robot.data.root_pos_w.clone()
@@ -617,6 +636,7 @@ class TurtleBot3Env(DirectRLEnv):
         extras = dict()
 
         self.extras["log"].update(extras)
+        #self.twist_to_wheels.reset_base()
 
         
         self._robot.reset(env_ids)

@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 # File path to the Naca profile downloaded from xfoil
-filepath = "/home/fousseyni/asv-sawasp-fousseyni/Usd/naca0018.csv"
+filepath = "/home/GTL/fsangare/Isaaclab_kingfisher_sail/naca0018.csv"
 df = pd.read_csv(filepath, skiprows=8, nrows=201)
 #print(df.head)
 
@@ -26,7 +26,7 @@ xfoil.Re = 200000
 xfoil.max_iter = 100
 a, cl, cd, cm, co = xfoil.aseq(-20, 20, 1)
 
-dir = "/home/fousseyni/asv-sawasp-fousseyni/Isaaclab_kingfisher_sail/"
+dir = "/home/GTL/fsangare/Isaaclab_kingfisher_sail/"
 
 plt.plot(a, cl, label="Cl")
 plt.plot(a, cd, label="Cd")

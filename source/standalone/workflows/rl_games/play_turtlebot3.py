@@ -217,9 +217,9 @@ def main():
     per_env_episode_lengths = [] 
     all_metrics = [] 
     step_idx = 0 
-    next_goal_idx = 0
+    next_goal_idx = 1
     env.unwrapped._desired_pos_w[0, :2] = torch.tensor(points[next_goal_idx], device=env.unwrapped._desired_pos_w.device)
-   
+    print(f"\ndesired_pos: {env.unwrapped._desired_pos_w[:, :2]} points: {points} \n")
 
     print(f"\n================ Vectorized Evaluation: {num_envs} envs =================\n") 
     
@@ -237,7 +237,7 @@ def main():
             # env stepping
             obs, rew, dones, extras = env.step(actions)
 
-            print(f"\ndesired_pos: {env.unwrapped._desired_pos_w[:, :2]}, \nactions: {actions}, \nrew: {rew}, \ndone: {dones}")
+            
             robot_pos = extras["info"]["robot_pos_w"][..., :2] # (N, 2) 
             lift_coeff = extras.get("info", {}).get("lift_coeff", torch.zeros((num_envs,), device=rew.device)) # (N,) 
             drag_coeff = extras.get("info", {}).get("drag_coeff", torch.zeros((num_envs,), device=rew.device)) # (N,) 
@@ -271,8 +271,9 @@ def main():
 
             # ROS publish (throttled) 
             if args_cli.ros: #  and (step_idx % args_cli.ros_publish_interval == 0): 
+                obs_pub = torch.cat([obs[key] for key in obs], dim=-1) if isinstance(obs, dict) else obs 
                 dyn_ros_node.publish( 
-                    obs=obs,
+                    obs=obs_pub,
                     actions=actions, 
                     total_rew=rew, 
                     aero_force=aero_force, 
@@ -504,14 +505,17 @@ def main():
 
     df.to_csv(os.path.join(output_dir, "feasibility_map.csv"), index=False)
     '''
-    df = pd.DataFrame(rows)
-    df.to_csv(os.path.join(output_dir, "all_steps.csv"), index=False)
+    feasibility = extras["info"].get("feasibility_map", None)
+    if feasibility is not None:
 
-    feasibility = extras["info"]["feasibility_map"]   # shape (10,10,10) or (10,10)
-    feasibility_flattened = feasibility.reshape(-1)               # shape (1000,) or (100,)
+        df = pd.DataFrame(rows)
+        df.to_csv(os.path.join(output_dir, "all_steps.csv"), index=False)
 
-    df = pd.DataFrame({"feasible": feasibility_flattened})
-    df.to_csv(os.path.join(output_dir, "feasibility_map.csv"), index=False)
+        # shape (10,10,10) or (10,10)
+        feasibility_flattened = feasibility.reshape(-1)               # shape (1000,) or (100,)
+
+        df = pd.DataFrame({"feasible": feasibility_flattened})
+        df.to_csv(os.path.join(output_dir, "feasibility_map.csv"), index=False)
 
 
     print("[INFO] Evaluation complete.")

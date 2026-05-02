@@ -33,7 +33,7 @@ from .direct_rl_env_cfg import DirectRLEnvCfg
 from .ui import ViewportCameraController
 from .utils.spaces import sample_space, spec_to_gym_space
 
-
+from time import time
 class DirectRLEnv(gym.Env):
     """The superclass for the direct workflow to design environments.
 
@@ -308,6 +308,7 @@ class DirectRLEnv(gym.Env):
         Returns:
             A tuple containing the observations, rewards, resets (terminated and truncated) and extras.
         """
+        start = time()
         action = action.to(self.device)
         # add action noise
         if self.cfg.action_noise_model:
@@ -371,6 +372,8 @@ class DirectRLEnv(gym.Env):
         if self.cfg.observation_noise_model:
             self.obs_buf["policy"] = self._observation_noise_model.apply(self.obs_buf["policy"])
 
+        end = time()
+        #print(f"[TIME] Time taken for one micro step: {end - start:.3f} seconds")
         # return observations, rewards, resets and extras
         return self.obs_buf, self.reward_buf, self.reset_terminated, self.reset_time_outs, self.extras
 
