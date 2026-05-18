@@ -29,7 +29,7 @@ parser.add_argument("--episode_length", type=int, default=None, help="length of 
 "If None, use the default from the task config.")
 parser.add_argument("--wind_direction", type=float, default=180, help="direction of the true wind in degree.")
 parser.add_argument("--wind_speed", type=float, default=5, help="speed of the true wind in degree.")
-parser.add_argument("--num_episode", type=int, default=10, help="number of episodes for evaluation.")
+parser.add_argument("--num_episode", type=int, default=100, help="number of episodes for evaluation.")
 parser.add_argument("--feas_map", action="store_true", default=False, help="whether add or not the feasibility map.")
 
 # append AppLauncher cli args
@@ -291,9 +291,9 @@ def main():
             #print(f"\nenergy: {env.unwrapped.energy_context} \ntime: {env.unwrapped.time_context} \nwind: {env.unwrapped._sail_aerodynamics.Beta_w}\n")
             obs = agent.obs_to_torch(obs)
             # agent stepping
-            print(f"\nStep: {current_step} obs: {obs} feas: {feas}")
+            #print(f"\nStep: {current_step} obs: {obs} feas: {feas}")
             actions = agent.get_action(obs, is_deterministic=agent.is_deterministic, feas=feas)
-
+            value = agent.get_action_values(obs)
             if not any(torch.equal(goal_pos, x) for x in goal_pos_list):
                 goal_pos_list.append(goal_pos.clone())
 
@@ -367,6 +367,7 @@ def main():
             episode_length = step.max().item() + 1
             if current_step%200==0:
                 print(f"bearing: {bearing} goal: {goal_pos}, distance: {env.unwrapped.distance}")
+                print(f"value: {value}")
                 #print(f"\nforce_aero: {aero_force}\nlift: {lift} lift_coeff: {lift_coeff} \ndrag: {drag} drag_coeff: {drag_coeff}") 
                 #print(f"rew_aero: {reward_aero} \nrew_prog: {rew_progress} \ncontext: {energy_context} \npredicted_context: {predicted_context}")
                 pass
@@ -375,7 +376,7 @@ def main():
                 
                 episode_lengths_list.append(current_step)
                 episode_metrics = env.unwrapped.extras["log"]
-                print(f"episode: {episode_cntr} curr: {current_step} real_step: {step} dones: {dones}")
+                #print(f"episode: {episode_cntr} curr: {current_step} real_step: {step} dones: {dones}")
                 episode_cntr += 1
                 current_step = 0
                 if isinstance(episode_metrics, dict):

@@ -66,14 +66,14 @@ class KingfisherSailEnvWindow(BaseEnvWindow):
 @configclass
 class KingfisherSailEnvCfg(DirectRLEnvCfg):
     # env
-    episode_length_s = 30.0 #30
+    episode_length_s = 100.0 #30
     physics_dt = 1 / 60.0  # 60 Hz
     decimation = 3
     decimation_low_level = 3
     step_dt = physics_dt * decimation  # 20 Hz
     action_space = 3 # [vx, vy, w] in the robot frame, normalized to [-1, 1]
     observation_space = gym.spaces.Dict({
-                        "observation": gym.spaces.Box(low=-1, high=1, shape=(16, ), dtype=np.float32), 
+                        "observation": gym.spaces.Box(low=-1, high=1, shape=(11, ), dtype=np.float32), 
                         #"feasibility_map":gym.spaces.Box(low=0, high=1, shape=(4, ), dtype=np.float32),
                         #"achieved_goal": gym.spaces.Box(low=np.array([-np.inf, -np.inf, -np.pi]), high=np.array([np.inf, np.inf, np.pi]), shape=(3, ), dtype=np.float32), # [x, y, theta]
                         #"desired_goal": gym.spaces.Box(low=np.array([-np.inf, -np.inf, -np.pi]), high=np.array([np.inf, np.inf, np.pi]), shape=(3, ), dtype=np.float32),  # [x, y, theta]
@@ -652,25 +652,42 @@ class KingfisherSailEnv(DirectRLEnv):
         # system 4 is positive velocity constraint: vx must be positive, but w can take any value within the action space limits, vy is set to 0
         is_system_4 = (self.current_system_id_idx == 4) 
 
-        # enforce system 1 constraints: w must be 0
-        min_radius = 1.0
+        
+        min_radius = 6.0
+        #lin_vel_b[:, 0] = lin_vel_b[:, 0].clamp(min=0.0)
         max_ang_vel = torch.abs(lin_vel_b[:, 0]) / min_radius
-        ang_vel_b[is_system_1, 2] = ang_vel_b[is_system_1, 2].clamp(max=max_ang_vel[is_system_1])
+        ang_vel_b[:, 2] = ang_vel_b[:, 2].clamp(max=max_ang_vel, min=-max_ang_vel) # enforce radius constraint 
+        lin_vel_b[:, 1] = 0.0
+        
+        
+        # system 0 has no constraints, so we don't need to do anything for it
 
-        # enforce system 2 constraints: vy must be 0
+        # enforce system 1 constraints: R must be above threshold 1.0
+        """min_radius = 3.0
+        lin_vel_b[is_system_1, 0] = lin_vel_b[is_system_1, 0].clamp(min=0.0)
+        max_ang_vel = torch.abs(lin_vel_b[:, 0]) / min_radius
+        ang_vel_b[is_system_1, 2] = ang_vel_b[is_system_1, 2].clamp(max=max_ang_vel[is_system_1], min=-max_ang_vel[is_system_1]) 
+
+        # enforce system 2 constraints: vy must be 0, no constraint on radius thus w
         lin_vel_b[is_system_2, 1] = 0.0
 
-        # enforce system 3 constraints: vy must be 0 and radius must be above threshold
+        # enforce system 3 constraints: vy must be 0 and radius must be above threshold i.e. max angular velocity must be below threshold
         lin_vel_b[is_system_3, 1] = 0.0
-        radius_constraint_mask = (radius >= 0.5)
-        ang_vel_b[is_system_3 & ~radius_constraint_mask, 2] = 0.0
-
-        # enforce system 4 constraints: vx must be positive
+        min_radius = 3.0
+        max_ang_vel = torch.abs(lin_vel_b[:, 0]) / min_radius
+        ang_vel_b[is_system_3, 2] = ang_vel_b[is_system_3, 2].clamp(max=max_ang_vel[is_system_3], min=-max_ang_vel[is_system_3])
+        
+        # enforce system 4 constraints: vx must be positive, vy=0, small constraint on w to avoid very large angular velocities at low speeds
         lin_vel_b[is_system_4, 0] = lin_vel_b[is_system_4, 0].clamp(min=0.0)
         lin_vel_b[is_system_4, 1] = 0.0
+        min_radius = 1.0
+        max_ang_vel = torch.abs(lin_vel_b[:, 0]) / min_radius
+        ang_vel_b[is_system_4, 2] = ang_vel_b[is_system_4, 2].clamp(max=max_ang_vel[is_system_4], min=-max_ang_vel[is_system_4])
 
-
-        print(f"\nRadius: {radius} \nSystem ID: {self.current_system_id_idx} \nLin Vel B: {lin_vel_b} \nAng Vel B: {ang_vel_b}")
+        
+        """
+        radius_after = lin_vel_b[:, 0].abs()/(torch.abs(ang_vel_b[:, 2]) + 1e-5)
+        #print(f"\nRadius before: {radius} \nRadius after: {radius_after} \nSystem ID: {self.current_system_id_idx} \nLin Vel B: {lin_vel_b} \nAng Vel B: {ang_vel_b}")
         # 1) Transform target velocities from body frame to world frame
         lin_vel_w = transform_points(lin_vel_b.reshape(-1, 1, 3), quat=self._robot.data.root_link_state_w[:, 3:7], pos=None).squeeze(1)
         ang_vel_w = transform_points(ang_vel_b.reshape(-1, 1, 3), quat=self._robot.data.root_link_state_w[:, 3:7], pos=None).squeeze(1)
@@ -702,6 +719,15 @@ class KingfisherSailEnv(DirectRLEnv):
 
         self._robot.write_root_com_velocity_to_sim(root_velocity=self.root_velocities)
 
+    def compute_reward_heading(self, achieved_goal, desired_goal):
+
+        heading_diff = achieved_goal[:, 2] - desired_goal[:, 2]
+        heading_error = torch.abs(torch.atan2(torch.sin(heading_diff), torch.cos(heading_diff)))
+        distance_weight = (1-torch.tanh((self.distance/self.initial_distance)/0.3)) # distance weight increasing when distance gets lower
+        reward_heading = -distance_weight*(heading_error/torch.pi) # heading matters more when we are close to the goal, less when we are far, and is always between -1 and 0
+
+        return reward_heading
+    
     def compute_reward(self, achieved_goal, desired_goal, info={}):
 
         alpha = 0.5
@@ -726,10 +752,98 @@ class KingfisherSailEnv(DirectRLEnv):
             norm_pos_error = (pos_error-self.cfg.min_target_distance)/(self.cfg.max_target_distance-self.cfg.min_target_distance)
             heading_diff = ag[:, 2] - dg[:, 2]
             heading_error = torch.atan2(torch.sin(heading_diff), torch.cos(heading_diff)).abs()
-            success = 100*torch.logical_and(pos_error <= self.cfg.goal_reached_threshold, heading_error<=self.cfg.bearing_reached_threshold).float()
-            return -alpha*norm_pos_error,  success, - (1-alpha)
+            success = 1000*torch.logical_and(pos_error <= self.cfg.goal_reached_threshold, heading_error<=self.cfg.bearing_reached_threshold).float()
+            reward_heading = torch.where(pos_error <= self.cfg.goal_reached_threshold, -heading_error/torch.pi, torch.zeros_like(heading_error))
+            return -alpha*norm_pos_error,  success, - (1-alpha), alpha*reward_heading
         else:
             raise TypeError(f"Unsupported type for compute_reward: {type(achieved_goal)}")
+
+    
+    def compute_reward_maneuver_net(self, desired_goal, info={}, error_bias=(1.0, 2.0), rew_type:str="default"):
+        """
+            type: hourglass, default, max
+        """
+
+        delta_goal = desired_goal[:, :2].clone() # (N, 2)
+        delta_goal[:, 0] = desired_goal[:, 0]/self.initial_distance # normalize by initial distance to have a consistent scale across episodes 
+        delta_goal[:, 1] = desired_goal[:, 1]/self.initial_distance # normalize by initial distance to have a consistent scale across episodes 
+
+        if rew_type=="hourglass":
+            reward = self.get_reward_hourglass(delta_goal, error_bias)
+        elif rew_type=="max":
+            pass
+        else:
+            reward = self.get_reward_box(delta_goal, error_bias)
+
+        #print(f"\n[DEBUG_MANEUVER] Delta goal: {delta_goal} \tReward: {reward}")
+        return reward
+
+    def compute_common_reward(self):
+
+        heading_w = torch.atan2(torch.sin(self._robot.data.heading_w), torch.cos(self._robot.data.heading_w))   
+        alpha = self.bearing
+
+        beta = -(alpha + heading_w)
+
+        return - (beta + self.desired_orientation)/torch.pi
+    
+    def get_reward_box(self, delta_goal, error_bias):
+
+        """
+            copied and adapted from: 
+            https://github.com/MelodieDANIEL/4ws_actor_critic_maneuvering/blob/main/reward_shape.ipynb
+
+            delta_goal: batch of (delta_x, delta_y), size: (batch_size, 2) the error in position along the x and y axes in the robot frame.
+            error_bias: (bias_x, bias_y) the bias to apply to the error along the x and y axes. This can be used to shape 
+            the reward to encourage certain behaviors, such as prioritizing progress along the x-axis (towards the goal) 
+            over the y-axis (cross-track error).
+
+            bias: (bias_x, bias_y) the bias to apply to the error along the x and y axes. This can be used to shape
+
+        """
+
+        if isinstance(delta_goal, torch.Tensor):
+
+            coords = delta_goal
+            bias = torch.ones_like(coords) * torch.tensor(error_bias, device=coords.device)
+            reward = -torch.linalg.norm(coords * bias, dim=1)/self.initial_distance
+        else:
+            coords = delta_goal
+            bias = np.ones_like(coords) * np.array(error_bias)
+            reward = -np.linalg.norm(coords * bias, axis=1)/self.initial_distance.cpu().numpy()
+
+        return reward
+    
+    def get_reward_hourglass(self, delta_goal, error_bias):
+
+        """
+            copied and adapted from: 
+            https://github.com/MelodieDANIEL/4ws_actor_critic_maneuvering/blob/main/reward_shape.ipynb
+
+            delta_goal: batch of (delta_x, delta_y), size: (batch_size, 2) the error in position along the x and y axes in the robot frame.
+            error_bias: (bias_x, bias_y) the bias to apply to the error along the x and y axes. This can be used to shape 
+            the reward to encourage certain behaviors, such as prioritizing progress along the x-axis (towards the goal) 
+            over the y-axis (cross-track error).
+
+            bias: (bias_x, bias_y) the bias to apply to the error along the x and y axes. This can be used to shape
+
+        """
+
+        if isinstance(delta_goal, torch.Tensor):
+
+            coords = delta_goal
+            bias = torch.ones_like(coords) * torch.tensor(error_bias, device=coords.device)
+            delta = torch.min((coords[:, 0].abs() - coords[:, 1].abs()), torch.zeros_like(coords[:, 0]))
+            coords[:, 1] -= torch.sign(coords[:, 1]) * delta * 1.0
+            reward = -torch.linalg.norm(coords * bias, dim=1)
+        else:
+            coords = delta_goal
+            bias = np.ones_like(coords) * np.array(error_bias)
+            delta = min((abs(coords[:, 0]) - abs(coords[:, 1])), 0)
+            coords[:, 1] -= np.sign(coords[:, 1]) * delta * 1.0
+            reward = -np.linalg.norm(coords * bias, axis=1)
+
+        return reward
 
 
    
@@ -762,7 +876,7 @@ class KingfisherSailEnv(DirectRLEnv):
         error_ang = self.ang_target_wrench.view(-1)-self._robot.data.root_ang_vel_b[:, 2]
         self.norm_error_ang = torch.abs(error_ang)
         percentage_episode = self.episode_length_buf/(self.max_episode_length-1)
-
+        radius = self._robot.data.root_lin_vel_b[:, 0].abs()/(torch.abs(self._robot.data.root_ang_vel_b[:, 2]) + 1e-5)
         #self.extras["loss_mask"] = self.send_goals.unsqueeze(1)
         base_obs = torch.cat(
             [
@@ -774,7 +888,7 @@ class KingfisherSailEnv(DirectRLEnv):
                 torch.cos(self.desired_bearing).unsqueeze(1),  # 1
                 torch.sin(self.desired_bearing).unsqueeze(1),  # 1
                 (self.distance/self.initial_distance).unsqueeze(1),  # 1,
-                self.current_system_id_one_hot.float() # 4 one-hot encoding of the system_id, indicating which dynamics the agent is currently controlling
+                #self.current_system_id_one_hot.float() # 4 one-hot encoding of the system_id, indicating which dynamics the agent is currently controlling
                        
             ],
             dim=1,
@@ -820,22 +934,27 @@ class KingfisherSailEnv(DirectRLEnv):
             [self._desired_pos_w[:, :2], self.desired_orientation.reshape(-1, 1)], dim=1
         )
 
-        reward_progress, goal_reward, reward_time = self.compute_reward(current_config, target_config)
-        
+        reward_progress, goal_reward, reward_time, reward_heading = self.compute_reward(current_config, target_config)
+        rew_maneuver = self.compute_reward_maneuver_net(desired_goal=self.desired_pos_b, error_bias=(1.0, 2.0), rew_type="default")
+        reward_progress = rew_maneuver.clone()
         self.reward_progress = reward_progress.clone()
         self.reward_success = goal_reward.clone()
         self.reward_time[:] = reward_time
-        self.reward_backward[self._robot.data.root_lin_vel_b[:, 0] < -0.1] = -1.0 # penalty for going backwards, only consider vx for this penalty
+        self.reward_bearing[:] = self.compute_reward_heading(current_config, target_config) #self.compute_common_reward()
 
+        vel_x = self._robot.data.root_lin_vel_b[:, 0]
+        self.reward_backward[vel_x < -0.3] = -1
+        
         #self.reward_feasibility = self.feasibility_ok(self.actions[:, 0], self.actions[:, 1], self.feasibility_matrix)
-
+        #print(f"\n[DEBUG_REWARD] Progress: {reward_progress} \tBearing: {self.reward_bearing} \tcurrent config: {current_config[:, 2]} \t target config: {target_config[:, 2]}")
         rewards = {  
             "2_goal_reached": self.reward_success,
             "1_distance_progress":self.reward_progress,
             "6_time": self.reward_time,
-            "4_backwards": self.reward_backward,
+            "4_backwards": 0*self.reward_backward,
+            "5_bearing_penalty": self.reward_bearing,
         }
-        print(f"rewards: {rewards}\n")
+        #print(f"rewards: {rewards}\n")
         # #"6_time": time_reward
         self.previous_distance = self.distance.clone()
         self.previous_robot_pos = self._robot.data.root_pos_w.clone()
@@ -932,20 +1051,20 @@ class KingfisherSailEnv(DirectRLEnv):
         self.total_reward[env_ids] = 0
         
         if self.is_Training:
-            if self.common_step_counter%self.global_model_reset_frequency==0 and not self.updated:
+            """if self.common_step_counter%self.global_model_reset_frequency==0 and not self.updated:
                 print(f"common: {self.common_step_counter}")
-                self.update_low_level() # choose another low level
-                print(f"current_model: {self.current_model}")
-
+                #self.update_low_level() # choose another low level
+                #print(f"current_model: {self.current_model}")
+"""
             self.current_system_id_idx[env_ids] = torch.randint(5, size=(len(env_ids),), device=self.device, dtype=torch.int32)
                 
         else:
-            if not self.updated:
+            """if not self.updated:
                 self.update_low_level()
-                print(f"current_model: {self.current_model}")
-
-            self.current_system_id_idx[env_ids] = 0 # set to system 1 for evaluation
-
+                print(f"current_model: {self.current_model}")"""
+            self.current_system_id_idx[env_ids] = torch.randint(2, size=(len(env_ids),), device=self.device, dtype=torch.int32)
+            #self.current_system_id_idx[env_ids] = 2 # set to system 1 for evaluation
+            print(f"current_system_id_idx: {self.current_system_id_idx[env_ids]}")
         self.current_system_id_one_hot[env_ids, self.current_system_id_idx[env_ids]] = 1
                 
 

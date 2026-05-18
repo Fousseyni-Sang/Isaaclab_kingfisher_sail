@@ -233,7 +233,7 @@ def main():
             # convert obs to agent format
             obs = agent.obs_to_torch(obs)
             # agent stepping
-            actions = agent.get_action(obs, is_deterministic=agent.is_deterministic)
+            actions = agent.get_action(obs, is_deterministic=False) #agent.is_deterministic
             # env stepping
             obs, rew, dones, extras = env.step(actions)
 
@@ -264,6 +264,11 @@ def main():
             norm_error_ang = extras["info"]["norm_error_ang"] # (N,) 
             goal_pos = extras["info"]["goal_pos"] # (N, 2) 
             norm_error_cat=torch.cat( [norm_error_lin, norm_error_ang.reshape(-1, 1)], dim=-1 )
+            energy_context = extras.get("info", {}).get("energy_context", torch.zeros((num_envs,), device=rew.device)) # (N,)
+            test_vel_action = extras.get("info", {}).get("test_vel_action", torch.zeros((num_envs,), device=rew.device)) # (N,)
+            wheel_cmds = extras.get("info", {}).get("wheel_cmds", torch.zeros((num_envs,), device=rew.device)) # (N,) 
+            left_wheel_joints_vel = extras.get("info", {}).get("left_wheel_joints_vel", torch.zeros((num_envs,), device=rew.device)) # (N,) 
+            right_wheel_joints_vel = extras.get("info", {}).get("right_wheel_joints_vel", torch.zeros((num_envs,), device=rew.device)) # (N,) 
             # Save goal per env once 
             for env_id in range(num_envs): 
                 if per_env_goal[env_id] is None: 
@@ -301,6 +306,11 @@ def main():
                     rew_goal=extras.get("info", {}).get("reward_goal", torch.zeros((num_envs,), device=rew.device)), 
                     rew_aero=rew_aero, 
                     distance=distance, 
+                    energy_context=energy_context,
+                    test_action = test_vel_action,
+                    wheel_cmds = wheel_cmds,
+                    left_wheel_joints_vel = left_wheel_joints_vel,
+                    right_wheel_joints_vel = right_wheel_joints_vel,
                     ) 
                 
             # Store per-step logs per env 
@@ -330,6 +340,7 @@ def main():
                     "norm_error_lin_vx": norm_error_lin[env_id, 0].item(), 
                     "norm_error_lin_vy": norm_error_lin[env_id, 1].item() if norm_error_lin.shape[1] > 1 else 0.0, 
                     "norm_error_ang": norm_error_ang[env_id].item(), 
+                    "energy_context": energy_context[env_id].item(),    
                     } 
                 # actions, aero_force, thruster_force, energy_context, acord_prediction as vectors 
                 step_record.update({
@@ -356,11 +367,16 @@ def main():
             # Handle episode termination per env 
             for env_id in range(num_envs): 
 
-                if distance[env_id].item() < 0.7:
+                if distance[env_id].item() < 0.5:
                     
                     next_goal_idx = (next_goal_idx + 1) % len(points)
                     env.unwrapped._desired_pos_w[env_id, :2] = torch.tensor(points[next_goal_idx], device=env.unwrapped._desired_pos_w.device)
                     print(f"[INFO] Env {env_id} reached goal, moving to next goal: {points[next_goal_idx]}")
+
+                    # sample context for energy
+                    idx = torch.randint(0, env.unwrapped.evaluation_context_set.shape[1], (1,))
+                    env.unwrapped.energy_context[env_id] = env.unwrapped.evaluation_context_set[env_id, idx]
+                    print(f"[INFO] Sampled new energy context for env {env_id}: {env.unwrapped.energy_context[env_id]}")
 
                 if dones[env_id]: 
                     ep_len = len(per_env_steps[env_id]) 
