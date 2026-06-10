@@ -132,7 +132,7 @@ class TurtleBot3EnvCfg(DirectRLEnvCfg):
     decimation = 3
     step_dt = physics_dt * decimation  # 20 Hz
     action_space = 2 #gym.spaces.Box(low=-1, high=1, shape=(2, ), dtype=np.float32)
-    observation_space = 8
+    observation_space = 6 #8
     """gym.spaces.Dict({
                         "observation": gym.spaces.Box(low=-1, high=1, shape=(8, ), dtype=np.float32), 
                         "achieved_goal": gym.spaces.Box(low=np.array([-np.inf, -np.inf]), high=np.array([np.inf, np.inf]), shape=(2, ), dtype=np.float32), # [x, y, theta]
@@ -399,6 +399,12 @@ class TurtleBot3Env(DirectRLEnv):
         
         self._actions = actions.clone().clamp(-1.0, 1.0)
         
+        """taget_actions = actions.clone().clamp(-1.0, 1.0)
+        prev_actions = self._actions.clone()
+        
+        alpha = 0.2
+        filtered_actions = alpha * taget_actions[:, 0] + (1 - alpha) * prev_actions[:, 0]
+        self._actions[:, 0] = filtered_actions.clone()"""
         """if not self.is_Training:
             env_idx = torch.nonzero(self.episode_length_buf%50==0)
 
@@ -408,11 +414,11 @@ class TurtleBot3Env(DirectRLEnv):
             print(f"[DEBUG] current action: {self._actions[:, 0]}")
             self.current_test_idx[env_idx] += 1
         """
-        smoothed_actions = self.velocity_smoother(self._actions.abs()) # no negative speed is allowed
-        lin_velocity = smoothed_actions[:, 0] + 0.72 #(((self._actions[:, 0])*1.5))+0.34 #  scale and clamp linear velocity command
+        smoothed_actions = self.velocity_smoother(self._actions) # no negative speed is allowed
+        lin_velocity = smoothed_actions[:, 0].abs() + 0.72 #(((self._actions[:, 0])*1.5))+0.34 #  scale and clamp linear velocity command
         #lin_velocity[:] = 10.0 #self._actions[:, 0]
         ang_velocity = (self._actions[:, 1]*2.5).clamp(max=1.5, min=-1.5) # (smoothed_actions[:, 1]*2.5) #.clamp(max=0.4, min=-0.4) # scale and clamp angular velocity command
-        ang_velocity[:] = 0.0
+        #ang_velocity[:] = 0.0
 
         #print(f"actions: {self._actions} lin_velocity: {lin_velocity} ang_velocity: {ang_velocity}\n")
 
@@ -621,9 +627,9 @@ class TurtleBot3Env(DirectRLEnv):
                 torch.cos(self.bearing).unsqueeze(1),  # 1
                 torch.sin(self.bearing).unsqueeze(1),  # 1
                 (self.distance).unsqueeze(1)/self.initial_distance.unsqueeze(1),  # 1
-                context_distance_combined.unsqueeze(1), # 1
+                #context_distance_combined.unsqueeze(1), # 1
                 #self.energy.unsqueeze(1)/self.cfg.max_energy,  # 1
-                self.energy_context.reshape(self.num_envs, -1) # 1
+                #self.energy_context.reshape(self.num_envs, -1) # 1
 
             ],
             dim=1,
@@ -682,11 +688,14 @@ class TurtleBot3Env(DirectRLEnv):
             else:
                 # Sample context for evaluation uniformly from the discrete set
                 # Generates an index pointer for just the environments being reset
+                
                 idx = torch.randint(0, self.evaluation_context_set.shape[1], size=(num_resets,), device=self.energy_context.device)
-                print(idx.device, env_indices.device)
+                
                 # Pull from the evaluation set using advanced indexing
                 # Note: This assumes evaluation_context_set aligns with your active env_indices
-                self.energy_context[env_indices] = self.evaluation_context_set[env_indices, idx]
+                #self.energy_context[env_indices] = self.evaluation_context_set[env_indices, idx]
+                self.energy_context[env_indices] = self.evaluation_context_set[env_indices, self.current_test_idx%(self.evaluation_context_set.shape[1])]
+                self.current_test_idx[env_indices] += 1
                 print(f"\n[DEBUG] Sampled new evaluation contexts: {self.energy_context[env_indices]} episode length: {self.episode_length_buf[env_indices]}\n")
 
         return observations
@@ -720,7 +729,7 @@ class TurtleBot3Env(DirectRLEnv):
 
         rewards = {  
             "2_goal_reached": 0*self.reward_success,
-            "1_distance_progress": 0*sparse_progress_reward,
+            "1_distance_progress": sparse_progress_reward,
             "6_time": reward_smooth, #+ time_reward,
             "5_bearing_penalty": bearing_penalty,
             "4_backwards": 0*self.reward_backward,
@@ -846,7 +855,10 @@ class TurtleBot3Env(DirectRLEnv):
         else:
             # sample context for evalutation uniformly from a set of discrete contexts to reduce noise in evaluation metrics
             idx = torch.randint(0, self.evaluation_context_set.shape[1], size=(len(env_ids), ))
-            self.energy_context[env_ids] = self.evaluation_context_set[torch.arange(len(env_ids)), idx]
+            
+            self.energy_context[env_ids] = self.evaluation_context_set[torch.arange(len(env_ids)), self.current_test_idx%(self.evaluation_context_set.shape[1])]
+            print(f"\n[DEBUG] Sampled new evaluation contexts: {self.energy_context[env_ids]} episode length: {self.episode_length_buf[env_ids]}\n")
+            self.current_test_idx[env_ids] += 1
 
         self.episode_number[env_ids]  = self.episode_number[env_ids] + 1 
         self.episode_energy[env_ids] = 0

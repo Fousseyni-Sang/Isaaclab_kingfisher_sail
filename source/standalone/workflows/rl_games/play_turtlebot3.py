@@ -233,7 +233,7 @@ def main():
             # convert obs to agent format
             obs = agent.obs_to_torch(obs)
             # agent stepping
-            actions = agent.get_action(obs, is_deterministic=False) #agent.is_deterministic
+            actions = agent.get_action(obs, is_deterministic=agent.is_deterministic) #agent.is_deterministic
             # env stepping
             obs, rew, dones, extras = env.step(actions)
 
@@ -375,8 +375,8 @@ def main():
 
                     # sample context for energy
                     idx = torch.randint(0, env.unwrapped.evaluation_context_set.shape[1], (1,))
-                    env.unwrapped.energy_context[env_id] = env.unwrapped.evaluation_context_set[env_id, idx]
-                    print(f"[INFO] Sampled new energy context for env {env_id}: {env.unwrapped.energy_context[env_id]}")
+                    #env.unwrapped.energy_context[env_id] = env.unwrapped.evaluation_context_set[env_id, idx]
+                    #print(f"[INFO] Sampled new energy context for env {env_id}: {env.unwrapped.energy_context[env_id]}")
 
                 if dones[env_id]: 
                     ep_len = len(per_env_steps[env_id]) 
