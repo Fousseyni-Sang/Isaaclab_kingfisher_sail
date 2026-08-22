@@ -17,7 +17,7 @@ import numpy as np
 #------------------------------------------------------------
 # FOIL DYNAMIC CONFIG
 #------------------------------------------------------------
-def rudder_config():
+"""def rudder_config():
     
     # Rudder Hydrodynamics
     cfg: FoilDynamicsCfg = FoilDynamicsCfg()
@@ -25,13 +25,27 @@ def rudder_config():
     cfg.foil_span = 0.2
     cfg.foil_chord = 0.021
     cfg.flow_direction = 30*torch.pi/180
-    cfg.flow_speed = 0.05
+    cfg.flow_speed = 0.01
     cfg.angle_of_attack = 20*torch.pi/180
     cfg.min_upflow_angle = 45*torch.pi/180
     cfg.max_downflow_angle = 140*torch.pi/180
     cfg.Reynold = 1000000  # based on flow_speed, chord, density and viscosity
-    return cfg
+    return cfg"""
 
+def rudder_config():
+    cfg: FoilDynamicsCfg = FoilDynamicsCfg()
+    cfg.flow_density = 997.0              # Water density (kg/m^3)
+    cfg.foil_span = 0.15                  # 15 cm depth
+    cfg.foil_chord = 0.05                 # 5 cm chord (Aspect Ratio = 3.0)
+    cfg.flow_speed = 0.0                  # 1.5 m/s (~3 knots, normal operating speed)
+    cfg.angle_of_attack = 0.0             # Dynamic state (should update at runtime)
+    cfg.flow_direction = 0*torch.pi/180
+    cfg.min_upflow_angle = 45*torch.pi/180
+    cfg.max_downflow_angle = 140*torch.pi/180
+
+    # Re = (997 * 1.5 * 0.05) / 0.001002 ≈ 74,600
+    cfg.Reynold = 1.5e6                  
+    return cfg
 def keel_config():
 
     # keel Hydrodynamics
@@ -40,7 +54,7 @@ def keel_config():
     cfg.foil_span = 1
     cfg.foil_chord = 0.2
     cfg.flow_direction = -179*torch.pi/180
-    cfg.flow_speed = 0.05
+    cfg.flow_speed = 0.0
     cfg.angle_of_attack = 20*torch.pi/180
     cfg.min_upflow_angle = 0.0
     cfg.max_downflow_angle = 0.0
@@ -291,7 +305,7 @@ def vap4_propeller_config():
 # FOIL ACUATOR CONFIG
 #------------------------------------------------------------
 
-def rudder_actuator_config():
+"""def rudder_actuator_config(pos_from_com=(-0.5, 0.0, -0.5)):
     
     cfg: FoilActuatorCfg = FoilActuatorCfg()
     cfg.cmd_lower_range = -1.0
@@ -300,11 +314,26 @@ def rudder_actuator_config():
     cfg.resolution = 1.8  # degrees
     cfg.precision = 0.01  # radians
     cfg.scale_joint_pos = torch.pi  # radians per command unit
-    cfg.pos_from_com = (-0.5, 0.0, -0.5)  # meters
+    cfg.pos_from_com = pos_from_com  # meters
+    cfg.foil_type = "rudder"
+    return cfg"""
+
+def rudder_actuator_config(pos_from_com=(-0.5, 0.0, -0.1)):
+    cfg: FoilActuatorCfg = FoilActuatorCfg()
+    cfg.cmd_lower_range = -1.0
+    cfg.cmd_upper_range = 1.0
+    cfg.command_rate = 1.0                # Max 2 command units per second
+    
+    # Servo motor properties
+    cfg.resolution = 1.8                  # Servo resolution in degrees (0.1° is typical)
+    cfg.precision = 0.0017                # ~0.1 deg in radians
+    cfg.scale_joint_pos = 180.0 * torch.pi / 180.0  # Max ±35 degrees deflection
+    
+    cfg.pos_from_com = pos_from_com       # Position relative to COM
     cfg.foil_type = "rudder"
     return cfg
 
-def sail_actuator_config():
+def sail_actuator_config(pos_from_com=(0.0, 0.0, 0.0)):
     
     cfg: FoilActuatorCfg = FoilActuatorCfg()
     cfg.cmd_lower_range = -1.0
@@ -313,7 +342,7 @@ def sail_actuator_config():
     cfg.resolution = 1.8  # degrees
     cfg.precision = 0.01  # radians
     cfg.scale_joint_pos = torch.pi  # radians per command unit
-    cfg.pos_from_com = (0.0, 0.0, 0.0)  # meters
+    cfg.pos_from_com = pos_from_com  # meters
     cfg.foil_type = "sail"
     return cfg
 

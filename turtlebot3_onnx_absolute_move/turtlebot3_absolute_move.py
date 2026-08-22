@@ -74,7 +74,7 @@ class Turtlebot3AbsoluteMove(Node):
 
         self.cmd_vel_pub = self.create_publisher(CmdVelMsg, '/commands/velocity', qos)
         self.cmd_vel = CmdVelMsg()
-        self.goal_pub = self.create_publisher(Path, "/waypoints_path", qos)
+        self.path_pub = self.create_publisher(Path, "/waypoints_path", qos)
         self.context_pub = self.create_publisher(Float32, "/energy_context", qos)
 
         self.odom_sub = self.create_subscription(
@@ -201,7 +201,7 @@ class Turtlebot3AbsoluteMove(Node):
 
             path.poses.append(pose)
 
-        self.goal_pub.publish(path)
+        self.path_pub.publish(path)
         self.get_logger().info(f"Published full waypoint path: {self.points}")
 
 

@@ -204,7 +204,7 @@ def main():
     all_metrics = [] 
     step_idx = 0 
 
-    wind_list = [-180.0, -135.0, -90.0, -45.0, 0.0, 45.0, 90.0, 135.0, 180.0]
+    wind_list = [-180.0, 180.] #[-180.0, -135.0, -90.0, -45.0, 0.0, 45.0, 90.0, 135.0, 180.0]
     wind_idx = 0
 
     print(f"\n================ Vectorized Evaluation: {num_envs} envs =================\n") 
@@ -500,26 +500,9 @@ def main():
                 # etc...
             })
 
-    '''feas = extras["info"]["feasibility_map"]
-
-        i, j, k = np.indices((10,10,10))
-    df = pd.DataFrame({
-        "i": i.reshape(-1),
-        "j": j.reshape(-1),
-        "k": k.reshape(-1),
-        "feasible": feas.reshape(-1)
-    })
-
-    df.to_csv(os.path.join(output_dir, "feasibility_map.csv"), index=False)
-    '''
     df = pd.DataFrame(rows)
-    df.to_csv(os.path.join(output_dir, "all_steps.csv"), index=False)
+    #df.to_csv(os.path.join(output_dir, "all_steps.csv"), index=False)
 
-    feasibility = extras["info"]["feasibility_map"]   # shape (10,10,10) or (10,10)
-    feasibility_flattened = feasibility.reshape(-1)               # shape (1000,) or (100,)
-
-    df = pd.DataFrame({"feasible": feasibility_flattened})
-    df.to_csv(os.path.join(output_dir, "feasibility_map.csv"), index=False)
 
 
     print("[INFO] Evaluation complete.")

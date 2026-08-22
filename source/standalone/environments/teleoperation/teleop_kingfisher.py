@@ -48,7 +48,7 @@ from omni.isaac.lab_tasks.utils import parse_env_cfg
 # Create Publisher Node
 import rclpy
 
-from ros2_Node import RlAgentPublisher, RewardWeightSubscriber
+from omni.isaac.lab_tasks.utils.my_utils.ros2_Node import RewardWeightSubscriber, DynamicsRlAgentPublisher 
 
 def pre_process_actions(delta_pose: torch.Tensor) -> torch.Tensor:
     """Pre-process actions for the environment."""
@@ -71,7 +71,7 @@ def main():
 
      # ---- Initialize ROS2 ----
     rclpy.init()
-    ros_node = RlAgentPublisher(args_cli.num_envs)
+    ros_node = DynamicsRlAgentPublisher(args_cli.num_envs)
 
     slider_names = ['time', 'energy', 'goal', 'speed']  # Must match the names you use in the publisher
     slider_node = RewardWeightSubscriber(slider_names)
@@ -139,7 +139,7 @@ def main():
         reset_env = energy_context > 1.5 or time_context > 1.5
         desired_speed = slider_node.reward_weights["speed"]
         env.unwrapped.energy_context[:] = energy_context
-        env.unwrapped.time_context[:] = time_context
+        #env.unwrapped.time_context[:] = time_context
         #print(time_context)
         # run everything in inference mode
         with torch.inference_mode():
@@ -166,51 +166,78 @@ def main():
             #print(f"delta: {delta_pose} \tflow: {flow_speed} \tflow_direc: {flow_direction}\n")
             #flow_direction += 
             actions = pre_process_actions(delta_pose)
+            #actions = actions[:, :2]
             #print(f"actions: {actions}")
             
             #print(actions.shape, actions)
             # apply actions
             teleop_interface.add_callback("L", env.reset)
             # env stepping
-            obs, rew, dones, _, _ = env.step(actions)
+            obs, rew, dones, _, extras = env.step(actions)
             obs = obs['policy']
 
-            env.unwrapped.desired_speed_b[:] = desired_speed
-            aero_force = env.unwrapped._sail_aerodynamic_force_b.squeeze(0)
-            thruster_force = env.unwrapped._thruster_forces.squeeze(0)
-            lin_speed = env.unwrapped._robot.data.root_lin_vel_b
-            aoa = (180/torch.pi)*env.unwrapped._sail_aerodynamics.angle_of_attack
-            app_angle = (180/torch.pi)*env.unwrapped._sail_aerodynamics.apparent_flow_angle # in degree
-            sail = (180/torch.pi)*env.unwrapped.joint_angle_mapped_pi
-            head_w = (180/torch.pi)*env.unwrapped._robot.data.heading_w
-            head_wrt_flow = torch.abs(head_w - (180/torch.pi)*env.unwrapped._sail_aerodynamics.Beta_w)
-            lift = env.unwrapped._sail_aerodynamics.flow_lift_b
-            drag = env.unwrapped._sail_aerodynamics.flow_drag_b
-            ld_ratio = torch.norm(lift, dim=-1)/torch.norm(drag, dim=-1)
-            #ld_ratio = torch.abs(aero_force[:, 0]/(aero_force[:, 1]+1e-6))
-            robot_pos = env.unwrapped._robot.data.root_link_pos_w[:, :2]
-            goal_pos =  env.unwrapped._desired_pos_w[:, :2]
-            energy = env.unwrapped.energy
-            episode_energy = env.unwrapped.episode_energy     
-            lift_coeff = env.unwrapped._sail_aerodynamics.lift_coeff
-            drag_coeff = env.unwrapped._sail_aerodynamics.drag_coeff
-            sum_angle = sail + app_angle + aoa
-            desired_pos = torch.abs(env.unwrapped.desired_pos_b)
-            rew_progress = env.unwrapped.reward_progress
-            rew_bearing = env.unwrapped.reward_bearing
-            rew_energy = env.unwrapped.reward_energy
-            rew_backward = env.unwrapped.reward_backward
-            loss = env.unwrapped.loss_discrim_energy
-            loss_disc = torch.tensor([loss.item()], device=rew_backward.device) if loss is not None else torch.zeros_like(rew_energy)
-            tack_wpts = env.unwrapped.tack_waypoints
+            if actions.shape[1]<3:
+                actions = torch.cat([actions, torch.zeros((args_cli.num_envs, 3-actions.shape[1]), device=rew.device)], dim=-1)
+
+            robot_pos = extras["info"].get("robot_pos_w", torch.zeros((args_cli.num_envs, 2), device=rew.device))[..., :2] # (N, 2) 
+            lift_coeff = extras.get("info", {}).get("lift_coeff", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,) 
+            drag_coeff = extras.get("info", {}).get("drag_coeff", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,) 
+            energy = extras.get("info", {}).get("energy", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,) 
+            episode_energy = extras.get("info", {}).get("episode_energy", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,) 
+            max_available_energy = extras.get("info", {}).get("max_available_energy", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,) 
+            ratio_energy_usage = extras.get("info", {}).get("ratio_energy_usage", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,) 
+            rew_progress = extras.get("info", {}).get("reward_progress", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,) 
+            rew_energy = extras.get("info", {}).get("reward_energy", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,) 
+            rew_backward = extras.get("info", {}).get("reward_backward", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,) 
+            rew_aero = extras.get("info", {}).get("reward_aero", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,) 
+            rew_acord = extras.get("info", {}).get("reward_acord", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,) 
+            bearing = extras.get("info", {}).get("bearing", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,) 
+            distance = extras.get("info", {}).get("distance", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,) 
+            aoa = extras.get("info", {}).get("aoa", torch.zeros((args_cli.num_envs, ), device=rew.device)) # (N,) 
+            app_wind_angle = extras.get("info", {}).get("app_wind_angle", torch.zeros((args_cli.num_envs, ), device=rew.device)) # (N,) 
+            true_wind_angle = extras.get("info", {}).get("true_wind_angle", torch.zeros((args_cli.num_envs, ), device=rew.device)) # (N,) 
+            sail_angle = extras.get("info", {}).get("sail_angle", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,) 
+            aero_force = extras.get("info", {}).get("aero_force", torch.zeros((args_cli.num_envs, 1, 6), device=rew.device)) # (N, 6) 
+            max_aero_force = extras.get("info", {}).get("max_aero_force", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,) 
+            thruster_force = extras.get("info", {}).get("thruster_force", torch.zeros((args_cli.num_envs, 1, 6), device=rew.device)) # (N, 6) 
+            norm_error_lin = extras["info"].get("norm_error_lin", torch.zeros((args_cli.num_envs,2), device=rew.device)) # (N,) 
+            norm_error_ang = extras["info"].get("norm_error_ang", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,) 
+            goal_pos = extras["info"].get("goal_pos", torch.zeros((args_cli.num_envs, 2), device=rew.device)) # (N, 2) 
+            norm_error_cat=torch.cat( [norm_error_lin.reshape(args_cli.num_envs, -1), norm_error_ang.reshape(args_cli.num_envs, -1)], dim=-1 )
 
             if reset_env:
                 env.reset()
 
-            ros_node.publish(obs, actions, rew, aero_force, thruster_force, lin_speed, aoa, app_angle, sail, 
-                             head_w, head_wrt_flow, ld_ratio, robot_pos, goal_pos, energy, episode_energy, lift, 
-                             drag, lift_coeff, drag_coeff, sum_angle, desired_pos, rew_progress, rew_bearing, rew_energy, 
-                             rew_backward, loss_disc, tack_wpts)
+            ros_node.publish( 
+                                obs=obs,
+                                actions=actions, 
+                                total_rew=rew, 
+                                aero_force=aero_force, 
+                                thruster_force=thruster_force,
+                                lin_vel_b=extras.get("info", {}).get("lin_vel_b", torch.zeros((args_cli.num_envs, 3), device=rew.device)), 
+                                angle_of_attack=aoa, 
+                                app_flow_angle=app_wind_angle, 
+                                true_flow_angle=true_wind_angle, 
+                                sail_angle=sail_angle, 
+                                heading_w=extras.get("info", {}).get("heading_w", torch.zeros((args_cli.num_envs,), device=rew.device)), 
+                                lift_drag_ratio=extras.get("info", {}).get("lift_drag_ratio", torch.zeros((args_cli.num_envs,), device=rew.device)), 
+                                robot_pos_w=robot_pos, 
+                                energy=energy, 
+                                episode_energy=episode_energy, 
+                                lift_force_b=extras.get("info", {}).get("lift_force_b", torch.zeros((args_cli.num_envs,3), device=rew.device)), 
+                                drag_force_b=extras.get("info", {}).get("drag_force_b", torch.zeros((args_cli.num_envs,3), device=rew.device)), 
+                                lift_coeff=lift_coeff, 
+                                drag_coeff=drag_coeff, 
+                                rew_progress=rew_progress, 
+                                rew_energy=rew_energy, 
+                                rew_backward=rew_backward, 
+                                desired_wrench_b=extras.get("info", {}).get("desired_wrench_b", torch.zeros((args_cli.num_envs, 6), device=rew.device)), 
+                                ang_speed_b=extras.get("info", {}).get("ang_vel_b", torch.zeros((args_cli.num_envs, 3), device=rew.device)), 
+                                norm_error_cat=norm_error_cat, 
+                                rew_goal=extras.get("info", {}).get("reward_goal", torch.zeros((args_cli.num_envs,), device=rew.device)), 
+                                rew_aero=rew_aero, 
+                                distance=distance, 
+                                ) 
             
     # Cleanup
     ros_node.destroy_node()

@@ -12,7 +12,7 @@ params:
     name: continuous_a2c_logstd
 
   network:
-    name: actor_critic
+    name: actor_critic #scaling_actor_critic #actor_critic
     separate: False
     space:
       continuous:
@@ -25,8 +25,27 @@ params:
           name: const_initializer
           val: 0
         fixed_sigma: True
+
+    scaling:
+      actor_width: 1024
+      critic_width: 1024
+
+      # This is the important part.
+      #
+      # 1000 means:
+      #     1000 / 4 = 250 residual blocks
+      #
+      actor_depth: 8
+      critic_depth: 8
+
+      actor_skip_connections: 0
+      critic_skip_connections: 0
+
+      use_relu: False
+      use_layer_norm: True
+
     mlp:
-      units: [64, 64]
+      units: [256, 256]
       activation: elu
       d2rl: False
 
@@ -45,7 +64,7 @@ params:
     device_name: 'cuda:0'
     multi_gpu: False
     ppo: True
-    normalize_input: True
+    normalize_input: False #True
     normalize_value: True
     value_bootstrap: True
     num_actors: -1  # configured from the script (based on num_envs)
@@ -59,11 +78,11 @@ params:
     schedule_type: legacy
     kl_threshold: 0.016
     score_to_win: 20000000
-    max_epochs: 450
+    max_epochs: 800
     save_best_after: 25
     save_frequency: 50
     grad_norm: 1.0
-    entropy_coef: 0.0
+    entropy_coef: 0.000
     truncate_grads: True
     e_clip: 0.2 #0.2
     horizon_length: 48  #96 #180 #48 

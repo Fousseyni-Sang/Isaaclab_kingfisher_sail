@@ -18,7 +18,7 @@ parser.add_argument("--video_length", type=int, default=200, help="Length of the
 parser.add_argument(
     "--disable_fabric", action="store_true", default=False, help="Disable fabric and use USD I/O operations."
 )
-parser.add_argument("--ros", type=bool, default=False, help="publish ros topic if True, no pub otherwise")
+parser.add_argument("--ros", action="store_true", default=False, help="publish ros topic if True, no pub otherwise")
 parser.add_argument("--num_envs", type=int, default=None, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
 parser.add_argument("--checkpoint", type=str, default=None, help="Path to model checkpoint.")
@@ -305,7 +305,7 @@ def main():
             if actions.shape[1]==2:
                 actions = torch.cat((actions, torch.zeros((1, 1), device=actions.device)), dim=-1)
 
-            robot_pos = extras["info"]["robot_pos_w"][..., :2] # (N, 2) 
+            robot_pos = extras["info"].get("robot_pos_w", torch.zeros((args_cli.num_envs, 2), device=rew.device))[..., :2] # (N, 2) 
             lift_coeff = extras.get("info", {}).get("lift_coeff", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,) 
             drag_coeff = extras.get("info", {}).get("drag_coeff", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,) 
             energy = extras.get("info", {}).get("energy", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,) 
@@ -318,23 +318,26 @@ def main():
             rew_aero = extras.get("info", {}).get("reward_aero", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,) 
             rew_acord = extras.get("info", {}).get("reward_acord", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,) 
             bearing = extras.get("info", {}).get("bearing", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,) 
-            distance = extras["info"]["distance"] # (N,) 
+            distance = extras["info"].get("distance", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,) 
             aoa = extras.get("info", {}).get("aoa", torch.zeros((args_cli.num_envs, ), device=rew.device)) # (N,) 
             sail_angle = (180/torch.pi)*extras.get("info", {}).get("sail_angle", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,) 
             aero_force = extras.get("info", {}).get("aero_force", torch.zeros((args_cli.num_envs, 1, 6), device=rew.device)) # (N, 6) 
             max_aero_force = extras.get("info", {}).get("max_aero_force", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,) 
             thruster_force = extras.get("info", {}).get("thruster_force", torch.zeros((args_cli.num_envs, 1, 6), device=rew.device)) # (N, 6) 
-            lin_speed = extras["info"]["lin_vel_b"] # (N, 3)
-            ang_speed = extras["info"]["ang_vel_b"] # (N, 3)
+            lin_speed = extras["info"].get("lin_vel_b", torch.zeros((args_cli.num_envs, 3), device=rew.device)) # (N, 3)
+            ang_speed = extras["info"].get("ang_vel_b", torch.zeros((args_cli.num_envs, 3), device=rew.device)) # (N, 3)
             app_flow_angle = (180/torch.pi)*extras["info"].get("app_flow_angle", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,)
             true_flow_angle = (180/torch.pi)*extras["info"].get("true_flow_angle", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,)
-            norm_error_lin = extras["info"]["norm_error_lin"] # (N,) 
-            norm_error_ang = extras["info"]["norm_error_ang"] # (N,) 
-            goal_pos = extras["info"]["goal_pos"] # (N, 2) 
-            norm_error_cat=torch.cat( [norm_error_lin, norm_error_ang.reshape(-1, 1)], dim=-1 )
+            norm_error_lin = extras["info"].get("norm_error_lin", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,) 
+            norm_error_ang = extras["info"].get("norm_error_ang", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,) 
+            goal_pos = extras["info"].get("goal_pos", torch.zeros((args_cli.num_envs, 2), device=rew.device)) # (N, 2) 
+            norm_error_cat=torch.cat( [norm_error_lin.reshape(args_cli.num_envs, -1), norm_error_ang.reshape(args_cli.num_envs, -1)], dim=-1 )
             head_w = (180/torch.pi)*extras["info"].get("heading_w", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,)
             lift_force_b = extras["info"].get("lift_force_b", torch.zeros((args_cli.num_envs, 3), device=rew.device)) # (N, 3)
             drag_force_b = extras["info"].get("drag_force_b", torch.zeros((args_cli.num_envs, 3), device=rew.device)) # (N, 3)
+            desired_orientation = extras["info"].get("desired_orientation", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,)
+            desired_bearing = extras["info"].get("desired_bearing", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,)
+            current_system_id = extras["info"].get("current_system_id", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,)
 
             head_wrt_wind = torch.abs(head_w - (180/torch.pi)*env.unwrapped._sail_aerodynamics.Beta_w)
             
@@ -436,7 +439,8 @@ def main():
                             drag_coeff=drag_coeff, sum_angle=sum_angle, rew_progress=rew_progress, rew_bearing=rew_bearing, 
                             rew_energy=rew_energy, rew_backward=rew_backward, 
                             norm_error_cat=norm_error_cat, world_wind_direc=world_wind_direc,
-                            lin_target_wrench=lin_target_wrench, ang_target_wrench=ang_target_wrench)
+                            lin_target_wrench=lin_target_wrench, ang_target_wrench=ang_target_wrench,
+                            desired_orientation=desired_orientation, desired_bearing=desired_bearing, current_system_id=current_system_id)
             
             lift_coeff_logs[step] = lift_coeff.clone().float()
             drag_coeff_logs[step] = drag_coeff.clone().float()

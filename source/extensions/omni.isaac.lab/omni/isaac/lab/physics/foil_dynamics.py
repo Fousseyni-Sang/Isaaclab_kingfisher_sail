@@ -80,6 +80,7 @@ class FoilDynamics:
         self.xfoil.n_crit = 9
         self.max_cl_cd_ratio = 0
         self.max_cl = 0
+        self.max_lift_force = 0
         #self._aerodynamics.xfoil = self.xfoil
 
         self.foil_unit_vector = torch.zeros_like(self.apparent_flow_speed_b)
@@ -116,6 +117,8 @@ class FoilDynamics:
         # True flow in foilboat frame
         self.true_flow_speed2D_b = self.generate_true_flow_components(Uw, Beta_w, ship_heading_w) # ok
         self.true_flow_angle = self.get_true_flow_angle(self.true_flow_speed2D_b)
+
+    
         apparent_flow2D_b = self.generate_apparent_flow_components(self.true_flow_speed2D_b, ship_lin_vel2D)
 
         self.apparent_flow_speed_b = apparent_flow2D_b.clone()
@@ -294,7 +297,7 @@ class FoilDynamics:
         # parallel to the apparent flow ---> VERIFIED
         drag_vec[:, 0] = drag_D*flow_V_app_unit[:, 0]
         drag_vec[:, 1] = drag_D*flow_V_app_unit[:, 1]
-        #drag_vec = torch.where((torch.sum(drag_vec*foil_unit_vector, dim=1)<0).unsqueeze(1), -drag_vec, drag_vec)
+        drag_vec = torch.where((torch.sum(drag_vec*foil_unit_vector, dim=1)<0).unsqueeze(1), -drag_vec, drag_vec)
         
         self.foil_unit_vector = foil_unit_vector.clone()
         self.foil_ortho_unit_vector = foil_ortho_unit_vector.clone()
@@ -357,6 +360,16 @@ class FoilDynamics:
         CD = B1*(torch.sin(alpha)**2) + B2*torch.cos(alpha)
 
         return CL, CD
+
+    def get_max_lift_force(self):
+
+        max_cl = abs(self.max_cl)
+        app_wind = torch.norm(self.apparent_flow_speed_b, dim=1)
+        foil_aire = self.cfg.foil_span*self.cfg.foil_chord
+
+        force = 0.5*self.cfg.flow_density*max_cl*foil_aire*(app_wind**2)
+
+        return force
     
     def set_coeffs_interpolators(self):
 

@@ -26,7 +26,7 @@ params:
           val: 0
         fixed_sigma: True
     mlp:
-      units: [128, 128]
+      units: [64, 64]
       activation: elu
       d2rl: False
 
@@ -34,23 +34,18 @@ params:
         name: default
       regularizer:
         name: None
-      
-    hrl_embbeding:
-      out_size: 16
-      in_size: 1
-      dim_feasibility_map: 2
 
   load_checkpoint: False # flag which sets whether to load the checkpoint
   load_path: '' # path to the checkpoint to load
 
   config:
-    name: kingfisher_direct_high_level_sparse2
+    name: kingfisher_direct_test
     env_name: rlgpu
     device: 'cuda:0'
     device_name: 'cuda:0'
     multi_gpu: False
     ppo: True
-    normalize_input: True
+    normalize_input: False #True
     normalize_value: True
     value_bootstrap: True
     num_actors: -1  # configured from the script (based on num_envs)
@@ -64,7 +59,7 @@ params:
     schedule_type: legacy
     kl_threshold: 0.016
     score_to_win: 20000000
-    max_epochs: 800
+    max_epochs: 450
     save_best_after: 25
     save_frequency: 50
     grad_norm: 1.0
@@ -76,5 +71,5 @@ params:
     mini_epochs: 5 
     critic_coef: 2
     clip_value: True
-    seq_length: 4
+    seq_length: 10 #4
     bounds_loss_coef: 0.0001

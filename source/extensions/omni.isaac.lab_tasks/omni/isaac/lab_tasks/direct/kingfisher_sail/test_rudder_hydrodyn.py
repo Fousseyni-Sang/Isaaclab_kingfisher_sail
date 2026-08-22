@@ -10,7 +10,7 @@ import torch
 import matplotlib.pyplot as plt
 import numpy as np
 
-def rudder_config():
+"""def rudder_config():
     
     # Rudder Hydrodynamics
     cfg: FoilDynamicsCfg = FoilDynamicsCfg()
@@ -23,6 +23,20 @@ def rudder_config():
     cfg.min_upflow_angle = 45*torch.pi/180
     cfg.max_downflow_angle = 140*torch.pi/180
     cfg.Reynold = 500000  # based on flow_speed, chord, density and viscosity
+    return cfg"""
+def rudder_config():
+    cfg: FoilDynamicsCfg = FoilDynamicsCfg()
+    cfg.flow_density = 997.0              # Water density (kg/m^3)
+    cfg.foil_span = 0.15                  # 15 cm depth
+    cfg.foil_chord = 0.05                 # 5 cm chord (Aspect Ratio = 3.0)
+    cfg.flow_speed = 1.5                  # 1.5 m/s (~3 knots, normal operating speed)
+    cfg.angle_of_attack = 0.0             # Dynamic state (should update at runtime)
+    cfg.flow_direction = 30*torch.pi/180
+    cfg.min_upflow_angle = 45*torch.pi/180
+    cfg.max_downflow_angle = 140*torch.pi/180
+
+    # Re = (997 * 1.5 * 0.05) / 0.001002 ≈ 74,600
+    cfg.Reynold = 500000                   
     return cfg
 
 # Rudder Hydrodynamics: flow is the water

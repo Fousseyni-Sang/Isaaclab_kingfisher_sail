@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 from __future__ import annotations
-
+import omni
 from omni.isaac.lab.physics.foil_dynamics import FoilDynamicsCfg, FoilDynamics
 from omni.isaac.lab.actuator_force.foil_actuator_force import FoilActuator, FoilActuatorCfg
 import torch
@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 dir = "Isaaclab_kingfisher_sail/Test_plot/rudder_actuator/"
+
 prefix = "rudder_"
 import os
 os.makedirs(dir, exist_ok=True)
@@ -27,7 +28,7 @@ rudder_hydrodyn_cfg.angle_of_attack = 20*torch.pi/180
 rudder_hydrodyn_cfg.min_upflow_angle = 45*torch.pi/180
 rudder_hydrodyn_cfg.max_downflow_angle = 140*torch.pi/180
 rudder_hydrodyn_cfg.Reynold = 1000000  # based on flow_speed, chord, density and viscosity"""
-def rudder_config():
+"""def rudder_config():
     
     # Rudder Hydrodynamics
     cfg: FoilDynamicsCfg = FoilDynamicsCfg()
@@ -40,28 +41,59 @@ def rudder_config():
     cfg.min_upflow_angle = 45*torch.pi/180
     cfg.max_downflow_angle = 140*torch.pi/180
     cfg.Reynold = 1000000  # based on flow_speed, chord, density and viscosity
+    return cfg"""
+
+def rudder_actuator_config(pos_from_com=(-0.5, 0.0, -0.1)):
+    cfg: FoilActuatorCfg = FoilActuatorCfg()
+    cfg.cmd_lower_range = -1.0
+    cfg.cmd_upper_range = 1.0
+    cfg.command_rate = 1.0                # Max 2 command units per second
+    
+    # Servo motor properties
+    cfg.resolution = 1.8                  # Servo resolution in degrees (0.1° is typical)
+    cfg.precision = 0.0017                # ~0.1 deg in radians
+    cfg.scale_joint_pos = 180.0 * torch.pi / 180.0  # Max ±35 degrees deflection
+    
+    cfg.pos_from_com = pos_from_com       # Position relative to COM
+    cfg.foil_type = "rudder"
+    return cfg
+
+def rudder_config():
+    cfg: FoilDynamicsCfg = FoilDynamicsCfg()
+    cfg.flow_density = 997.0              # Water density (kg/m^3)
+    cfg.foil_span = 0.15                  # 15 cm depth
+    cfg.foil_chord = 0.05                 # 5 cm chord (Aspect Ratio = 3.0)
+    cfg.flow_speed = 1.5                  # 1.5 m/s (~3 knots, normal operating speed)
+    cfg.angle_of_attack = 0.0             # Dynamic state (should update at runtime)
+    cfg.flow_direction = 30*torch.pi/180
+    cfg.min_upflow_angle = 45*torch.pi/180
+    cfg.max_downflow_angle = 140*torch.pi/180
+
+    # Re = (997 * 1.5 * 0.05) / 0.001002 ≈ 74,600
+    cfg.Reynold = 1500000                   
     return cfg
 
 rudder_hydrodyn_cfg: FoilDynamicsCfg = rudder_config()
 device = 'cpu'
 
-actuator_cfg: FoilActuatorCfg = FoilActuatorCfg()
+"""actuator_cfg: FoilActuatorCfg = FoilActuatorCfg()
 actuator_cfg.cmd_lower_range = -1.0
 actuator_cfg.cmd_upper_range = 1.0
 actuator_cfg.command_rate = (actuator_cfg.cmd_upper_range - actuator_cfg.cmd_lower_range) / 2.0
 actuator_cfg.resolution = 1.8  # degrees
 actuator_cfg.precision = 0.05  # radians
 actuator_cfg.scale_joint_pos = torch.pi  # radians per command unit
-actuator_cfg.pos_from_com = (-1.0, 0.0, -0.16)  # meters
-
+actuator_cfg.pos_from_com = (-1.0, 0.0, -0.16)  # meters"""
+actuator_cfg: FoilActuatorCfg = rudder_actuator_config(pos_from_com=(-1.5, 0., -0.1))
 num_envs = 1
+
 #=====================================================================================================================#
 rudder_hydrodyn = FoilDynamics(num_envs=num_envs, device=device, cfg=rudder_hydrodyn_cfg, naca_profile="0012")
 rudder_actuator = FoilActuator(num_envs=num_envs, dynamics=rudder_hydrodyn, dt=0.05, cfg=actuator_cfg)
 
 target_cmds = torch.tensor([[1.0]], device=device)  
 robot_heading = torch.tensor([[0.0]], device=device)
-robot_vel_b = torch.tensor([[1.5, 0.0, 0.0]], device=device)  # moving forward at 0.5 m/s
+robot_vel_b = torch.tensor([[0.5, 0.0, 0.0]], device=device)  # moving forward at 0.5 m/s
 rudder_hydrodyn.init_flow_vector(
     robot_vel_b[:, 0:2], robot_heading
 )
