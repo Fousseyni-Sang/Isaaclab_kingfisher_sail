@@ -166,7 +166,7 @@ def main():
             #print(f"delta: {delta_pose} \tflow: {flow_speed} \tflow_direc: {flow_direction}\n")
             #flow_direction += 
             actions = pre_process_actions(delta_pose)
-            #actions = actions[:, :2]
+            actions = actions[:, :2]
             #print(f"actions: {actions}")
             
             #print(actions.shape, actions)
@@ -191,6 +191,7 @@ def main():
             rew_backward = extras.get("info", {}).get("reward_backward", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,) 
             rew_aero = extras.get("info", {}).get("reward_aero", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,) 
             rew_acord = extras.get("info", {}).get("reward_acord", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,) 
+            rew_goal = extras.get("info", {}).get("reward_goal", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,)
             bearing = extras.get("info", {}).get("bearing", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,) 
             distance = extras.get("info", {}).get("distance", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,) 
             aoa = extras.get("info", {}).get("aoa", torch.zeros((args_cli.num_envs, ), device=rew.device)) # (N,) 
@@ -204,6 +205,7 @@ def main():
             norm_error_ang = extras["info"].get("norm_error_ang", torch.zeros((args_cli.num_envs,), device=rew.device)) # (N,) 
             goal_pos = extras["info"].get("goal_pos", torch.zeros((args_cli.num_envs, 2), device=rew.device)) # (N, 2) 
             norm_error_cat=torch.cat( [norm_error_lin.reshape(args_cli.num_envs, -1), norm_error_ang.reshape(args_cli.num_envs, -1)], dim=-1 )
+            combined_forces = extras.get("info", {}).get("combined_forces", torch.zeros((args_cli.num_envs, 1, 6), device=rew.device)) # (N, 6) 
 
             if reset_env:
                 env.reset()
@@ -237,6 +239,7 @@ def main():
                                 rew_goal=extras.get("info", {}).get("reward_goal", torch.zeros((args_cli.num_envs,), device=rew.device)), 
                                 rew_aero=rew_aero, 
                                 distance=distance, 
+                                combined_forces = combined_forces,
                                 ) 
             
     # Cleanup

@@ -204,7 +204,7 @@ def main():
     all_metrics = [] 
     step_idx = 0 
 
-    wind_list = [-180.0, 180.] #[-180.0, -135.0, -90.0, -45.0, 0.0, 45.0, 90.0, 135.0, 180.0]
+    wind_list = [i for i in range(0, 361, 15)] #[-180.0, -135.0, -90.0, -45.0, 0.0, 45.0, 90.0, 135.0, 180.0]
     wind_idx = 0
 
     print(f"\n================ Vectorized Evaluation: {num_envs} envs =================\n") 
@@ -215,8 +215,8 @@ def main():
     
     # simulate environment
     # note: We simplified the logic in rl-games player.py (:func:`BasePlayer.run()`) function in an
-    #   attempt to have complete control over environment stepping. However, this removes other
-    #   operations such as masking that is used for multi-agent learning by RL-Games.
+    # attempt to have complete control over environment stepping. However, this removes other
+    # operations such as masking that is used for multi-agent learning by RL-Games.
     while simulation_app.is_running() and episodes_finished < num_episodes_target:
         # run everything in inference mode
         with torch.inference_mode():
@@ -240,6 +240,7 @@ def main():
             lift_coeff = extras.get("info", {}).get("lift_coeff", torch.zeros((num_envs,), device=rew.device)) # (N,) 
             drag_coeff = extras.get("info", {}).get("drag_coeff", torch.zeros((num_envs,), device=rew.device)) # (N,) 
             energy = extras.get("info", {}).get("energy", torch.zeros((num_envs,), device=rew.device)) # (N,) 
+            energy_context = extras.get("info", {}).get("energy_context", torch.zeros((num_envs,), device=rew.device)) # (N,) 
             episode_energy = extras.get("info", {}).get("episode_energy", torch.zeros((num_envs,), device=rew.device)) # (N,) 
             max_available_energy = extras.get("info", {}).get("max_available_energy", torch.zeros((num_envs,), device=rew.device)) # (N,) 
             ratio_energy_usage = extras.get("info", {}).get("ratio_energy_usage", torch.zeros((num_envs,), device=rew.device)) # (N,) 
@@ -248,6 +249,7 @@ def main():
             rew_backward = extras.get("info", {}).get("reward_backward", torch.zeros((num_envs,), device=rew.device)) # (N,) 
             rew_aero = extras.get("info", {}).get("reward_aero", torch.zeros((num_envs,), device=rew.device)) # (N,) 
             rew_acord = extras.get("info", {}).get("reward_acord", torch.zeros((num_envs,), device=rew.device)) # (N,) 
+            rew_goal = extras.get("info", {}).get("reward_goal", torch.zeros((num_envs,), device=rew.device)) # (N,)
             bearing = extras.get("info", {}).get("bearing", torch.zeros((num_envs,), device=rew.device)) # (N,) 
             distance = extras.get("info", {}).get("distance", torch.zeros((num_envs,), device=rew.device)) # (N,) 
             aoa = extras.get("info", {}).get("aoa", torch.zeros((num_envs, ), device=rew.device)) # (N,) 
@@ -264,7 +266,7 @@ def main():
             norm_error_cat=torch.cat( [norm_error_lin.reshape(num_envs, -1), norm_error_ang.reshape(num_envs, -1)], dim=-1 )
             relative_wind_angle = extras.get("info", {}).get("relative_wind_angle", torch.zeros((num_envs,), device=rew.device)) # (N,)
             reward_bearing = extras.get("info", {}).get("reward_bearing", torch.zeros((num_envs,), device=rew.device)) # (N,)
-
+            combined_forces = extras.get("info", {}).get("combined_forces", torch.zeros((num_envs, 1, 6), device=rew.device)) # (N, 6) 
             #print(f"[DEBUG] true wind angle_b: {torch.rad2deg(true_wind_angle_b)} true wind angle_w: {torch.rad2deg(true_wind_angle_w)}")             # Save goal per env once 
             for env_id in range(num_envs): 
                 if per_env_goal[env_id] is None: 
@@ -299,6 +301,7 @@ def main():
                     rew_progress=rew_progress, 
                     rew_energy=rew_energy, 
                     rew_backward=rew_backward, 
+                    combined_forces = combined_forces,
                     desired_wrench_b=extras.get("info", {}).get("desired_wrench_b", torch.zeros((num_envs, 6), device=rew.device)), 
                     ang_speed_b=extras.get("info", {}).get("ang_vel_b", torch.zeros((num_envs, 3), device=rew.device)), 
                     norm_error_cat=norm_error_cat, 
@@ -308,7 +311,8 @@ def main():
                     goal_pos=goal_pos,
                     relative_wind_angle=relative_wind_angle,
                     cross_track_error=extras.get("info", {}).get("cross_track_error", torch.zeros((num_envs,), device=rew.device)),
-                    reward_bearing = reward_bearing
+                    reward_bearing = reward_bearing, 
+                    energy_context=energy_context,
                     ) 
                 
             # Store per-step logs per env 

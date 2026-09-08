@@ -8,7 +8,7 @@ from __future__ import annotations
 from omni.isaac.lab.physics.aerodynamics import Aerodynamics, AerodynamicsCfg
 import torch
 import matplotlib.pyplot as plt
-
+import numpy as np
 
 # Aerodynamics
 aerodynamics_cfg: AerodynamicsCfg = AerodynamicsCfg()
@@ -55,7 +55,7 @@ _desired_pos_w[0, 2] = 0.0  # only in 2D
 
 aerodynamics = Aerodynamics(num_envs=1, device=device, cfg=aerodynamics_cfg)
 
-def generate_tacking_waypoints(start_pos:torch.Tensor, goal_pos:torch.Tensor, wind_direction:torch.Tensor,
+"""def generate_tacking_waypoints(start_pos:torch.Tensor, goal_pos:torch.Tensor, wind_direction:torch.Tensor,
                                      min_upwind_angle:float, tack_leg_length:torch.Tensor, max_num_waypoints=10):
     
     device = start_pos.device
@@ -133,8 +133,8 @@ def get_desired_bearing(bearing: torch.Tensor, wind_direction: torch.Tensor, min
     tack_side = torch.where(torch.logical_and(need_switch, tack_side==-1), -tack_side, tack_side)
 
     desired_upwind_angle =   tack_side*min_upwind_angle + wind_direction
-    """desired_downwind_angle = torch.where(torch.logical_and(cross_track>0, need_switch), 
-                    max_downwind_angle + wind_direction + torch.pi, -max_downwind_angle + wind_direction + torch.pi)"""
+    desired_downwind_angle = torch.where(torch.logical_and(cross_track>0, need_switch), 
+                    max_downwind_angle + wind_direction + torch.pi, -max_downwind_angle + wind_direction + torch.pi)
 
     bearing[is_upwind] = torch.atan2(torch.sin(desired_upwind_angle[is_upwind]), torch.cos(desired_upwind_angle[is_upwind]))
     #bearing[sail_mode[:, 1]==1] = torch.atan2(torch.sin(desired_downwind_angle[is_downwind]), torch.cos(desired_downwind_angle[is_downwind]))
@@ -149,18 +149,20 @@ tack_waypoints[0, :, :2], _ = generate_tacking_waypoints(
                     wind_direction=aerodynamics.Uw[0],
                     min_upwind_angle=aerodynamics.cfg.min_upwind_angle, 
                     tack_leg_length=5*tack_length,
-                    max_num_waypoints=num_tack_waypoints)
+                    max_num_waypoints=num_tack_waypoints)"""
 
 angle_of_attack = torch.linspace(-180, 180, 360, device=device)
 cl, cd = aerodynamics.generate_coeffs(angle_of_attack)
 
 dir = "/home/GTL/fsangare/Isaaclab_kingfisher_sail/"
 # Open Aerodynamics figure:  xdg-open /tmp/cl_cd_aoa.png
-plt.figure()
+plt.figure(figsize=(15, 6))
 plt.plot(angle_of_attack.cpu(), cl.cpu(), '--', c='g', label="cl")
 plt.plot(angle_of_attack.cpu(), cd.cpu(), '--', c='y', label="cd")
 plt.xlabel("angle of attack (degree)")
 plt.ylabel("cl and cd")
+plt.xticks(np.arange(-180, 180, 15))
+plt.yticks(np.arange(-1.4, 1.4, 0.2))
 plt.legend()
 plt.savefig(dir+"cl_cd_aoa.png")
 
