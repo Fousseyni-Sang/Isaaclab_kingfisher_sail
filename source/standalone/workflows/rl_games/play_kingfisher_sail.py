@@ -182,6 +182,7 @@ def main():
     env.unwrapped.discriminator.load_checkpoint(checkpoint_name_acord)
     env.unwrapped.discriminator.eval()"""
     env.unwrapped.is_Training = False
+    
     obs = env.reset()
     if isinstance(obs, dict):
         obs = obs["obs"]
@@ -204,14 +205,14 @@ def main():
     all_metrics = [] 
     step_idx = 0 
 
-    wind_list = [i for i in range(0, 361, 15)] #[-180.0, -135.0, -90.0, -45.0, 0.0, 45.0, 90.0, 135.0, 180.0]
+    wind_list = [-180.0] #, -135.0] #[-180.0, -135.0, -90.0, -45.0, 0.0, 45.0, 90.0, 135.0, 180.0]
     wind_idx = 0
 
     print(f"\n================ Vectorized Evaluation: {num_envs} envs =================\n") 
 
 
-    env.unwrapped._sail_aerodynamics.update_flow(flow_direction=wind_list[wind_idx]*(torch.pi/180))
-    print(f"[INFO] Updating wind direction to: {wind_list[wind_idx]} degrees")
+    #env.unwrapped._sail_aerodynamics.update_flow(flow_direction=wind_list[wind_idx]*(torch.pi/180))
+    #print(f"[INFO] Updating wind direction to: {wind_list[wind_idx]} degrees")
     
     # simulate environment
     # note: We simplified the logic in rl-games player.py (:func:`BasePlayer.run()`) function in an
@@ -267,6 +268,7 @@ def main():
             relative_wind_angle = extras.get("info", {}).get("relative_wind_angle", torch.zeros((num_envs,), device=rew.device)) # (N,)
             reward_bearing = extras.get("info", {}).get("reward_bearing", torch.zeros((num_envs,), device=rew.device)) # (N,)
             combined_forces = extras.get("info", {}).get("combined_forces", torch.zeros((num_envs, 1, 6), device=rew.device)) # (N, 6) 
+            true_wind_speed = extras.get("info", {}).get("true_wind_speed", torch.zeros((num_envs,), device=rew.device)) # (N,)
             #print(f"[DEBUG] true wind angle_b: {torch.rad2deg(true_wind_angle_b)} true wind angle_w: {torch.rad2deg(true_wind_angle_w)}")             # Save goal per env once 
             for env_id in range(num_envs): 
                 if per_env_goal[env_id] is None: 
@@ -313,6 +315,8 @@ def main():
                     cross_track_error=extras.get("info", {}).get("cross_track_error", torch.zeros((num_envs,), device=rew.device)),
                     reward_bearing = reward_bearing, 
                     energy_context=energy_context,
+                    true_wind_speed=true_wind_speed,
+                    
                     ) 
                 
             # Store per-step logs per env 
@@ -343,6 +347,11 @@ def main():
                     "norm_error_lin_vx": norm_error_lin[env_id, 0].item(), 
                     "norm_error_lin_vy": norm_error_lin[env_id, 1].item() if norm_error_lin.shape[1] > 1 else 0.0, 
                     "norm_error_ang": norm_error_ang[env_id].item(), 
+                    "goal_x": goal_pos[env_id, 0].item(), 
+                    "goal_y": goal_pos[env_id, 1].item(),
+                    "energy_context": energy_context[env_id].item(),
+                    "true_wind_speed": true_wind_speed[env_id].item(),
+                    
                     } 
                 # actions, aero_force, thruster_force, energy_context, acord_prediction as vectors 
                 step_record.update({
@@ -372,8 +381,8 @@ def main():
 
                     if len(dones)==1:
                         wind_idx = (wind_idx + 1) % len(wind_list)
-                        print(f"[INFO] Updating wind direction to: {wind_list[wind_idx]} degrees")
-                        env.unwrapped._sail_aerodynamics.update_flow(flow_direction=wind_list[wind_idx]*(torch.pi/180))
+                        #print(f"[INFO] Updating wind direction to: {wind_list[wind_idx]} degrees")
+                        #env.unwrapped._sail_aerodynamics.update_flow(flow_direction=wind_list[wind_idx]*(torch.pi/180))
                     
                     ep_len = len(per_env_steps[env_id]) 
                     per_env_episode_lengths.append({ 
@@ -501,11 +510,12 @@ def main():
                 "true_wind_angle_b": steps["true_wind_angle_b"][t].item(),
                 "true_wind_angle_w": steps["true_wind_angle_w"][t].item(),
                 "sail_angle": steps["sail_angle"][t].item(),
-                # etc...
+                "energy_context": steps["energy_context"][t].item(),
+                "true_wind_speed": steps["true_wind_speed"][t].item(),
             })
 
     df = pd.DataFrame(rows)
-    #df.to_csv(os.path.join(output_dir, "all_steps.csv"), index=False)
+    df.to_csv(os.path.join(output_dir, "all_steps.csv"), index=False)
 
 
 

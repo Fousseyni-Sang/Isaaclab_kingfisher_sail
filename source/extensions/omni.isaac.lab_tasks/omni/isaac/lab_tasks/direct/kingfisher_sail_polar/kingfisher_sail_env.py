@@ -402,7 +402,7 @@ class KingfisherSailEnv(DirectRLEnv):
         n = 10
         self.evaluation_context_set = 0.1*torch.arange(1, n+1, device=self.device).expand(self.num_envs, n)
         self.current_test_idx = torch.zeros(self.num_envs, device=self.device, dtype=torch.int32)
-        
+
         self.reward_progress = torch.zeros(self.num_envs, device=self.device)
         self.reward_bearing = torch.zeros(self.num_envs, device=self.device)
         self.reward_energy = torch.zeros(self.num_envs, device=self.device)
