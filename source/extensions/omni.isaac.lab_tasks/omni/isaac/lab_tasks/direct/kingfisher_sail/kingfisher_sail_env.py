@@ -36,66 +36,7 @@ from omni.isaac.lab_assets import (KINGFISHER_SAIL_CFG, RED_ARROW_X_MARKER_CFG, 
   RED_BIG_ARROW_X_MARKER_CFG, BEIGE_ARROW_X_MARKER_CFG, ORANGE_ARROW_X_MARKER_CFG, MAGENTA_ARROW_X_MARKER_CFG)  # isort: skip
 from omni.isaac.lab.markers import CUBOID_MARKER_CFG  # isort: skip
 
-class ClosedHauledReferenceSpeed:
-    """
-    Wind-speed-dependent reference boat speed when sailing close-hauled
-    (sail only, at the empirically VMG-optimal angle) -- derived from
-    sail_sweep_results.csv. Values below are the close-hauled V_ref at each
-    tested true wind speed (re-derive with the extraction script if the
-    underlying polar sweep ever changes):
 
-        wind_speed (m/s):  2.0     4.0     5.0     10.0
-        V_ref (m/s):       0.1413  0.2826  0.3526  0.6998
-
-    Call with a per-env wind speed tensor to get a per-env normalized
-    reference-speed factor, via linear interpolation with edge clamping for
-    wind speeds outside the tested range (e.g. eval sweeps as low as 1 m/s).
-
-    `normalize_at` sets the wind speed whose V_ref maps to 1.0 -- default is
-    the env's own training-time wind speed ceiling (self.max_wind_speed),
-    NOT the polar table's max (10 m/s, well outside the training
-    distribution) -- this keeps existing reward-scale tuning (e.g.
-    time_penalty_scale) valid at the top of the training range, while wind
-    speeds below that get a proportionally SMALLER time penalty rather than
-    rescaling everything relative to an untrained-on wind speed.
-    """
-
-    TABLE_SPEEDS = [2.0, 4.0, 5.0, 10.0]
-    TABLE_VREF = [0.1413, 0.2826, 0.3526, 0.6998]
-
-    def __init__(self, device, normalize_at: float):
-        self.speeds = torch.tensor(self.TABLE_SPEEDS, device=device)
-        self.v_ref = torch.tensor(self.TABLE_VREF, device=device)
-
-        anchor = self._interp_scalar(torch.tensor(normalize_at, device=device))
-        self.v_ref_norm = self.v_ref / anchor
-        print(f"[INFO] ClosedHauledReferenceSpeed: normalized at wind_speed="
-              f"{normalize_at} (V_ref={anchor.item():.4f} m/s -> factor 1.0)")
-        print(f"[INFO] Resulting per-training-range factors: "
-              f"{dict(zip(self.TABLE_SPEEDS, (self.v_ref_norm).tolist()))}")
-
-    def _interp_scalar(self, wind_speed: torch.Tensor) -> torch.Tensor:
-        """Interpolate against the RAW (non-normalized) v_ref table -- used
-        once at init to compute the normalization anchor."""
-        clamped = wind_speed.clamp(self.speeds[0], self.speeds[-1])
-        idx = torch.searchsorted(self.speeds, clamped.reshape(1)).clamp(1, len(self.speeds) - 1)
-        x0, x1 = self.speeds[idx - 1], self.speeds[idx]
-        y0, y1 = self.v_ref[idx - 1], self.v_ref[idx]
-        t = (clamped - x0) / (x1 - x0).clamp(min=1e-6)
-        return (y0 + t * (y1 - y0)).squeeze(0)
-
-    def __call__(self, wind_speed: torch.Tensor) -> torch.Tensor:
-        """Vectorized lookup: per-env wind speed (N,) -> per-env normalized
-        close-hauled reference-speed factor (N,), typically in (0, ~1.4]
-        depending on how far above the normalization anchor a given wind
-        speed sits."""
-        clamped = wind_speed.clamp(self.speeds[0], self.speeds[-1])
-        idx = torch.searchsorted(self.speeds, clamped).clamp(1, len(self.speeds) - 1)
-        x0, x1 = self.speeds[idx - 1], self.speeds[idx]
-        y0, y1 = self.v_ref_norm[idx - 1], self.v_ref_norm[idx]
-        t = (clamped - x0) / (x1 - x0).clamp(min=1e-6)
-        return y0 + t * (y1 - y0)
-    
 class KingfisherSailEnvWindow(BaseEnvWindow):
     """Window manager for the Kingfisher environment."""
 
@@ -283,7 +224,7 @@ class KingfisherSailEnvCfg(DirectRLEnvCfg):
     beam_flag = True
     close_hauled_flag = True
     broad_reach_flag = True
-    fixed_wind_flag = True
+    fixed_wind_flag = False
     wind_direction_randomization_flag = True
     wind_speed_randomization_flag = True
 
@@ -423,7 +364,7 @@ class KingfisherSailEnv(DirectRLEnv):
         
 
         self.energy_context = torch.ones_like(self.episode_number)
-        self.min_context = 0.1
+        self.min_context = 1.
         self.max_context = 1.
         n = 10
         self.evaluation_context_set = 0.1*torch.linspace(1., n, n, device=self.device).expand(self.num_envs, n)
@@ -469,12 +410,7 @@ class KingfisherSailEnv(DirectRLEnv):
         self.new_pose = torch.zeros((self.num_envs, 7), device=self.device)
         self.new_velocities = torch.zeros((self.num_envs, 6), device=self.device)
 
-        self.max_wind_speed = 7
-
-        self._vref_lookup = ClosedHauledReferenceSpeed(
-         device=self.device, normalize_at=self.max_wind_speed
-        )
-
+        self.max_wind_speed = 5
         # ============================================================================================#
         # ======================== Markers for the wind visualization ================================#
         # ============================================================================================#
@@ -530,7 +466,6 @@ class KingfisherSailEnv(DirectRLEnv):
 
     def _pre_physics_step(self, actions: torch.Tensor):
         self._actions = actions.clone().clamp(-1.0, 1.0)
-        #self._actions += 0.1*self.step_dt
         heading = torch.atan2(torch.sin(self._robot.data.heading_w), torch.cos(torch.sin(self._robot.data.heading_w)))
         # 1. Calculate relative wind
         heading_relative_wind = heading - self._sail_aerodynamics.Beta_w + torch.pi
@@ -541,11 +476,11 @@ class KingfisherSailEnv(DirectRLEnv):
 
         self.new_velocities = self._robot.data.root_com_vel_w.clone()
         
-        self.new_velocities[:, 5] = 4*self._actions[:, 2] * ((torch.norm(self.new_velocities[:, :3], dim=1))**2)  # angular velocity around z imitating rudder effect (proportional to the speed of the boat)
+        self.new_velocities[:, 5] = 4*self._actions[:, 2] * ((torch.norm(self.new_velocities[:, :3], dim=1))**2)#.clamp_max(4)  # angular velocity around z imitating rudder effect (proportional to the speed of the boat)
 
             
         """if not self.is_Training:
-            print(f"[DEBUG] actions: {self._actions} ")"""
+            print(f"[DEBUG] actions: {self._actions} new_velocities: {self.new_velocities} self._robot.data.root_com_vel_w: {self._robot.data.root_com_vel_w} ")"""
         # 3. Thruster & Hydrodynamic Calculations (for standard execution)
         if self._actions.shape[1] > 2:
             self._thruster_dynamics.set_target_cmd(self._actions[:, :2])
@@ -570,19 +505,13 @@ class KingfisherSailEnv(DirectRLEnv):
         self._sail_aerodynamic_force_b[:, 0, :] = self._sail_actuator.get_forces_and_torques()
 
         current_rudder_pos = self._rudder_actuator.dynamics.foil_angle.reshape(self.num_envs, -1)
-        #self._actions[:, 0:1] = (25*torch.pi/180)/torch.pi
-        if self._actions.shape[1]>=3:
-            rudder_actions = self._actions[:, 2:3]
-        else:
-            rudder_actions = self._actions[:, 0:1]
-
-        self._rudder_actuator.update_joint_cmd(current_rudder_pos, rudder_actions)
+        """self._rudder_actuator.update_joint_cmd(current_rudder_pos, self._actions[:, 0:1])
         self._rudder_actuator.update_forces(self._robot.data.heading_w, self._robot.data.root_lin_vel_b)
-        self._rudder_hydrodynamics_force_b[:, 0, :] = self._rudder_actuator.get_forces_and_torques()
+        self._rudder_hydrodynamics_force_b[:, 0, :] = self._rudder_actuator.get_forces_and_torques()"""
 
         """if not self.is_Training:
-            print(f"[DEBUG] rudder force: {self._rudder_hydrodynamics_force_b} \nrudder_foil_angle:{self._rudder_actuator.dynamics.foil_angle.rad2deg()}" )
-            print(f"[DEBUG] sail force: {self._sail_aerodynamic_force_b} \nsail_foil_angle: {self._sail_actuator.dynamics.foil_angle.rad2deg()}" )
+            print(f"[DEBUG] rudder force: {self._rudder_hydrodynamics_force_b} \nrudder_angle: {self._rudder_actuator.joint_position} \nrudder_foil_angle:{self._rudder_actuator.dynamics.foil_angle}" )
+            print(f"[DEBUG] rudder force: {self._sail_aerodynamic_force_b} \nsail_angle: {self._sail_actuator.joint_position} \nsail_foil_angle: {self._sail_actuator.dynamics.foil_angle}" )
         """
         """if not self.is_Training:
             print(f"[JOINT] joint position: {torch.rad2deg(self.joint_pos_target)} relative_wind: {torch.rad2deg(self.relative_wind_angle)}")
@@ -593,14 +522,15 @@ class KingfisherSailEnv(DirectRLEnv):
         lft_thruster_force = self._thruster_forces[..., :3]
         rgt_thruster_force = self._thruster_forces[..., 3:] 
 
-
         #self._sail_aerodynamic_force_b[:, 0, :3] = torch.tensor([0.0, 3, 0.0], device=self.device)
 
         combined = self._hydrostatic_force + self._hydrodynamic_force
 
-        combined[:, 0, :3] = combined[:, 0, :3] + self._sail_aerodynamic_force_b[:, 0, :3] + 0*self._rudder_hydrodynamics_force_b[:, 0, :3] #+ self._keel_hydrodynamics_force_b[:, 0, :3]
+        combined[:, 0, :3] = combined[:, 0, :3] + self._sail_aerodynamic_force_b[:, 0, :3] #+ \
+        #self._rudder_hydrodynamics_force_b[:, 0, :3] #+ self._keel_hydrodynamics_force_b[:, 0, :3]
 
-        combined[:, 0, 3:] = combined[:, 0, 3:] + self._sail_aerodynamic_force_b[:, 0, 3:] + 0*self._rudder_hydrodynamics_force_b[:, 0, 3:] #+ self._keel_hydrodynamics_force_b[:, 0, 3:]
+        combined[:, 0, 3:] = combined[:, 0, 3:] + self._sail_aerodynamic_force_b[:, 0, 3:] #+ \
+        #self._rudder_hydrodynamics_force_b[:, 0, 3:] #+ self._keel_hydrodynamics_force_b[:, 0, 3:]
         
         self.combined_forces = combined.clone()
 
@@ -836,7 +766,7 @@ class KingfisherSailEnv(DirectRLEnv):
 
         alpha = 0.2
         #distance_progress_reward = (alpha*progress_toward_goal + (velocity_made_good)*(torch.exp(-4 * self.energy))) * self.cfg.distance_progress_reward_scale #*vmg_wind_factor #
-        distance_progress_reward = ((velocity_made_good)) * self.cfg.distance_progress_reward_scale *(torch.exp(-2 * self.energy))
+        distance_progress_reward = ((velocity_made_good)) * self.cfg.distance_progress_reward_scale*(torch.exp(-2 * self.energy))
         #distance_progress_reward = (alpha*progress_toward_goal + (1 - alpha)*velocity_made_good*vmg_wind_factor) * self.cfg.distance_progress_reward_scale*(torch.exp(-4*self.energy))
         #distance_progress_reward = (-0.2*(progress_toward_goal<0).float() + velocity_made_good)* self.cfg.distance_progress_reward_scale #*(torch.exp(-2*self.energy))) #* self.cfg.distance_progress_reward_scale #/(self.energy.clamp(min=1))
         self.reward_progress = distance_progress_reward.clone()
@@ -861,8 +791,6 @@ class KingfisherSailEnv(DirectRLEnv):
         
         # 4. Small Step / Time Penalty (STRICTLY NEGATIVE)
         time_penalty = -5*abs(self.cfg.time_penalty_scale) * torch.ones(self.num_envs, device=self.device)*self.step_dt #*(self._sail_actuator.dynamics.Uw/self.max_wind_speed) #*torch.exp(-2*self.energy)
-        v_ref_factor = self._vref_lookup(self._sail_aerodynamics.Uw)  # (N,)
-        #time_penalty = -5*abs(self.cfg.time_penalty_scale) * v_ref_factor * self.step_dt
 
         tack_penalty = torch.zeros_like(time_penalty)
         tack_mask = torch.abs(self.cross_track_error/self.cfg.max_cross_track) > 1.
@@ -917,7 +845,7 @@ class KingfisherSailEnv(DirectRLEnv):
             "2_goal_reached": goal_reward,
             "3_energy": energy_reward,
             "4_backwards": backwards_penalty,
-            "6_time": time_penalty,
+            "6_time": 0*time_penalty,
             "7_tack_penalty": tack_penalty,
             "8_lift_drag_ratio": 0*aero_reward
         }
@@ -934,7 +862,7 @@ class KingfisherSailEnv(DirectRLEnv):
         for key, value in rewards.items():
             self._episode_sums[key] += value
 
-        """if not self.is_Training and not self.is_paper_eval:
+        if not self.is_Training and not self.is_paper_eval:
             print(f"\n[REWARD DEBUG] progress toward goal: {progress_toward_goal} \nvmg: {velocity_made_good}")
             #print(f"reward_aero: {aero_reward} \nReward progress: {distance_progress_reward} \nupwind_penalty:{0} rel_wind: {self.relative_wind_angle.rad2deg()}")
             #print(f"max_lift_force: {self.max_aero_force}")
@@ -944,7 +872,7 @@ class KingfisherSailEnv(DirectRLEnv):
             #print(f"[AERO FORCE DEBUG] align: {aero_alignment} \ngrad_pos: {grad_direction} \nlift_w: {aero_force_w}")
             print(f"[REWARD GOAL] goal reward: {goal_reward} \tpojec: {self.robot_init_projected_on_init_goal}")
             #print(f"[REWARD] diff_rew: {-(diff_desired_pos_b[:, 0]<0).float()}:{diff_desired_pos_b[:, 0]}")
-            print(f"energy_context: {self.energy_context} energy_norm: {energy_norm} energy_reward: {energy_reward}")"""
+            print(f"energy_context: {self.energy_context} energy_norm: {energy_norm} energy_reward: {energy_reward}")
         return reward
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
@@ -1004,7 +932,7 @@ class KingfisherSailEnv(DirectRLEnv):
             # Spread out the resets to avoid spikes in training when many environments reset at a similar time
             self.episode_length_buf = torch.randint_like(self.episode_length_buf, high=int(self.max_episode_length))
 
-        self._actions[env_ids, :] = 0.0
+        self._actions[env_ids] = 0.0
         # Sample new goal position
 
         self.initial_bearing[env_ids] = torch.zeros_like(self._desired_pos_w[env_ids, 0]).uniform_(
