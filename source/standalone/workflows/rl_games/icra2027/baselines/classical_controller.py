@@ -58,7 +58,7 @@ import pandas as pd
 # --- Tunable constants -----------------------------------------------------
 FALLBACK_UPWIND_ANGLE_DEG = 45.0   # used only if no polar_csv_path is given
 MAX_CROSS_TRACK = 10.0             # tack-switch threshold -- matches cfg.max_cross_track
-RUDDER_KP = 1.0 / np.radians(60.0)     # full rudder command at 60 deg heading error
+RUDDER_KP = 1.0 #/ np.radians(60.0)     # full rudder command at 60 deg heading error
 STALL_SPEED_THRESHOLD = 0.3        # m/s -- below this, boat is considered "stalled"
 LOW_SPEED_BANGBANG_THRESHOLD = 0.3 # m/s -- below this, rudder saturates to full
                                     # authority instead of a graded proportional
@@ -475,11 +475,11 @@ def classical_action(info: dict, state: ClassicalControllerState, assist_level: 
     #        see the constant's definition for the actuator-range assumption
     #        this depends on, which still needs verifying against your real
     #        rudder_actuator_config().
-    heading_error = wrap_to_pi(desired_heading - heading_w)
+    heading_error = wrap_to_pi(desired_heading - heading_w)/torch.pi
     proportional_rudder = torch.clamp(RUDDER_KP * heading_error, -1.0, 1.0)
     bangbang_rudder = torch.sign(heading_error)
     low_speed = forward_speed < LOW_SPEED_BANGBANG_THRESHOLD
-    rudder_action = torch.where(low_speed, bangbang_rudder, proportional_rudder) * RUDDER_SAFETY_SCALE
+    rudder_action = torch.where(low_speed, bangbang_rudder, proportional_rudder) #* RUDDER_SAFETY_SCALE
 
     # 5. Sail trim: Linear Sail Angle (LSA) rule -- sheeted in tight
     #    (0 deg) heading into the wind, eased fully out (90 deg) running

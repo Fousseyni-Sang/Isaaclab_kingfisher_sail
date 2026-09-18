@@ -34,7 +34,14 @@ parser.add_argument("--wind_direction", type=float, default=180.0, help="True wi
 parser.add_argument("--wind_speed", type=float, default=5.0, help="True wind speed.") 
 parser.add_argument("--num_episode", type=int, default=10, help="Number of episodes for evaluation.") 
 parser.add_argument("--ros_publish_interval", type=int, default=10, help="ROS publish interval in steps.") 
-parser.add_argument("--model_id", type=str, default=None, help="low level model to run") 
+parser.add_argument("--model_id", type=str, default=None, help="low level model to run")
+parser.add_argument(
+    "--experiment_name",
+    type=str,
+    default=None,
+    help="Override agent_cfg['params']['config']['name'] used to locate logs/rl_games/<name>/. Lets a sweep "
+    "launcher point each parallel eval at its own run's checkpoints without touching the registered agent yaml.",
+)
 
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
@@ -75,15 +82,38 @@ from datetime import datetime
 import pandas as pd
 import numpy as np  
 
+def _resolve_output_csv_path() -> str:
+    """Name/place the eval CSV after the reward config currently in effect.
+
+    When KINGFISHER_REWARD_CFG is set (e.g. by launch_reward_sweep.py), the CSV is
+    named after and saved next to that reward config, so each swept configuration
+    gets its own `all_steps_swept_<run_name>.csv` inside its own run directory.
+    Falls back to `all_steps_swept_default.csv` in the current directory when the
+    env var isn't set (e.g. a plain manual invocation).
+    """
+    reward_cfg_path = os.environ.get("KINGFISHER_REWARD_CFG")
+    if reward_cfg_path:
+        run_dir = os.path.dirname(os.path.abspath(reward_cfg_path))
+        run_name = os.path.basename(run_dir)
+    else:
+        run_dir = os.getcwd()
+        run_name = "default"
+    return os.path.join(run_dir, f"all_steps_swept_{run_name}.csv")
+
+
 def main():
     """Play with RL-Games agent."""
+
+    csv_path = _resolve_output_csv_path()
 
     env_cfg = parse_env_cfg(
         args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs, use_fabric=not args_cli.disable_fabric
     )
     
     agent_cfg = load_cfg_from_registry(args_cli.task, "rl_games_cfg_entry_point")
-  
+    if args_cli.experiment_name is not None:
+        agent_cfg["params"]["config"]["name"] = args_cli.experiment_name
+
     # specify directory for logging experiments
     log_root_path = os.path.join("logs", "rl_games", agent_cfg["params"]["config"]["name"])
     log_root_path = os.path.abspath(log_root_path)
@@ -272,8 +302,8 @@ def main():
         
         print("[INFO] All envs completed their full local wind sweep.")
         df = pd.DataFrame(all_rows)
-        df.to_csv("all_steps_swept.csv", index=False)
-        print(f"[INFO] Saved {len(df)} rows, "
+        df.to_csv(csv_path, index=False)
+        print(f"[INFO] Saved to '{csv_path}': {len(df)} rows, "
             f"{df.groupby(['env_id','local_episode_idx']).ngroups} episodes total.")
         
         print("[INFO] Evaluation complete.")
@@ -287,8 +317,8 @@ def main():
         print(f"[INFO] episode finished: {episodes_done_per_env.sum()}:{episodes_done_per_env}")
 
         df = pd.DataFrame(all_rows)
-        df.to_csv("all_steps_swept.csv", index=False)
-        print(f"[INFO] Saved {len(df)} rows, "
+        df.to_csv(csv_path, index=False)
+        print(f"[INFO] Saved to '{csv_path}': {len(df)} rows, "
             f"{df.groupby(['env_id','local_episode_idx']).ngroups} episodes total.")
         
         print("[INFO] Evaluation complete.")

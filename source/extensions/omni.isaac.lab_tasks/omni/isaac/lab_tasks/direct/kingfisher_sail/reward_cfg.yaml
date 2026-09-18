@@ -1,0 +1,26 @@
+# Reward and environment parameters for KingfisherSailEnvCfg (Isaac-KingfisherSail-Direct-v0).
+#
+# Loaded at runtime by `reward_cfg_loader.load_reward_cfg()`, which is called from
+# KingfisherSailEnvCfg.__post_init__. Every leaf key below must match an existing
+# attribute on KingfisherSailEnvCfg; matching attributes are overridden with the
+# value given here.
+#
+# To point the environment at a different copy of this file (e.g. for a sweep),
+# set the KINGFISHER_REWARD_CFG environment variable to the desired file path.
+# When unset, this file (the one shipped next to the env) is used.
+
+reward_scales:
+  distance_reward_scale: 0.0
+  distance_progress_reward_scale: 6.0
+  bearing_progress_reward_scale: 0.0
+  goal_reached_scale: 1000.0
+  energy_penalty_scale: -10.0
+  backwards_penalty_scale: -10.0
+  time_penalty_scale: -2.0
+  penalty_inefficient_sailing_scale: -0.1
+  tack_penalty_scale: -10.0
+  bearing_penalty_scale: 0.5
+  beargin_penalty_coef: -4.0
+  lift_drag_ratio_scale: 0.1
+  acord_reward_scale: 0.5
+  speed_penalty_scale: -0.1
