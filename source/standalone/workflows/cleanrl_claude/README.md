@@ -8,18 +8,22 @@ Every script is 100–200 lines, uses vectorized envs on the GPU, and logs to Te
 | `ppo.py` | PPO, hyper-parameters from the rl_games yaml | continuous | ppo:OK |
 | `ppo_rnn.py` | PPO with an LSTM policy | continuous | ppo_rnn:OK |
 | `ppo_rnd.py` | PPO + Random Network Distillation | continuous | ppo_rnd:OK |
-| `ppo_discrete.py` | PPO on the discretized action space | discrete | ppo_discrete:OK |
-| `sac.py` | SAC (+ optional HER) | continuous | sac:OK (`--her` ran only in an earlier short test) |
-| `ddpg.py` | DDPG (+ optional HER) | continuous | ddpg:OK (`--her` ran only in an earlier short test) |
-| `dqn.py` | Double DQN, discretized actions | discrete | dqn:OK |
+| `ppo_rnd_rnn.py` | PPO + sequence-based RND (recurrent target/predictor) | continuous | ppo_rnd_rnn:ran end-to-end (train, eval, LSTM and GRU), not yet trained to convergence |
+| `ppo_discrete.py` | PPO, per-action-group discretization (`bin_thrusters`/`bin_rudder`/`bin_sail`) | discrete | ppo_discrete:OK |
+| `sac.py` | SAC (+ optional HER) | continuous | sac:OK, critic export checked too (`--her` ran only in an earlier short test) |
+| `ddpg.py` | DDPG (+ optional HER) | continuous | ddpg:OK, critic export checked too (`--her` ran only in an earlier short test) |
+| `dqn.py` | Double DQN, per-action-group discretization | discrete | dqn:OK |
 | `drqn.py` | Recurrent DQN (sequence replay, burn-in) | discrete | drqn:OK |
-| `eval.py` | paper-sweep evaluation of any checkpoint | – | eval:OK (all 8 algorithms) |
+| `eval.py` | paper-sweep evaluation of any checkpoint | – | eval:OK (all 9 algorithms) |
 | `launch_sweep.py` | tmux sweep: train → eval → plot | – | launch_sweep:OK |
 | `tuner.py` | Optuna search around any script | – | tuner:OK (2-trial SAC run, done before the config refactor, not re-run) |
+| `export_onnx.py` | export a checkpoint's actor + critic to ONNX | – | export_onnx:OK (all 9 algorithms, checked against onnxruntime) |
 
 **"OK" means:** the script ran end to end through `launch_sweep.py` (tiny settings: 32 envs, 15k steps), wrote
 TensorBoard scalars including the env's reward components, saved a checkpoint, was evaluated by `eval.py`, and its CSV
-was read by `plot_paper_eval_3D.py`. It does **not** mean the algorithm was shown to learn: nobody trained any of them long enough to compare.
+was read by `plot_paper_eval_3D.py`. It does **not** mean the algorithm was shown to learn: nobody trained any of them
+long enough to compare, except where noted -- the user has since trained `ppo`, `ppo_rnn` and `ppo_rnd` to convergence
+(rewards converged); the rest are still being validated.
 
 Support files: `common.py` (CLI, env wrapper, discretizer, logging, GAE), `buffers.py` (replay buffer, HER,
 sequence sampling), `configs/` (one yaml per algorithm, see below).
