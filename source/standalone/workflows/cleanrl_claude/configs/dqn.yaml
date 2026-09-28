@@ -1,0 +1,20 @@
+# Double DQN on the discretized action space (see Args in dqn.py)
+num_envs: 64
+total_timesteps: 1000000
+bin_thrusters: 3         # levels of each thruster (2 = -1/+1, 3 = -1/0/+1)
+bin_rudder: 5
+bin_sail: 5              # joint action space = bin_thrusters^2 * bin_rudder * bin_sail
+buffer_size: 1000000
+batch_size: 256
+learning_starts: 5000
+updates_per_step: 1
+learning_rate: 1.0e-4
+gamma: 0.99
+tau: 1.0                 # 1.0 = hard copy of the target network
+target_frequency: 500    # in gradient updates
+start_e: 1.0
+end_e: 0.05
+exploration_fraction: 0.4
+double_dqn: true
+hidden: 256
+reward_scale: 1.0

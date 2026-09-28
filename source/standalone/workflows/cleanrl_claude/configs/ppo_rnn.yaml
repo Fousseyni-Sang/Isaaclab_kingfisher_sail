@@ -1,0 +1,4 @@
+# Recurrent PPO: rl_games PPO settings + LSTM settings.
+include: kingfisher_ppo.yaml
+lstm_hidden: 64
+seq_length: 8   # BPTT length. num_steps (48) must be a multiple of it; the rl_games yaml says 10, which does not divide 48

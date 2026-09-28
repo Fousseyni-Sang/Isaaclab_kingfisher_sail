@@ -1,0 +1,20 @@
+# Recurrent DQN on the discretized action space (see Args in drqn.py)
+num_envs: 64
+total_timesteps: 1000000
+bin_thrusters: 3
+bin_rudder: 5
+bin_sail: 5
+buffer_size: 1000000
+batch_size: 64           # sequences per update
+seq_len: 16
+burn_in: 4               # first steps of a sequence only warm up the LSTM state
+learning_starts: 5000
+updates_per_step: 1
+learning_rate: 1.0e-4
+gamma: 0.99
+target_frequency: 500
+start_e: 1.0
+end_e: 0.05
+exploration_fraction: 0.4
+hidden: 128
+reward_scale: 1.0

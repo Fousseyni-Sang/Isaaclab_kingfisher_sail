@@ -1,0 +1,12 @@
+# PPO + sequence-based RND: rl_games PPO settings + RND settings (same as ppo_rnd.yaml) + the recurrent RND net.
+include: kingfisher_ppo.yaml
+int_coef: 1.0
+ext_coef: 2.0
+int_gamma: 0.99
+rnd_lr: 1.0e-4
+rnd_dim: 64
+rnd_hidden: 128
+update_proportion: 0.25
+rnd_cell: lstm           # lstm | gru
+rnd_seq_len: 0           # window length in steps; 0 = the whole horizon (num_steps). Must divide num_steps.
+rnd_batch_seqs: 1024     # windows per predictor mini-batch

@@ -1,0 +1,22 @@
+# SAC (see Args in sac.py)
+num_envs: 64
+total_timesteps: 1000000
+buffer_size: 1000000
+batch_size: 256
+learning_starts: 5000
+updates_per_step: 1      # gradient updates per vectorized env step
+gamma: 0.99
+tau: 0.005
+policy_lr: 3.0e-4
+q_lr: 1.0e-3
+policy_frequency: 2
+alpha: 0.2
+autotune: true           # learn the entropy coefficient
+hidden: 256
+reward_scale: 1.0
+# Hindsight Experience Replay (sparse goal reward, relabeled goals)
+her: false
+her_k: 4
+her_ratio: 0.8
+her_goal_reward: 1.0
+goal_obs_idx: [6, 7, 8]  # obs slots: cos bearing, sin bearing, distance / max_target_distance

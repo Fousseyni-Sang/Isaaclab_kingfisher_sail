@@ -1,0 +1,9 @@
+# PPO + RND: rl_games PPO settings + RND settings.
+include: kingfisher_ppo.yaml
+int_coef: 1.0            # weight of the intrinsic advantage
+ext_coef: 2.0            # weight of the extrinsic advantage
+int_gamma: 0.99          # discount of the (non-episodic) intrinsic return
+rnd_lr: 1.0e-4           # predictor learning rate
+rnd_dim: 64              # embedding size of target / predictor
+rnd_hidden: 128
+update_proportion: 0.25  # share of each mini-batch used to train the predictor

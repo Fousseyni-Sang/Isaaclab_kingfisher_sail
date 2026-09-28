@@ -1,0 +1,3 @@
+# PPO: everything comes from the rl_games yaml next to this file (copy of kingfisher_sail/agents/rl_games_ppo_cfg.yaml).
+# Add flat overrides below if you want (keys = Args field names in ppo.py), e.g.  num_envs: 4096
+include: kingfisher_ppo.yaml
