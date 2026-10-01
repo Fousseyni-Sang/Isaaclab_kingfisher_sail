@@ -9,14 +9,15 @@ Every script is 100–200 lines, uses vectorized envs on the GPU, and logs to Te
 | `ppo_rnn.py` | PPO with an LSTM policy | continuous | ppo_rnn:OK |
 | `ppo_rnd.py` | PPO + Random Network Distillation | continuous | ppo_rnd:OK |
 | `ppo_rnd_rnn.py` | PPO + sequence-based RND (recurrent target/predictor) | continuous | ppo_rnd_rnn:ran end-to-end (train, eval, LSTM and GRU), not yet trained to convergence |
-| `ppo_discrete.py` | PPO, per-action-group discretization (`bin_thrusters`/`bin_rudder`/`bin_sail`) | discrete | ppo_discrete:OK |
+| `ppo_discrete.py` | PPO on a discretized action space (`--bins`, one entry per action dim) | discrete | ppo_discrete:OK |
 | `sac.py` | SAC (+ optional HER) | continuous | sac:OK, critic export checked too (`--her` ran only in an earlier short test) |
 | `ddpg.py` | DDPG (+ optional HER) | continuous | ddpg:OK, critic export checked too (`--her` ran only in an earlier short test) |
-| `dqn.py` | Double DQN, per-action-group discretization | discrete | dqn:OK |
+| `dqn.py` | Double DQN, discretized actions (`--bins`) | discrete | dqn:OK |
 | `drqn.py` | Recurrent DQN (sequence replay, burn-in) | discrete | drqn:OK |
 | `eval.py` | paper-sweep evaluation of any checkpoint | – | eval:OK (all 9 algorithms) |
 | `launch_sweep.py` | tmux sweep: train → eval → plot | – | launch_sweep:OK |
 | `tuner.py` | Optuna search around any script | – | tuner:OK (2-trial SAC run, done before the config refactor, not re-run) |
+| `dehb_tuner.py` | joint hyper-parameter + reward-shaping search (DEHB) | – | dehb_tuner:OK (fake-trainee ask/tell/resume checks + a real 6-trial joint SAC run) |
 | `export_onnx.py` | export a checkpoint's actor + critic to ONNX | – | export_onnx:OK (all 9 algorithms, checked against onnxruntime) |
 
 **"OK" means:** the script ran end to end through `launch_sweep.py` (tiny settings: 32 envs, 15k steps), wrote
@@ -39,14 +40,14 @@ The algorithm flags come from the `Args` dataclass at the top of each script; `-
 pysaac source/standalone/workflows/cleanrl_claude/ppo.py --headless --device cuda:0 --num_envs 4096
 pysaac source/standalone/workflows/cleanrl_claude/ppo_rnn.py --headless --num_envs 4096
 pysaac source/standalone/workflows/cleanrl_claude/ppo_rnd.py --headless --num_envs 4096 --int_coef 1.0
-pysaac source/standalone/workflows/cleanrl_claude/ppo_discrete.py --headless --num_envs 4096 --bin_thrusters 2 --bin_rudder 5 --bin_sail 3
+pysaac source/standalone/workflows/cleanrl_claude/ppo_discrete.py --headless --num_envs 4096 --bins 2 2 5 3
 
 pysaac source/standalone/workflows/cleanrl_claude/sac.py  --headless --num_envs 64 --total_timesteps 2000000
 pysaac source/standalone/workflows/cleanrl_claude/ddpg.py --headless --num_envs 64
 pysaac source/standalone/workflows/cleanrl_claude/sac.py  --headless --num_envs 64 --her     # goal-conditioned baseline
 
-pysaac source/standalone/workflows/cleanrl_claude/dqn.py  --headless --num_envs 64 --bin_thrusters 3 --bin_rudder 5 --bin_sail 5
-pysaac source/standalone/workflows/cleanrl_claude/drqn.py --headless --num_envs 64 --bin_thrusters 3 --bin_rudder 5 --bin_sail 5 --seq_len 16
+pysaac source/standalone/workflows/cleanrl_claude/dqn.py  --headless --num_envs 64 --bins 3 3 5 5
+pysaac source/standalone/workflows/cleanrl_claude/drqn.py --headless --num_envs 64 --bins 3 3 5 5 --seq_len 16
 ```
 
 Default task: `Isaac-KingfisherSail-Direct-v0` (change with `--task`). Logs and checkpoints go to
@@ -78,17 +79,19 @@ and `value_bootstrap` on time-outs. The adaptive-lr KL is the sampled estimate `
 ## Discretization
 
 `common.DiscreteEnv(env, bins, mode)` discretizes the continuous `[-1, 1]` actions with its own number of levels per action
-dimension. The env is not changed: it still receives continuous actions. The number of levels is set per group in the
-config or on the command line (`bin_thrusters` applies to both thrusters), for the action layout
-`[thruster_left, thruster_right, rudder, sail]` (`ACTION_GROUPS` in `common.py`; edit it for another task):
+dimension. The env is not changed: it still receives continuous actions. `bins` is a plain list, one entry per action
+dimension, **in the env's own action order** -- generic to any task and any number of actions, not tied to Kingfisher's
+layout. For Kingfisher (`[thruster_left, thruster_right, rudder, sail]`):
 
 ```yaml
-bin_thrusters: 2   # {-1, +1}          3 = {-1, 0, +1}
-bin_rudder: 5      # {-1, -0.5, 0, 0.5, 1}
-bin_sail: 3        # {-1, 0, +1}
+bins: [2, 2, 5, 3]   # thruster_left, thruster_right, rudder, sail
+                     # 2 levels = {-1, +1}   3 = {-1, 0, +1}   5 = {-1, -0.5, 0, 0.5, 1}
 ```
 
-Levels are equally spaced in `[-1, 1]` (1 level = 0). An even number of levels has no 0 action.
+or on the command line: `--bins 2 2 5 3` (space-separated, same order). The length of `bins` must equal the env's
+action dimension. Levels are equally spaced in `[-1, 1]` (1 level = 0, fixing that dimension). An even number of
+levels has no 0 action. For another task, just give a `bins` list as long as its action space, in its action order;
+nothing in `ppo_discrete.py`/`dqn.py`/`drqn.py`/`common.py` needs to change.
 
 * `mode="multi"` (`ppo_discrete.py`): the action is `(N, 4)` integers; one categorical per dimension, each with its own number of choices.
 * `mode="joint"` (`dqn.py`, `drqn.py`): every combination is one action, `2 x 2 x 5 x 3 = 60` in the example above (defaults: `3 x 3 x 5 x 5 = 225`).
@@ -198,18 +201,56 @@ constant, the same for every observation -- it does not carry information about 
 python tuner.py --script ppo.py --n_trials 20 --extra_args "--num_envs 512 --total_timesteps 2000000"
 python tuner.py --script sac.py --n_trials 30 --devices cuda:0 cuda:1 --n_jobs 2 --seeds 2 \
                 --extra_args "--num_envs 64 --total_timesteps 500000"
-python tuner.py --script dqn.py --space "learning_rate:float:1e-5:1e-3:log" --space "bin_rudder:int:3:7"
+python tuner.py --script dqn.py --space "learning_rate:float:1e-5:1e-3:log" "bins:cat:2/2/3/3,3/3/5/5"
 ```
 
 (Run `tuner.py` with `pysaac` if you want the same Python; it only needs `optuna` and `tyro`.)
 
 * Default search spaces per script are in `DEFAULT_SPACES`; `--space` adds or overrides an entry.
   Format: `name:float:low:high[:log]`, `name:int:low:high`, `name:cat:a,b,c` (`64/64` inside a cat means `--name 64 64`).
+  Give every entry after ONE `--space` (space-separated, as above): a second `--space` on the command line replaces
+  the first instead of adding to it (a `tyro` tuple-flag quirk, not specific to this tool).
 * Score = `--metric` (`mean_return` of the last 100 finished episodes; falls back to `mean_step_reward` when no
   episode finished, which happens with the very long kingfisher episodes and short trials). Use `--metric mean_step_reward` for short runs.
 * Results are in `logs/cleanrl_claude_tuning/` (sqlite study, one log and json per trial, `<study>_best.json`).
   Re-running the same command resumes the study. Failed trials are marked pruned; their log is next to the json.
 * Add a new algorithm: copy any script, make it write the result with `write_result(...)`, and add an entry to `DEFAULT_SPACES` (or pass `--space` flags).
+
+## Joint hyper-parameter + reward-shaping search (`dehb_tuner.py`)
+
+Implements Dierkes et al., ["Combining Automated Optimisation of Hyperparameters and Reward Shape"](https://arxiv.org/abs/2406.18293)
+(RLC 2024) and its [reference code](https://github.com/ADA-research/combined_hpo_and_reward_shaping): instead of
+tuning hyper-parameters and reward weights separately, it puts both in ONE search space and optimizes them
+together with **DEHB** (Differential Evolution HyperBand, the optimizer the paper itself uses) -- the same
+multi-fidelity idea as Hyperband (most trials run short and cheap; only the promising ones are re-run at a longer
+budget), but new configurations come from differential evolution over the population instead of random sampling.
+
+```bash
+pip install dehb   # ConfigSpace, dask, pandas etc. come with it; not installed by default
+
+python dehb_tuner.py --script ppo.py --n_trials 60 --min_fidelity 100000 --max_fidelity 2000000 \
+    --extra_args "--num_envs 2048"
+python dehb_tuner.py --script sac.py --n_trials 40 --mode hpo_only       # ablation: hyper-parameters only
+python dehb_tuner.py --script sac.py --n_trials 40 --mode reward_only    # ablation: reward weights only
+python dehb_tuner.py --script ppo.py --n_trials 60 \
+    --space "reward.tack_penalty_scale:float:-30.0:0.0" "learning_rate:float:1e-5:1e-2:log"
+```
+
+* `--mode joint` (default) searches hyper-parameters (`DEFAULT_SPACES`, imported from `tuner.py`) and reward weights
+  (`DEFAULT_REWARD_SPACE`, the same `reward_scales` keys `launch_sweep.py`'s `REWARD_SWEEP_AXES` sweeps by hand) at
+  once -- `hpo_only`/`reward_only` are the paper's own ablations, one half of the space at a time.
+  A reward entry is `reward.<key>:...` in `--space` and edits `reward_cfg.yaml`'s `reward_scales.<key>`, using the
+  same `KINGFISHER_REWARD_CFG` mechanism `launch_sweep.py` uses -- it has no effect unless the env reads it.
+* `--min_fidelity`/`--max_fidelity` are the training length (`--total_timesteps`) of the cheapest and most expensive
+  trial; `--eta` (default 3) is Hyperband's downsampling rate. The defaults are small (smoke-test scale); scale them
+  to your algorithm and hardware for a real search, the same way the other scripts' small defaults are meant to be raised.
+* Results are in `logs/cleanrl_claude_tuning/dehb_<study>/`: DEHB's own checkpoint (`dehb_state.json`,
+  `history.parquet.gzip`, `incumbent.json` -- re-running the same `--study_name` resumes from there), `runs/trial<i>_f<fidelity>_seed<s>/`
+  per trial (its `reward_cfg.yaml` if any, training logs, `result.json`), and at the end `best.json` plus, if the
+  winning config touched any reward key, `best_reward_cfg.yaml` -- a normal reward config, ready to point
+  `KINGFISHER_REWARD_CFG` at directly, or drop into `launch_sweep.py`'s reward directory.
+* A failed trial (non-zero exit, e.g. an invalid sampled flag combination) is scored as a very bad result instead of
+  crashing the search -- DEHB has no "pruned" trial concept like Optuna's.
 
 ## Notes and limits
 

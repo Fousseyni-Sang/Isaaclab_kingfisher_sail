@@ -59,7 +59,7 @@ def build_policy(ck, env, dev, stochastic=False):
             return a_.clamp(-a.clip_actions, a.clip_actions)
         return act, no_reset
     if algo == "ppo_discrete":
-        m = ppo_discrete.Agent(D, A, common.action_bins(ck['args']), tuple(a.hidden_units), a.activation).to(dev)
+        m = ppo_discrete.Agent(D, A, ck['args']['bins'], tuple(a.hidden_units), a.activation).to(dev)
         m.load_state_dict(st)
         return (lambda obs: (m(norm(obs))[0].sample() if stochastic else m(norm(obs))[0].mode())), no_reset
     if algo == "ppo_rnn":
@@ -83,11 +83,11 @@ def build_policy(ck, env, dev, stochastic=False):
         m.load_state_dict(st)
         return (lambda obs: m(obs)), no_reset
     if algo == "dqn":
-        m = common.mlp([D, a.hidden, a.hidden, int(np.prod(common.action_bins(ck["args"])))], "relu").to(dev)
+        m = common.mlp([D, a.hidden, a.hidden, int(np.prod(ck["args"]["bins"]))], "relu").to(dev)
         m.load_state_dict(st)
         return (lambda obs: m(obs).argmax(-1)), no_reset
     if algo == "drqn":
-        m = drqn.RecurrentQNet(D, int(np.prod(common.action_bins(ck["args"]))), a.hidden).to(dev)
+        m = drqn.RecurrentQNet(D, int(np.prod(ck["args"]["bins"])), a.hidden).to(dev)
         m.load_state_dict(st)
         mem = dict(state=m.zero_state(env.num_envs, dev))
         def act(obs):
@@ -137,7 +137,7 @@ def main():
     args.task = args.task or ck["args"]["task"]
     seed_everything(args.seed)
     discrete = algo in ("ppo_discrete", "dqn", "drqn")
-    env = make_env(args, device, bins=common.action_bins(ck["args"]) if discrete else None, mode="multi" if algo == "ppo_discrete" else "joint")
+    env = make_env(args, device, bins=ck["args"]["bins"] if discrete else None, mode="multi" if algo == "ppo_discrete" else "joint")
     act, reset_policy = build_policy(ck, env, env.device, args.stochastic)
     ckpt_dir = os.path.dirname(os.path.abspath(args.checkpoint))
     csv_path = resolve_csv_path(args, ckpt_dir)

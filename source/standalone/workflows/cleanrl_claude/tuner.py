@@ -7,7 +7,9 @@ sampled hyper-parameters as CLI flags, and reads the score from the json the scr
     python tuner.py --script sac.py --devices cuda:0 cuda:1 --n_jobs 2 --seeds 2 --space "tau:float:0.001:0.05:log"
 
 A space is  name:float:low:high[:log] | name:int:low:high | name:cat:a,b,c   ("64/64" in a cat = "--name 64 64").
---space overrides the default space of that script for the same name, or adds a new one.
+--space overrides the default space of that script for the same name, or adds a new one. Pass every entry after
+ONE "--space" (space-separated), not one "--space" per entry: a second "--space" replaces the first instead of
+adding to it (a tyro tuple-flag quirk), e.g. --space "a:float:0:1" "b:int:1:5", not --space "a:..." --space "b:...".
 Studies are stored in sqlite, so an interrupted search resumes when you re-run the same command.
 """
 import json
@@ -34,13 +36,16 @@ DEFAULT_SPACES = {
     "ppo_rnd": PPO_SPACE + ["int_coef:float:0.1:2.0", "ext_coef:float:1.0:4.0", "rnd_lr:float:1e-5:1e-3:log"],
     "ppo_rnd_rnn": PPO_SPACE + ["int_coef:float:0.1:2.0", "ext_coef:float:1.0:4.0", "rnd_lr:float:1e-5:1e-3:log",
                                 "rnd_cell:cat:lstm,gru", "rnd_seq_len:cat:8,16,24,48"],
-    "ppo_discrete": PPO_SPACE + ["bin_thrusters:int:2:5", "bin_rudder:int:3:9", "bin_sail:int:3:9"],
+    # "bins" is one choice per trial, each choice a full per-dimension tuple ("/"-joined -- see the module
+    # docstring); the 4-token defaults below assume the Kingfisher task's 4-D action space, adjust via --space
+    # for another task/action count.
+    "ppo_discrete": PPO_SPACE + ["bins:cat:2/2/3/3,3/3/5/5,2/2/5/5,3/3/9/9"],
     "sac": OFF_SPACE + ["q_lr:float:1e-4:3e-3:log", "policy_lr:float:1e-4:1e-3:log", "tau:float:0.001:0.05:log"],
     "ddpg": OFF_SPACE + ["q_lr:float:1e-4:3e-3:log", "actor_lr:float:1e-4:1e-3:log", "tau:float:0.001:0.05:log",
                          "exploration_noise:float:0.05:0.3"],
-    "dqn": OFF_SPACE + ["learning_rate:float:1e-5:1e-3:log", "bin_thrusters:int:2:3", "bin_rudder:int:3:7", "bin_sail:int:3:7", "target_frequency:cat:250,500,1000,2000",
-                        "exploration_fraction:float:0.1:0.6"],
-    "drqn": OFF_SPACE + ["learning_rate:float:1e-5:1e-3:log", "bin_thrusters:int:2:3", "bin_rudder:int:3:7", "bin_sail:int:3:7", "seq_len:cat:8,16,32",
+    "dqn": OFF_SPACE + ["learning_rate:float:1e-5:1e-3:log", "bins:cat:2/2/3/3,3/3/5/5,2/2/5/5",
+                        "target_frequency:cat:250,500,1000,2000", "exploration_fraction:float:0.1:0.6"],
+    "drqn": OFF_SPACE + ["learning_rate:float:1e-5:1e-3:log", "bins:cat:2/2/3/3,3/3/5/5,2/2/5/5", "seq_len:cat:8,16,32",
                          "target_frequency:cat:250,500,1000,2000"],
 }
 

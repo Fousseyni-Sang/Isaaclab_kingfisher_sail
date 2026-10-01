@@ -57,28 +57,20 @@ import pandas as pd
 import math
 # --- Tunable constants -----------------------------------------------------
 FALLBACK_UPWIND_ANGLE_DEG = 45.0   # used only if no polar_csv_path is given
-MAX_CROSS_TRACK = 10.0             # tack-switch threshold -- matches cfg.max_cross_track.
-                                    # At each genuine crossing, this controller asks the
-                                    # same question classical_controller_waypoints.py's
-                                    # generate_tack_waypoints() asks before adding another
-                                    # leg (see SAILING_AWAY_COS_THRESHOLD and
-                                    # ClassicalControllerState.tacking_done): tack again if
-                                    # it would still help, or hold and steer straight at
-                                    # the goal if it wouldn't. Not a fixed tack count --
-                                    # a longer course can still take two or more tacks.
-CROSS_TRACK_REARM = 0.5 * MAX_CROSS_TRACK  # re-arm threshold for ClassicalControllerState.
-                                    # armed -- see its docstring. Needed so each genuine
-                                    # crossing gets exactly one stop-or-continue decision,
-                                    # not one per control step for as long as cross-track
-                                    # happens to stay over MAX_CROSS_TRACK.
-SAILING_AWAY_COS_THRESHOLD = 0.1   # live version of generate_tack_waypoints()'s
-                                    # WAYPOINT_SAILING_AWAY_COS_THRESHOLD: at a crossing,
-                                    # stop tacking (steer straight at the goal instead) if
-                                    # the NEXT tack leg would point more than ~84 deg away
-                                    # from the goal (cos(angle) below this), or if that
-                                    # leg's endpoint would already land within one leg-
-                                    # length of the goal.
-RUDDER_KP = 1.0 #1.0 #/ np.radians(60.0)     # full rudder command at 60 deg heading error
+MAX_CROSS_TRACK = 10.0             # tack leg lateral budget -- matches cfg.max_cross_track.
+                                    # Also used to size each precomputed tack leg (see
+                                    # generate_tack_waypoints): leg length is chosen so a
+                                    # leg drifts exactly this far sideways before ending.
+MAX_TACK_WAYPOINTS = 12            # generous cap on precomputed tack legs -- a typical
+                                    # 30-35 unit course only needs a handful at the leg
+                                    # lengths this controller picks; see reset()/
+                                    # generate_tack_waypoints().
+WAYPOINT_SAILING_AWAY_COS_THRESHOLD = 0.1  # stop generating further tack legs once
+                                    # continuing in the current leg's direction would
+                                    # point more than ~84 deg away from the goal
+                                    # (cos(angle) below this) -- the remaining approach
+                                    # is snapped straight to the goal instead.
+RUDDER_KP = 1.0 #/ np.radians(60.0)     # full rudder command at 60 deg heading error
 STALL_SPEED_THRESHOLD = 0.3        # m/s -- below this, boat is considered "stalled"
 LOW_SPEED_BANGBANG_THRESHOLD = 0.3 # m/s -- below this, rudder saturates to full
                                     # authority instead of a graded proportional
@@ -127,11 +119,108 @@ ASSIST_WIND_ANGLE_DEG = 20.0       # only assist within this many degrees of the
 MAX_SAIL_ACTION_ANGLE_RAD = torch.pi   # NEEDS VERIFICATION: assumed raw action
                                             # +/-1 maps linearly to +/- this many
                                             # radians of foil angle -- see caveat above
-RUDDER_MAX_CMD = 17/180        # command that gives the max rudder coefficient
-RUDDER_LINEAR_ZONE_DEG = 10.0  # full rudder above this error, linear below it
+
 
 def wrap_to_pi(angle_rad: torch.Tensor) -> torch.Tensor:
     return (angle_rad + torch.pi) % (2 * torch.pi) - torch.pi
+
+
+def generate_tack_waypoints(start_pos: torch.Tensor, goal_pos: torch.Tensor, nogo_reference_w: torch.Tensor,
+                             tack_side0: torch.Tensor, min_upwind: torch.Tensor, tack_leg_length: torch.Tensor,
+                             max_waypoints: int = MAX_TACK_WAYPOINTS) -> tuple[torch.Tensor, torch.Tensor]:
+    """Precompute a whole zigzag tack-leg sequence from start_pos to goal_pos, decided
+    ONCE up front instead of live, step by step.
+
+    This is what actually fixes both the tack-switch chatter and the "sails past the
+    goal" overshoot bugs, instead of patching around them: with a reactive approach,
+    "when do I flip" and "when do I stop tacking and go straight" are decisions made
+    every control step from noisy live state (bearing, cross-track) -- exactly what let
+    both bugs happen. Deciding the whole sequence of leg endpoints in advance means
+    there's nothing left to decide live: classical_action() just steers at whichever
+    waypoint is current and advances an index once it's reached.
+
+    Adapted from the (drafted but never wired up) prototype in
+    kingfisher_sail_23_06_25.py's generate_tacking_waypoints(). tack_leg_length is the
+    "adaptable" length requested by the caller -- ClassicalControllerState.reset()
+    passes MAX_CROSS_TRACK / sin(min_upwind), the along-track distance that drifts
+    exactly MAX_CROSS_TRACK sideways at the close-hauled angle, so leg length
+    automatically adapts with wind speed (min_upwind is itself wind-speed-dependent,
+    from PolarTable) and stays tied to the same lateral budget the env enforces.
+
+    Each leg alternates tack_side (starting from tack_side0) and stops generating
+    further legs once ANY of these is true: the goal is no longer upwind at all (its
+    direct bearing from the current point already sits outside the no-go cone -- this is
+    what stops a leg from ever being generated in the first place when the goal was
+    never upwind to begin with, e.g. a 90 deg wind case where the STARTING heading
+    happens to be close-hauled-shaped but the goal itself was never in the no-go cone),
+    continuing would point mostly away from the goal (WAYPOINT_SAILING_AWAY_COS_THRESHOLD),
+    or the next leg would already land within one leg-length of the goal. In all three
+    cases the leg's endpoint is snapped exactly to goal_pos, guaranteeing the LAST
+    waypoint in the sequence is always the goal itself, never short of or past it.
+
+    Returns:
+        waypoints: (N, max_waypoints, 2) -- waypoints[:, 0] is start_pos; entries at or
+            past n_valid are unused padding, ignored by the caller.
+        n_valid: (N,) int64 -- how many of the leading entries in `waypoints` are real,
+            including start_pos at index 0 and the goal as the last valid entry.
+    """
+    device = start_pos.device
+    num_envs = start_pos.shape[0]
+
+    waypoints = torch.zeros((num_envs, max_waypoints, 2), device=device)
+    waypoints[:, 0, :] = start_pos
+    current_pos = start_pos.clone()
+    tack_side = tack_side0.clone()
+    finished = torch.zeros(num_envs, dtype=torch.bool, device=device)
+    n_valid = torch.ones(num_envs, dtype=torch.int64, device=device)
+
+    for step in range(1, max_waypoints):
+        # Is tacking even needed from the CURRENT point? If the goal's direct bearing
+        # already sits outside the no-go cone, there's nothing to tack around -- go
+        # straight to the goal instead of forcing a leg. Without this check, the loop
+        # below would generate a close-hauled leg unconditionally on every call, even
+        # when the goal was never upwind in the first place (e.g. a 90 deg wind case
+        # where the boat's starting heading happens to look close-hauled-shaped, but the
+        # goal itself was never within min_upwind of the no-go direction) -- that
+        # produced a real, visible detour for a goal that didn't need tacking at all.
+        to_goal_vec = goal_pos - current_pos
+        goal_bearing = torch.atan2(to_goal_vec[:, 1], to_goal_vec[:, 0])
+        goal_nogo_angle = wrap_to_pi(goal_bearing - nogo_reference_w)
+        not_upwind = goal_nogo_angle.abs() >= min_upwind
+
+        tack_angle = nogo_reference_w + tack_side * min_upwind
+        tack_dir = torch.stack((torch.cos(tack_angle), torch.sin(tack_angle)), dim=1)
+        next_pos = current_pos + tack_leg_length.unsqueeze(-1) * tack_dir
+
+        to_next_vec = next_pos - current_pos
+        goal_dir = to_goal_vec / to_goal_vec.norm(dim=-1, keepdim=True).clamp(min=1e-6)
+        leg_dir = to_next_vec / to_next_vec.norm(dim=-1, keepdim=True).clamp(min=1e-6)
+        goal_proj = (goal_dir * leg_dir).sum(dim=1)
+
+        sailing_away = goal_proj < WAYPOINT_SAILING_AWAY_COS_THRESHOLD
+        near_goal = (goal_pos - next_pos).norm(dim=1) < tack_leg_length
+        done_now = (~finished) & (not_upwind | sailing_away | near_goal)
+
+        next_pos = torch.where(done_now.unsqueeze(-1), goal_pos, next_pos)
+        waypoints[:, step, :] = next_pos
+        n_valid = n_valid + (~finished).to(torch.int64)
+
+        finished = finished | done_now
+        current_pos = torch.where(finished.unsqueeze(-1), goal_pos, next_pos)
+        tack_side = -tack_side
+
+        if finished.all():
+            break
+
+    # Safety net: if max_waypoints was exhausted before a natural stop condition
+    # fired (shouldn't normally happen given how tack_leg_length/course length
+    # scale), force the last generated waypoint to the goal so the following code
+    # never ends up treating a non-goal point as the final target.
+    if not finished.all():
+        last_idx = (n_valid - 1).clamp(max=max_waypoints - 1)
+        waypoints[torch.arange(num_envs, device=device), last_idx] = goal_pos
+
+    return waypoints, n_valid
 
 
 LSA_MIN_ANGLE_DEG = 0.0    # sail sheeted in tight when heading into the wind
@@ -391,161 +480,104 @@ class DriveForceOptimalTrim:
 
 class ClassicalControllerState:
     """Persistent per-env state the controller needs across steps within an
-    episode: which tack it's currently on, the start-of-episode position used
-    as the rhumb-line reference for signed cross-track error (your env only
-    exposes an UNSIGNED cross_track_error, so this is computed here
-    independently rather than reused from `info`), whether a NEW crossing
-    decision is currently allowed (`armed`), and whether the boat has decided
-    to stop tacking for the rest of the episode (`tacking_done`).
+    episode: the precomputed tack-waypoint sequence for this episode (see
+    generate_tack_waypoints()), how many of its entries are real, and which
+    one the controller is currently steering toward.
 
-    Two separate things have to be debounced here, which is why there are two
-    flags instead of one:
-
-    `armed` stops a SINGLE crossing from being re-decided every control step.
-    Signed cross-track error, once it exceeds MAX_CROSS_TRACK, stays over
-    that threshold for many consecutive steps -- a boat doesn't snap back
-    across the rhumb line in a single 20Hz tick. Without `armed`, a plain
-    level check would re-run the stop-or-continue decision (and potentially
-    re-flip tack_side) on EVERY one of those steps, instead of exactly once
-    per genuine crossing (confirmed directly against a live debug log:
-    desired_heading alternating between its two close-hauled values every
-    single step). `armed` disarms the moment a crossing is decided (flip or
-    stop) and only re-arms once cross-track has come back under
-    CROSS_TRACK_REARM -- standard hysteresis.
-
-    `tacking_done` is what makes this the reactive counterpart of
-    classical_controller_waypoints.py's precomputed generate_tack_waypoints():
-    at each genuine (armed) crossing, it asks the SAME stop-or-continue
-    question that function asks before adding each new leg -- tack again if
-    the next leg would still make progress toward the goal, or hold this
-    heading and steer straight at the goal if it wouldn't
-    (SAILING_AWAY_COS_THRESHOLD). It's a per-crossing decision, not a fixed
-    tack count: a course that genuinely needs two or three tacks still gets
-    them, same as the precomputed version would generate that many
-    waypoints. Once a crossing decides "stop," `tacking_done` latches True
-    for the rest of the episode -- even after `armed` re-arms later, no
-    further crossing can start another tack."""
+    The whole zigzag (and the final direct-to-goal leg) is decided ONCE, at
+    reset, instead of reactively re-evaluated every control step from live
+    bearing/cross-track state -- that reactive approach was what caused both
+    the tack-switch chatter (confirmed via a live debug log: desired_heading
+    alternating between its two close-hauled values every single step) and
+    the "sails straight through the goal before ever tacking again" overshoot.
+    Both were downstream symptoms of deciding leg endpoints live; committing
+    to them in advance removes both failure modes at the root."""
 
     def __init__(self, num_envs: int, device):
-        self.tack_side = torch.ones(num_envs, device=device)
-        self.start_pos = torch.zeros(num_envs, 2, device=device)
-        self.armed = torch.ones(num_envs, dtype=torch.bool, device=device)
-        self.tacking_done = torch.zeros(num_envs, dtype=torch.bool, device=device)
+        self.waypoints = torch.zeros(num_envs, MAX_TACK_WAYPOINTS, 2, device=device)
+        self.n_valid = torch.ones(num_envs, dtype=torch.int64, device=device)
+        self.waypoint_idx = torch.ones(num_envs, dtype=torch.int64, device=device)
 
-    def reset(self, env_ids: torch.Tensor, info: dict):
-        """Call whenever the given env_ids begin a new episode."""
-        self.tack_side[env_ids] = 1.0
-        self.start_pos[env_ids] = info["robot_pos_w"][env_ids, :2].clone()
-        self.armed[env_ids] = True
-        self.tacking_done[env_ids] = False
+    def reset(self, env_ids: torch.Tensor, info: dict, polar_table: "PolarTable"):
+        """Call whenever the given env_ids begin a new episode. (Re)generates
+        each reset env's whole tack-waypoint sequence for the episode ahead."""
+        start_pos = info["robot_pos_w"][env_ids, :2].clone()
+        goal_pos = info["goal_pos"][env_ids]
+
+        wind_w = torch.deg2rad(info["true_wind_angle_w"][env_ids])
+        nogo_shift = 0.0 if PolarTable.NOGO_IS_AT_ZERO else torch.pi
+        nogo_reference_w = wrap_to_pi(wind_w + nogo_shift)
+        min_upwind = torch.deg2rad(polar_table.get_upwind_angle_deg(info["true_wind_speed"][env_ids]))
+        # Along-track distance that drifts exactly MAX_CROSS_TRACK sideways at the
+        # close-hauled angle -- see generate_tack_waypoints()'s docstring.
+        tack_leg_length = MAX_CROSS_TRACK / torch.sin(min_upwind).clamp(min=1e-3)
+        tack_side0 = torch.ones_like(min_upwind)
+
+        waypoints, n_valid = generate_tack_waypoints(
+            start_pos, goal_pos, nogo_reference_w, tack_side0, min_upwind, tack_leg_length,
+        )
+        self.waypoints[env_ids] = waypoints
+        self.n_valid[env_ids] = n_valid
+        self.waypoint_idx[env_ids] = 1  # first real target -- index 0 is start_pos itself
 
 
-def classical_action(info: dict, state: ClassicalControllerState, assist_level,
-                      polar_table: PolarTable|None=None) -> torch.Tensor:
+def classical_action(info: dict, state: ClassicalControllerState, assist_level) -> torch.Tensor:
     """Compute a (num_envs, 4) action tensor for one step. Sail trim uses the
     Linear Sail Angle (LSA) rule -- drive_trim/DriveForceOptimalTrim is no
-    longer needed as an argument here."""
+    longer needed as an argument here. Tacking follows the waypoint sequence
+    ClassicalControllerState.reset() precomputed for this episode -- no
+    polar_table needed here anymore, only at reset (where the waypoints'
+    close-hauled legs are decided once)."""
     device = info["robot_pos_w"].device
 
     heading_w = torch.deg2rad(info["heading_w"])
     wind_w = torch.deg2rad(info["true_wind_angle_w"])
     wind_b = torch.deg2rad(info["true_wind_angle_b"])
     app_wind_b = torch.deg2rad(info["app_wind_angle"])
-    goal_pos = info["goal_pos"]
     robot_pos = info["robot_pos_w"][:, :2]
     forward_speed = info["lin_vel_b"][:, 0]
-    true_wind_speed = info["true_wind_speed"]
     initial_distance = info["initial_distance"]
     distance = info["distance"]
 
-    # Wind-speed-dependent close-hauled offset, looked up per env.
-    min_upwind = 35*torch.pi/180*torch.ones_like(distance) #torch.deg2rad(polar_table.get_upwind_angle_deg(true_wind_speed))
     assist_angle = torch.deg2rad(torch.tensor(ASSIST_WIND_ANGLE_DEG, device=device))
 
     # NOGO_IS_AT_ZERO is UNVERIFIED against the live env -- see PolarTable's
     # docstring. If wrong, everything below points exactly backwards, so
     # this flip is applied consistently everywhere an angle is compared
-    # against the no-go direction (heading logic AND the thruster-assist
-    # trigger, which had the same unverified assumption baked in before).
+    # against the no-go direction (only the thruster-assist trigger uses it
+    # directly here now -- the tacking geometry itself was already resolved
+    # once, at reset, inside generate_tack_waypoints()).
     nogo_shift = 0.0 if PolarTable.NOGO_IS_AT_ZERO else torch.pi
 
-    # Only ONE no-go zone exists -- the real sail_sweep_results.csv sweep
-    # found exactly one VMG minimum across the full 0-360 deg scan, not two.
-    # The previous downwind-no-go branch (MAX_DOWNWIND_ANGLE_DEG) is removed
-    # rather than merely disabled, since there is no evidence for it at all.
-    nogo_reference_w = wrap_to_pi(wind_w + nogo_shift)
+    # 1. Steer toward the current precomputed tack waypoint (see
+    #    ClassicalControllerState's docstring for why this replaced the old
+    #    reactive bearing/cross-track logic). Check progress along the
+    #    CURRENT leg and advance the target index first, before computing
+    #    this step's heading -- otherwise the boat would spend one extra
+    #    control step still aiming at an already-reached waypoint.
+    env_idx = torch.arange(robot_pos.shape[0], device=device)
+    current_target = state.waypoints[env_idx, state.waypoint_idx]
+    prev_waypoint = state.waypoints[env_idx, state.waypoint_idx - 1]
 
-    # 1. Direct bearing to goal, and whether it lies in the no-go zone
-    goal_vec = goal_pos - robot_pos
-    goal_bearing_w = torch.atan2(goal_vec[:, 1], goal_vec[:, 0])
-    goal_nogo_angle = wrap_to_pi(goal_bearing_w - nogo_reference_w)
-    needs_tacking = goal_nogo_angle.abs() < min_upwind
+    # Along-track progress on this leg, same reasoning as the goal-overshoot
+    # fix this replaced: robust to the boat not passing exactly through the
+    # waypoint, not just to reaching it exactly.
+    leg_vec = current_target - prev_waypoint
+    leg_len = torch.norm(leg_vec, dim=1).clamp(min=1e-6)
+    leg_unit = leg_vec / leg_len.unsqueeze(-1)
+    progress = torch.sum((robot_pos - prev_waypoint) * leg_unit, dim=1)
+    reached_target = progress >= leg_len
 
-    # 2. Signed cross-track error relative to the start->goal rhumb line
-    line_vec = goal_pos - state.start_pos
-    line_len = torch.norm(line_vec, dim=1, keepdim=True).clamp(min=1e-6)
-    line_unit = line_vec / line_len
-    to_boat = robot_pos - state.start_pos
-    proj_len = torch.sum(to_boat * line_unit, dim=1, keepdim=True)
-    closest_pt = state.start_pos + proj_len * line_unit
-    cross_vec = robot_pos - closest_pt
-    signed_cross = line_unit[:, 0] * cross_vec[:, 1] - line_unit[:, 1] * cross_vec[:, 0]
+    can_advance = state.waypoint_idx < (state.n_valid - 1)
+    state.waypoint_idx = torch.where(reached_target & can_advance, state.waypoint_idx + 1, state.waypoint_idx)
 
-    # Don't keep holding a close-hauled tack once the boat has reached (or
-    # overshot) the goal's own position ALONG the rhumb line. `needs_tacking`
-    # and the flip/cross-track logic above only look at the goal's BEARING
-    # and LATERAL (cross-track) deviation -- neither says anything about
-    # along-track progress, so a boat mid-tack happily sails straight through
-    # the goal's along-track position while still technically "in the no-go
-    # cone" and still short of the next cross-track flip threshold. proj_len
-    # is the boat's own progress along the start->goal line (from the
-    # cross-track calculation above); once it reaches line_len (the goal's
-    # own along-track position), stop tacking and steer directly at the goal
-    # instead, regardless of what the no-go-cone check says.
-    passed_goal = proj_len.squeeze(-1) >= line_len.squeeze(-1)
-    needs_tacking = needs_tacking & ~passed_goal
-
-    # At each genuine (armed, see ClassicalControllerState) crossing, ask the
-    # same question classical_controller_waypoints.py's
-    # generate_tack_waypoints() asks before adding another leg: would the
-    # NEXT tack leg still make progress toward the goal, or would it point
-    # mostly away / already land close enough to the goal that another tack
-    # isn't worth it? tack_leg_length mirrors that function's own leg-length
-    # choice: the along-track distance that drifts MAX_CROSS_TRACK sideways
-    # at the close-hauled angle.
-    tack_leg_length = MAX_CROSS_TRACK / torch.sin(min_upwind).clamp(min=1e-3)
-    next_tack_side = -state.tack_side
-    next_tack_angle = nogo_reference_w + next_tack_side * min_upwind
-    next_tack_dir = torch.stack((torch.cos(next_tack_angle), torch.sin(next_tack_angle)), dim=1)
-
-    goal_dist = torch.norm(goal_vec, dim=1)
-    goal_dir = goal_vec / goal_dist.clamp(min=1e-6).unsqueeze(-1)
-    goal_proj = torch.sum(goal_dir * next_tack_dir, dim=1)
-    sailing_away = goal_proj < SAILING_AWAY_COS_THRESHOLD
-
-    next_pos = robot_pos + tack_leg_length.unsqueeze(-1) * next_tack_dir
-    near_goal = torch.norm(goal_pos - next_pos, dim=1) < tack_leg_length
-
-    should_stop_tacking = sailing_away | near_goal
-
-    # Hysteresis (see ClassicalControllerState.armed docstring): a crossing
-    # only gets ONE stop-or-continue decision, not one per control step for
-    # as long as cross-track happens to stay over MAX_CROSS_TRACK.
-    over_threshold = signed_cross.abs() > MAX_CROSS_TRACK
-    under_rearm = signed_cross.abs() < CROSS_TRACK_REARM
-    crossing_now = needs_tacking & over_threshold & state.armed & ~state.tacking_done
-
-    flip = crossing_now & ~should_stop_tacking
-    stop_now = crossing_now & should_stop_tacking
-
-    state.tack_side = torch.where(flip, -state.tack_side, state.tack_side)
-    state.tacking_done = state.tacking_done | stop_now
-    state.armed = (state.armed & ~crossing_now) | under_rearm
-    needs_tacking = needs_tacking & ~state.tacking_done
-
-    # 3. Desired heading: close-hauled edge when tacking, direct otherwise
-    desired_heading_tacking = nogo_reference_w + state.tack_side * min_upwind
-    desired_heading = torch.where(needs_tacking, desired_heading_tacking, goal_bearing_w)
+    # The last waypoint in every env's sequence is always the goal itself
+    # (guaranteed by generate_tack_waypoints), so once waypoint_idx reaches
+    # it, "steer at the current waypoint" already IS "steer at the goal" --
+    # no separate direct-to-goal branch needed.
+    current_target = state.waypoints[env_idx, state.waypoint_idx]
+    target_vec = current_target - robot_pos
+    desired_heading = torch.atan2(target_vec[:, 1], target_vec[:, 0])
 
     # 4. Rudder: proportional heading controller, saturating to FULL authority
     #    whenever speed is low. This matters specifically because of how the
@@ -581,20 +613,12 @@ def classical_action(info: dict, state: ClassicalControllerState, assist_level,
     #        see the constant's definition for the actuator-range assumption
     #        this depends on, which still needs verifying against your real
     #        rudder_actuator_config().
-
-    # TOY RUDDER MODEL
-    """heading_error = wrap_to_pi(desired_heading - heading_w)/torch.pi
+    heading_error = wrap_to_pi(desired_heading - heading_w)/torch.pi
     proportional_rudder = torch.clamp(RUDDER_KP * heading_error, -1.0, 1.0)
     bangbang_rudder = torch.sign(heading_error)
     low_speed = forward_speed < LOW_SPEED_BANGBANG_THRESHOLD
-    rudder_action = proportional_rudder # good for the toy rudder model"""
-
-    # HYDRODYNAMIC RUDDER MODEL
-    heading_error_deg = wrap_to_pi(desired_heading - heading_w).rad2deg()
-    proportional_rudder = RUDDER_MAX_CMD * torch.clamp(heading_error_deg / RUDDER_LINEAR_ZONE_DEG, -1.0, 1.0)
-    rudder_action = -proportional_rudder
-
-    #print(f"[DEBUG] desired_heading: {desired_heading.rad2deg()} rudder_action: {rudder_action} heading_error: {(heading_error*torch.pi).rad2deg()}")
+    rudder_action = proportional_rudder #torch.where(low_speed, bangbang_rudder, proportional_rudder) #* RUDDER_SAFETY_SCALE
+    print(f"[DEBUG] desired_heading: {desired_heading.rad2deg()} rudder_action: {rudder_action} speed: {forward_speed}")
     # 5. Sail trim: Linear Sail Angle (LSA) rule -- sheeted in tight
     #    (0 deg) heading into the wind, eased fully out (90 deg) running
     #    downwind. delta_s IS the target foil angle directly -- no
@@ -616,11 +640,11 @@ def classical_action(info: dict, state: ClassicalControllerState, assist_level,
     assist_trigger = (in_stall_zone & is_stalled).float()
     #thrust_cmd = assist_trigger * assist_level
     max_thrust_cmd = torch.sqrt(assist_level)*torch.ones_like(assist_trigger)
-    thrust_cmd = 2*(distance/initial_distance)
+    thrust_cmd = distance/initial_distance
 
     #print(f"max_thruster: {max_thrust_cmd} thrust_cmd: {thrust_cmd}")
-    thruster_left = torch.clamp(thrust_cmd, max=max_thrust_cmd)
-    thruster_right = torch.clamp(thrust_cmd, max=max_thrust_cmd)
+    thruster_left = torch.clamp(thrust_cmd, max=1)
+    thruster_right = torch.clamp(thrust_cmd, max=1)
 
     actions = torch.stack([thruster_left, thruster_right, rudder_action, sail_action], dim=1)
     return actions.clamp(-1.0, 1.0)

@@ -1,7 +1,7 @@
-"""DQN for Isaac Lab. The continuous action space is discretized with --bin_thrusters / --bin_rudder / --bin_sail levels
-per dimension, and every combination is one action (3 x 3 x 5 x 5 = 225 with the defaults).
+"""DQN for Isaac Lab. --bins gives the number of levels for each action dimension, in the env's own action
+order, and every combination is one action (3 x 3 x 5 x 5 = 225 with the default --bins 3 3 5 5).
 
-pysaac source/standalone/workflows/cleanrl_claude/dqn.py --headless --num_envs 64 --bin_rudder 5 --bin_sail 5 --bin_thrusters 3
+pysaac source/standalone/workflows/cleanrl_claude/dqn.py --headless --num_envs 64 --bins 3 3 5 5
 """
 from dataclasses import dataclass
 
@@ -9,15 +9,13 @@ import torch
 import torch.nn.functional as F
 
 from buffers import ReplayBuffer
-from common import BaseArgs, action_bins, EpisodeStats, Logger, make_env, mlp, parse_args, seed_everything, write_result
+from common import BaseArgs, EpisodeStats, Logger, make_env, mlp, parse_args, seed_everything, write_result
 
 
 @dataclass
 class Args(BaseArgs):
     total_timesteps: int = 1_000_000
-    bin_thrusters: int = 3  # levels for each of the 2 thrusters (2 = -1/+1, 3 = -1/0/+1)
-    bin_rudder: int = 5
-    bin_sail: int = 5
+    bins: tuple[int, ...] = (3, 3, 5, 5)  # levels per action dimension, in the env's action order (Kingfisher: [thruster_left, thruster_right, rudder, sail])
     buffer_size: int = 1_000_000
     batch_size: int = 256
     learning_starts: int = 5000
@@ -37,7 +35,7 @@ class Args(BaseArgs):
 def main():
     args, device, app = parse_args(Args, "dqn")
     seed_everything(args.seed)
-    env = make_env(args, device, bins=action_bins(args), mode="joint")
+    env = make_env(args, device, bins=args.bins, mode="joint")
     N, D, dev, n_act = env.num_envs, env.obs_dim, env.device, env.n_actions
 
     q = mlp([D, args.hidden, args.hidden, n_act], "relu").to(dev)

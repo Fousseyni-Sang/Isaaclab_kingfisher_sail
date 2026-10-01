@@ -3,7 +3,7 @@
 Training samples sequences of --seq_len steps from the replay buffer and starts the LSTM from a zero state;
 the first --burn_in steps of every sequence only warm up the hidden state (no loss), as in R2D2-lite.
 
-pysaac source/standalone/workflows/cleanrl_claude/drqn.py --headless --num_envs 64 --bin_rudder 5 --bin_sail 5 --bin_thrusters 3
+pysaac source/standalone/workflows/cleanrl_claude/drqn.py --headless --num_envs 64 --bins 3 3 5 5
 """
 from dataclasses import dataclass
 
@@ -12,15 +12,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from buffers import ReplayBuffer
-from common import BaseArgs, action_bins, EpisodeStats, Logger, make_env, mlp, parse_args, seed_everything, write_result
+from common import BaseArgs, EpisodeStats, Logger, make_env, mlp, parse_args, seed_everything, write_result
 
 
 @dataclass
 class Args(BaseArgs):
     total_timesteps: int = 1_000_000
-    bin_thrusters: int = 3
-    bin_rudder: int = 5
-    bin_sail: int = 5
+    bins: tuple[int, ...] = (3, 3, 5, 5)  # levels per action dimension, in the env's action order (Kingfisher: [thruster_left, thruster_right, rudder, sail])
     buffer_size: int = 1_000_000
     batch_size: int = 64  # sequences per update
     seq_len: int = 16
@@ -65,7 +63,7 @@ class RecurrentQNet(nn.Module):
 def main():
     args, device, app = parse_args(Args, "drqn")
     seed_everything(args.seed)
-    env = make_env(args, device, bins=action_bins(args), mode="joint")
+    env = make_env(args, device, bins=args.bins, mode="joint")
     N, D, dev, n_act = env.num_envs, env.obs_dim, env.device, env.n_actions
 
     q, q_t = RecurrentQNet(D, n_act, args.hidden).to(dev), RecurrentQNet(D, n_act, args.hidden).to(dev)

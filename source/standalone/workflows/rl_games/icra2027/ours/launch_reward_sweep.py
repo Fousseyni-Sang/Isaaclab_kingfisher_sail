@@ -107,10 +107,10 @@ TMUX_SCRIPTS_DIR = os.path.join(SWEEP_OUTPUT_DIR, "_tmux_scripts")
 # -----------------------------------------------------------------------------
 REWARD_SWEEP_AXES = {
     "distance_reward_scale": [],
-    "distance_progress_reward_scale": [2.0, 5.0, 10., 20.0],
+    "distance_progress_reward_scale": [20.0], #[2.0, 5.0, 10., 20.0],
     "bearing_progress_reward_scale": [],
-    "goal_reached_scale": [0, 1000, 2000],
-    "energy_penalty_scale": [-5, -10, -20],
+    "goal_reached_scale": [1000, 2000], #[0, 1000, 2000],
+    "energy_penalty_scale": [-5, -10], #[-5, -10, -20],
     "backwards_penalty_scale": [],
     "time_penalty_scale": [0, -1.0, -2.0, -5.0],
     "tack_penalty_scale": [],

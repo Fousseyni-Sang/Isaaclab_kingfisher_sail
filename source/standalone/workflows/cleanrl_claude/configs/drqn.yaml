@@ -1,9 +1,7 @@
 # Recurrent DQN on the discretized action space (see Args in drqn.py)
 num_envs: 64
 total_timesteps: 1000000
-bin_thrusters: 3
-bin_rudder: 5
-bin_sail: 5
+bins: [3, 3, 5, 5]       # levels per action dimension, in the env's action order (here: [thruster_left, thruster_right, rudder, sail])
 buffer_size: 1000000
 batch_size: 64           # sequences per update
 seq_len: 16

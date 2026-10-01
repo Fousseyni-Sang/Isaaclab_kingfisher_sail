@@ -1,23 +1,21 @@
-"""PPO with a discretized action space: every action dimension has its own number of levels (--bin_thrusters,
---bin_rudder, --bin_sail) and the policy has one categorical distribution per dimension (MultiDiscrete).
-Same yaml / hyper-parameters as ppo.py.
+"""PPO with a discretized action space: --bins gives the number of levels for each action dimension, in the
+env's own action order (Kingfisher: [thruster_left, thruster_right, rudder, sail]), and the policy has one
+categorical distribution per dimension (MultiDiscrete). Same yaml / hyper-parameters as ppo.py.
 
-pysaac source/standalone/workflows/cleanrl_claude/ppo_discrete.py --headless --num_envs 4096 --bin_rudder 5 --bin_sail 5 --bin_thrusters 2
+pysaac source/standalone/workflows/cleanrl_claude/ppo_discrete.py --headless --num_envs 4096 --bins 2 2 5 3
 """
 from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
 
-from common import (MultiCategorical, action_bins, PPOArgs, Logger, EpisodeStats, RunningMeanStd, adapt_lr, compute_gae, make_env, mlp, parse_args,
+from common import (MultiCategorical, PPOArgs, Logger, EpisodeStats, RunningMeanStd, adapt_lr, compute_gae, make_env, mlp, parse_args,
                     seed_everything, write_result)
 
 
 @dataclass
 class Args(PPOArgs):
-    bin_thrusters: int = 3  # levels for each of the 2 thrusters (2 = -1/+1, 3 = -1/0/+1)
-    bin_rudder: int = 5
-    bin_sail: int = 5
+    bins: tuple[int, ...] = (3, 3, 5, 5)  # levels per action dimension, in the env's action order (Kingfisher: [thruster_left, thruster_right, rudder, sail])
 
 
 class Agent(nn.Module):
@@ -36,13 +34,13 @@ class Agent(nn.Module):
 def main():
     args, device, app = parse_args(Args, "ppo_discrete")
     seed_everything(args.seed)
-    env = make_env(args, device, bins=action_bins(args), mode="multi")
+    env = make_env(args, device, bins=args.bins, mode="multi")
     N, T, D, A = env.num_envs, args.num_steps, env.obs_dim, env.act_dim
     batch = N * T
     mb = min(args.minibatch_size, batch)
     iters = args.total_timesteps // batch if args.total_timesteps else args.max_epochs
 
-    agent = Agent(D, A, action_bins(args), args.hidden_units, args.activation).to(env.device)
+    agent = Agent(D, A, args.bins, args.hidden_units, args.activation).to(env.device)
     opt = torch.optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
     obs_rms, val_rms = RunningMeanStd((D,), env.device), RunningMeanStd((), env.device)
     norm = lambda x: obs_rms.normalize(x, 10.0) if args.normalize_input else x

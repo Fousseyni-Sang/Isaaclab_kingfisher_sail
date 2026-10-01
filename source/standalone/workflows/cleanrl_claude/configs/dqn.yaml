@@ -1,9 +1,8 @@
 # Double DQN on the discretized action space (see Args in dqn.py)
 num_envs: 64
 total_timesteps: 1000000
-bin_thrusters: 3         # levels of each thruster (2 = -1/+1, 3 = -1/0/+1)
-bin_rudder: 5
-bin_sail: 5              # joint action space = bin_thrusters^2 * bin_rudder * bin_sail
+bins: [3, 3, 5, 5]       # levels per action dimension, in the env's action order (here: [thruster_left, thruster_right, rudder, sail])
+                         # joint action space size = product of these = 225 with the default
 buffer_size: 1000000
 batch_size: 256
 learning_starts: 5000

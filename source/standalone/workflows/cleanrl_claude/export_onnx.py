@@ -212,7 +212,7 @@ def build(ck):
         return wrapper, ins, names, ["action", "log_prob", "value", "h_out", "c_out"], axes
 
     if algo == "ppo_discrete":
-        bins = common.action_bins(args)
+        bins = args["bins"]
         D = state["torso.0.weight"].shape[1]
         agent = ppo_discrete.Agent(D, len(bins), bins, tuple(args["hidden_units"]), args["activation"])
         agent.load_state_dict(state)

@@ -143,95 +143,113 @@ def main():
 
     all_rows = []
 
-    for assist_level in ASSIST_LEVELS:
+    """for assist_level in ASSIST_LEVELS:
         print(f"[INFO] Classical baseline sweep: assist_level={assist_level} "
-            f"({EPISODES_PER_ENV} episodes/env x {num_envs} envs)")
+            f"({EPISODES_PER_ENV} episodes/env x {num_envs} envs)")"""
 
-        # Restart this assist level's wind cycle from (angle_idx=0, speed_idx=0).
-        # A plain env.reset() does NOT zero these -- they only advance on their
-        # own via _reset_idx's is_paper_eval branch -- so we zero them explicitly
-        # to get a clean, comparable 45-episode sweep for every assist_level.
-        env.unwrapped.paper_wind_angle_idx.zero_()
-        env.unwrapped.paper_wind_speed_idx.zero_()
+    # Restart this assist level's wind cycle from (angle_idx=0, speed_idx=0).
+    # A plain env.reset() does NOT zero these -- they only advance on their
+    # own via _reset_idx's is_paper_eval branch -- so we zero them explicitly
+    # to get a clean, comparable 45-episode sweep for every assist_level.
+    env.unwrapped.paper_wind_angle_idx.zero_()
+    env.unwrapped.paper_wind_speed_idx.zero_()
 
-        obs = env.reset()
-        if isinstance(obs, dict):
-            obs = obs["obs"]
-        info = env.unwrapped.extras.get("info", {})
+    obs = env.reset()
+    if isinstance(obs, dict):
+        obs = obs["obs"]
+    info = env.unwrapped.extras.get("info", {})
 
-        state = ClassicalControllerState(num_envs, device=device)
-        state.reset(torch.arange(num_envs, device=device), info)
+    state = ClassicalControllerState(num_envs, device=device)
+    state.reset(torch.arange(num_envs, device=device), info)
 
-        episodes_done_per_env = np.zeros(num_envs, dtype=int)
-        per_env_buffers = [[] for _ in range(num_envs)]
+    episodes_done_per_env = np.zeros(num_envs, dtype=int)
+    per_env_buffers = [[] for _ in range(num_envs)]
 
-        while not np.all(episodes_done_per_env >= EPISODES_PER_ENV):
-            with torch.no_grad():
-                info = env.unwrapped.extras.get("info", {})
-                #actions = classical_action(info, state, assist_level, polar_table, drive_trim)
-                actions = classical_action(info, state, assist_level, polar_table)
-                obs, rew, dones, extras = env.step(actions)
-                if isinstance(obs, dict):
-                    obs = obs["obs"]
+    while not np.all(episodes_done_per_env >= EPISODES_PER_ENV):
+        with torch.no_grad():
+            info = env.unwrapped.extras.get("info", {})
+            energy_context = info.get("energy_context", torch.zeros((num_envs)))
+            assist_level = energy_context.clone()
+            #actions = classical_action(info, state, assist_level, polar_table, drive_trim)
+            actions = classical_action(info, state, assist_level)
+            obs, rew, dones, extras = env.step(actions)
+            if isinstance(obs, dict):
+                obs = obs["obs"]
 
-                info = extras.get("info", {})
-                dones_np = dones.detach().cpu().numpy().astype(bool)
+            info = extras.get("info", {})
+            dones_np = dones.detach().cpu().numpy().astype(bool)
 
-                #print(f"[DEBUG] app_wind: {info['app_wind_angle']}")
-                for env_id in range(num_envs):
-                    if episodes_done_per_env[env_id] >= EPISODES_PER_ENV:
-                        continue
+            #print(f"[DEBUG] app_wind: {info['app_wind_angle']}")
+            for env_id in range(num_envs):
+                if episodes_done_per_env[env_id] >= EPISODES_PER_ENV:
+                    continue
 
-                    row = dict(
-                        env_id=env_id,
-                        time_step=len(per_env_buffers[env_id]),
-                        energy=info["energy"][env_id].item(),
-                        distance=info["distance"][env_id].item(),
-                        energy_context=assist_level,   # renamed for pipeline compatibility
-                        true_wind_speed=info["true_wind_speed"][env_id].item(),
-                        true_wind_angle_w=info["true_wind_angle_w"][env_id].item(),
-                    )
+                robot_pos_w = info.get("robot_pos_w", torch.zeros((num_envs, 2)))[..., :2]
+                aero_force = info.get("info", {}).get("aero_force", torch.zeros((num_envs, 1, 6)))
+                aoa = extras.get("info", {}).get("aoa", torch.zeros((num_envs, )))
+                app_wind_angle = extras.get("info", {}).get("app_wind_angle", torch.zeros((num_envs, ))) # (N,) 
+                true_wind_angle_b = extras.get("info", {}).get("true_wind_angle_b", torch.zeros((num_envs, )))
 
-                    if dones_np[env_id]:
-                        # Same reset-boundary contamination as the RL sweep: this
-                        # row is already the NEXT episode's post-reset state.
-                        goal_reached = bool(env.unwrapped.reset_terminated[env_id].item())
-                        timed_out = bool(env.unwrapped.reset_time_outs[env_id].item())
 
-                        finished_rows = per_env_buffers[env_id]
-                        local_ep_idx = episodes_done_per_env[env_id]
-                        for r in finished_rows:
-                            r["local_episode_idx"] = local_ep_idx
-                            r["goal_reached"] = goal_reached
-                            r["timed_out"] = timed_out
-                        all_rows.extend(finished_rows)
+                row = dict(
+                    env_id=env_id,
+                    time_step=len(per_env_buffers[env_id]),
+                    energy=info["energy"][env_id].item(),
+                    distance=info["distance"][env_id].item(),
+                    energy_context=assist_level[env_id].item(),   # renamed for pipeline compatibility
+                    true_wind_speed=info["true_wind_speed"][env_id].item(),
+                    true_wind_angle_w=info["true_wind_angle_w"][env_id].item(),
+                    rb_pos_x = robot_pos_w[env_id, 0].item(), 
+                    rb_pos_y = robot_pos_w[env_id, 1].item(), 
+                    sail_angle = info.get("sail_angle", torch.zeros((num_envs,)))[env_id].item(),
+                    aero_force = aero_force[env_id, 0, 0].item(),
+                    aoa = aoa[env_id].item(),
+                    app_wind_angle = app_wind_angle[env_id].item(), 
+                    true_wind_angle_b = true_wind_angle_b[env_id].item(), 
+                )
 
-                        episodes_done_per_env[env_id] += 1
+                if dones_np[env_id]:
+                    # Same reset-boundary contamination as the RL sweep: this
+                    # row is already the NEXT episode's post-reset state.
+                    goal_reached = bool(env.unwrapped.reset_terminated[env_id].item())
+                    timed_out = bool(env.unwrapped.reset_time_outs[env_id].item())
 
-                        # This env just reset internally -- reseed the
-                        # controller's per-env state (new start_pos, fresh tack)
-                        # and start its new episode buffer with this row as t=0.
-                        state.reset(torch.tensor([env_id], device=device), info)
-                        row["time_step"] = 0
-                        per_env_buffers[env_id] = [row]
+                    finished_rows = per_env_buffers[env_id]
+                    local_ep_idx = episodes_done_per_env[env_id]
+                    for r in finished_rows:
+                        r["local_episode_idx"] = local_ep_idx
+                        r["goal_reached"] = goal_reached
+                        r["timed_out"] = timed_out
+                    all_rows.extend(finished_rows)
 
-                        if episodes_done_per_env.sum()%10==0:
-                            print(f"[INFO] episode finished: {episodes_done_per_env.sum()}:{episodes_done_per_env}")
-                    else:
-                        per_env_buffers[env_id].append(row)
+                    episodes_done_per_env[env_id] += 1
 
-        print(f"[INFO] assist_level={assist_level} done: all {num_envs} envs "
-            f"completed {EPISODES_PER_ENV} episodes each.")
+                    # This env just reset internally -- reseed the
+                    # controller's per-env state (new start_pos, fresh tack
+                    # waypoints) and start its new episode buffer with this
+                    # row as t=0.
+                    state.reset(torch.tensor([env_id], device=device), info) #, polar_table)
+                    row["time_step"] = 0
+                    per_env_buffers[env_id] = [row]
 
+                    if episodes_done_per_env.sum()%10==0:
+                        print(f"[INFO] episode finished: {episodes_done_per_env.sum()}:{episodes_done_per_env}")
+                else:
+                    per_env_buffers[env_id].append(row)
+
+    print(f"[INFO] done: all {num_envs} envs "
+        f"completed {EPISODES_PER_ENV} episodes each.")
+
+    directory = "outputs/classical"
+    os.makedirs(directory, exist_ok=True)
+    path_to_classical_csv = os.path.join(directory, "classical_baseline_swept.csv")
     df = pd.DataFrame(all_rows)
     df["method"] = "classical"
-    df.to_csv("classical_baseline_swept.csv", index=False)
+    df.to_csv(path_to_classical_csv, index=False)
     print(f"[INFO] Saved {len(df)} rows across {len(ASSIST_LEVELS)} assist levels "
         f"x {EPISODES_PER_ENV} episodes x {num_envs} envs.")
 
         
-        
-
     # close the simulator
     env.close()
 

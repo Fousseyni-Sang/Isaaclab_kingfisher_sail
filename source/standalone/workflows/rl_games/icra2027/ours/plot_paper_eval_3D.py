@@ -10,7 +10,10 @@ produces. The only thing replaced is pareto_by_windspeed.png (small multiples fa
 by wind-speed bin): here it becomes two true 3D plots -- context x wind speed x mean
 time-to-goal, and context x wind speed x mean energy -- since context and wind speed
 are both small discrete sets in this data (see module docstring of plot_paper_eval.py),
-not something that needs binning.
+not something that needs binning. context_wind_time_heatmap.png and
+context_wind_energy_heatmap.png are flat imshow views of that same (context, wind
+speed) data, averaged over wind angle -- easier to read exact values off of than the
+3D plots.
 
 Also adds, per (true_wind_speed, true_wind_angle_w) condition, one trajectory plot: the
 (rb_pos_x, rb_pos_y) path of every episode run under that condition, colored by that
@@ -23,14 +26,25 @@ format); otherwise it's reconstructed from the fixed reset geometry in
 KingfisherSailEnvCfg (--goal-min/max-distance, --goal-min/max-bearing), relative to that
 episode's own start position -- see plot_trajectories()'s docstring for the exact math.
 
+Each positional argument can be a CSV file OR a run directory. A directory (e.g.
+outputs/reward_sweep/<run>/) is expanded to every seed_*/all_steps_swept*.csv found
+under it and the whole group is plotted as ONE aggregate (concatenated across seeds)
+rather than one set of figures per seed -- useful for judging a reward configuration's
+overall tendency instead of one seed's luck. Episode identity is disambiguated by seed
+in that case (see load_combined_frame()'s docstring) so two seeds' episodes never get
+merged into one by coincidentally sharing the same env_id/local_episode_idx.
+
 Usage:
     # one CSV, figures saved next to it
     python plot_paper_eval_3D.py outputs/reward_sweep/<run>/seed_12/all_steps_swept_seed_12.csv
 
-    # several CSVs at once (each saved into its own directory)
-    python plot_paper_eval_3D.py path/to/a.csv path/to/b.csv path/to/c.csv
+    # a whole run directory -- aggregated across every seed found under it
+    python plot_paper_eval_3D.py outputs/reward_sweep/<run>/
 
-    # every all_steps_swept*.csv found anywhere under outputs/reward_sweep/
+    # several CSVs and/or run directories at once (each group saved into its own directory)
+    python plot_paper_eval_3D.py path/to/a.csv path/to/run_dir_b/ path/to/c.csv
+
+    # every all_steps_swept*.csv found anywhere under outputs/reward_sweep/ (per-seed, not aggregated)
     python plot_paper_eval_3D.py --all
 
     # skip the (slower, numerous) trajectory plots
@@ -111,6 +125,49 @@ def plot_context_wind_3d(
     fig.savefig(outpath, dpi=200)
     plt.close(fig)
     return summary
+
+
+# ---------------------------------------------------------------------------
+# Flat imshow companion to plot_context_wind_3d: same (context, wind_speed)
+# grouping and averaging over wind angle, just as a 2D heatmap instead of a
+# 3D surface -- easier to read exact values/trends off of at a glance.
+# ---------------------------------------------------------------------------
+def plot_context_wind_heatmap(
+    df_success: pd.DataFrame,
+    value_col: str,
+    cbar_label: str,
+    title: str,
+    outpath: str,
+    context_col: str = "context",
+    wind_speed_col: str = "wind_speed",
+) -> pd.DataFrame:
+    """imshow of mean `value_col` over (context, wind_speed), averaged over wind angle.
+
+    df_success must already be filtered to successful episodes (same reasoning as
+    plot_context_wind_3d / plot_pareto_by_windspeed: time/energy aren't meaningful for
+    failed episodes). Returns the pivoted (wind_speed x context) table that was plotted.
+    """
+    df = df_success.copy()
+    df["_context_key"] = df[context_col].round(4)
+    df["_wind_key"] = df[wind_speed_col].round(4)
+
+    pivot = df.pivot_table(index="_wind_key", columns="_context_key", values=value_col, aggfunc="mean")
+    pivot = pivot.sort_index(axis=0).sort_index(axis=1)
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    im = ax.imshow(pivot.values, aspect="auto", cmap="magma", origin="lower")
+    ax.set_xticks(range(len(pivot.columns)))
+    ax.set_xticklabels([f"{c:.2f}" for c in pivot.columns], rotation=45, ha="right")
+    ax.set_yticks(range(len(pivot.index)))
+    ax.set_yticklabels([f"{w:g}" for w in pivot.index])
+    ax.set_xlabel("Context (energy budget)")
+    ax.set_ylabel("Wind speed")
+    ax.set_title(title)
+    fig.colorbar(im, ax=ax, label=cbar_label)
+    fig.tight_layout()
+    fig.savefig(outpath, dpi=200)
+    plt.close(fig)
+    return pivot
 
 
 # ---------------------------------------------------------------------------
@@ -225,14 +282,75 @@ def plot_trajectories(
 
 
 # ---------------------------------------------------------------------------
-def process_csv(csv_path: str, args: argparse.Namespace) -> None:
-    outdir = args.outdir or os.path.dirname(os.path.abspath(csv_path)) or "."
+def resolve_input(path: str) -> tuple[str, list]:
+    """A csv_path argument can be a CSV file (plot just that run) or a directory (plot
+    the AGGREGATE of every seed's CSV found under it, for a tendency-across-seeds view
+    of one reward configuration). Returns (label, csv_paths) -- label is used for
+    logging and as the default --outdir.
+
+    Only ever reads from `path`; never deletes or writes anything here.
+    """
+    if not os.path.isdir(path):
+        return path, [path]
+
+    # Expected layout from launch_reward_sweep.py: <run_dir>/seed_<N>/all_steps_swept*.csv
+    csvs = sorted(glob.glob(os.path.join(path, "seed_*", "all_steps_swept*.csv")))
+    if not csvs:
+        # Fall back to a CSV sitting directly in the given directory (e.g. a run with
+        # no --seeds was used, so there's no seed_N/ nesting).
+        csvs = sorted(glob.glob(os.path.join(path, "all_steps_swept*.csv")))
+    return path, csvs
+
+
+def load_combined_frame(csv_paths: list, args: argparse.Namespace) -> tuple:
+    """Read one or more per-timestep CSVs into a single dataframe, ready for the same
+    episode-processing pipeline as a single CSV.
+
+    When there's more than one CSV (a directory-of-seeds aggregate), each row is
+    tagged with a `_seed_tag` column (the CSV's parent directory name, e.g. "seed_12")
+    and episode identity becomes (_seed_tag, env_id, local_episode_idx) instead of just
+    (env_id, local_episode_idx) -- without this, two different seeds' episode 0 for
+    env_id 3 would share the same (env_id, local_episode_idx) key and get silently
+    merged into one corrupted "episode" by episodes_from_timeseries()/plot_trajectories(),
+    since env_id/local_episode_idx numbering restarts identically in every seed's CSV.
+    """
+    multi = len(csv_paths) > 1
+    group_cols = ("_seed_tag", "env_id", "local_episode_idx") if multi else ("env_id", "local_episode_idx")
+
+    frames = []
+    for p in csv_paths:
+        df_ts = pd.read_csv(p)
+        if multi:
+            seed_tag = os.path.basename(os.path.dirname(os.path.abspath(p)))
+            df_ts["_seed_tag"] = seed_tag
+        frames.append(df_ts)
+
+    df_ts = frames[0] if len(frames) == 1 else pd.concat(frames, ignore_index=True)
+    return df_ts, group_cols
+
+
+def process_csv_group(label: str, csv_paths: list, args: argparse.Namespace) -> None:
+    if not csv_paths:
+        raise ValueError(f"No CSV file(s) found for '{label}' (expected a CSV file, or a directory "
+                          f"containing seed_*/all_steps_swept*.csv).")
+
+    outdir = args.outdir or (label if os.path.isdir(label) else os.path.dirname(os.path.abspath(label))) or "."
     os.makedirs(outdir, exist_ok=True)
 
-    print(f"\n=== {csv_path} -> {outdir} ===")
-    df_ts = pd.read_csv(csv_path)
+    multi = len(csv_paths) > 1
+    if multi:
+        print(f"\n=== {label} ({len(csv_paths)} seeds, aggregated) -> {outdir} ===")
+        for p in csv_paths:
+            print(f"    + {p}")
+    else:
+        print(f"\n=== {label} -> {outdir} ===")
 
-    df = episodes_from_timeseries(df_ts, success_radius=args.success_radius) if args.timeseries else df_ts
+    df_ts, group_cols = load_combined_frame(csv_paths, args)
+
+    df = (
+        episodes_from_timeseries(df_ts, episode_group_cols=group_cols, success_radius=args.success_radius)
+        if args.timeseries else df_ts
+    )
 
     required = {"context", "wind_speed", "wind_angle", "total_energy", "time_to_goal", "success"}
     missing = required - set(df.columns)
@@ -241,7 +359,7 @@ def process_csv(csv_path: str, args: argparse.Namespace) -> None:
 
     df_success = df[df["success"] == 1].copy()
     if df_success.empty:
-        print(f"[WARN] No successful episodes in {csv_path} -- skipping pareto/energy/3D plots "
+        print(f"[WARN] No successful episodes in {label} -- skipping pareto/energy/3D plots "
               f"(still attempting trajectories, and success_rate.png).")
     else:
         summary = plot_pareto_front(df, os.path.join(outdir, "pareto_front.png"))
@@ -255,6 +373,16 @@ def process_csv(csv_path: str, args: argparse.Namespace) -> None:
             "Energy use vs. context and wind speed\n(averaged over wind angle)",
             os.path.join(outdir, "context_wind_energy_3d.png"),
         )
+        plot_context_wind_heatmap(
+            df_success, "time_to_goal", "Mean time to goal",
+            "Time-to-goal vs. context and wind speed\n(averaged over wind angle)",
+            os.path.join(outdir, "context_wind_time_heatmap.png"),
+        )
+        plot_context_wind_heatmap(
+            df_success, "total_energy", "Mean electrical energy used",
+            "Energy use vs. context and wind speed\n(averaged over wind angle)",
+            os.path.join(outdir, "context_wind_energy_heatmap.png"),
+        )
         plot_energy_heatmap(df_success, os.path.join(outdir, "energy_heatmap.png"))
         print(summary.to_string(index=False))
 
@@ -265,6 +393,7 @@ def process_csv(csv_path: str, args: argparse.Namespace) -> None:
             traj_outdir = os.path.join(outdir, "trajectories")
             n = plot_trajectories(
                 df_ts, traj_outdir,
+                episode_group_cols=group_cols,
                 goal_min_distance=args.goal_min_distance,
                 goal_max_distance=args.goal_max_distance,
                 goal_min_bearing=args.goal_min_bearing,
@@ -280,7 +409,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="3D pareto plots + per-condition trajectories for eval CSVs.")
     parser.add_argument(
         "csv_path", nargs="*", default=[],
-        help="One or more per-timestep CSV files to plot (space-separated for multiple).",
+        help="One or more CSV files and/or run directories to plot (space-separated for multiple). "
+        "A CSV file plots just that run. A directory (e.g. outputs/reward_sweep/<run>/) plots the "
+        "AGGREGATE across every seed_*/all_steps_swept*.csv found under it -- one set of figures for "
+        "the whole reward configuration instead of per-seed.",
     )
     parser.add_argument(
         "--all", action="store_true",
@@ -324,28 +456,38 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    csv_paths = list(dict.fromkeys(args.csv_path))  # de-dupe, keep order
+    inputs = list(dict.fromkeys(args.csv_path))  # de-dupe, keep order
+
+    # Each input resolves to a (label, csv_paths) group: a CSV file is its own
+    # single-csv group, a directory becomes a multi-seed aggregate group (or a
+    # single-csv group if it only has one seed's CSV in it).
+    groups = [resolve_input(p) for p in inputs]
 
     if args.all:
         pattern = os.path.join(args.sweep_dir, "**", "all_steps_swept*.csv")
         found = sorted(glob.glob(pattern, recursive=True))
         print(f"[--all] Found {len(found)} CSV(s) under {args.sweep_dir}")
+        existing_csvs = {p for _, csvs in groups for p in csvs}
         for p in found:
-            if p not in csv_paths:
-                csv_paths.append(p)
+            if p not in existing_csvs:
+                groups.append((p, [p]))
+                existing_csvs.add(p)
 
-    if not csv_paths:
-        parser.error("No CSV files given -- pass one or more csv_path arguments, or use --all with --sweep-dir.")
+    if not groups:
+        parser.error(
+            "No input given -- pass one or more CSV files, or a run directory (to aggregate its "
+            "seed_*/ CSVs), or use --all with --sweep-dir."
+        )
 
     failures = []
-    for csv_path in csv_paths:
+    for label, csv_paths in groups:
         try:
-            process_csv(csv_path, args)
+            process_csv_group(label, csv_paths, args)
         except Exception as exc:
-            print(f"[ERROR] Failed to process {csv_path}: {exc}")
-            failures.append(csv_path)
+            print(f"[ERROR] Failed to process {label}: {exc}")
+            failures.append(label)
 
-    print(f"\n=== Done: {len(csv_paths) - len(failures)}/{len(csv_paths)} CSV(s) processed successfully ===")
+    print(f"\n=== Done: {len(groups) - len(failures)}/{len(groups)} input(s) processed successfully ===")
     if failures:
         print("Failed:")
         for f in failures:
